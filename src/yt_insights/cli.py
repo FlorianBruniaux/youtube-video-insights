@@ -147,7 +147,6 @@ def run(
     vtt_files: list[Path] = []
     if pick:
         from InquirerPy import inquirer
-        from InquirerPy.base.control import Choice
 
         if skip_download:
             all_vtts = sorted(config.transcripts_dir.glob("*.vtt"))
@@ -170,16 +169,18 @@ def run(
                 sys.exit(1)
             vtt_by_id = None
 
-        choices = [
-            Choice(value=v, name=f"{v.formatted_date}  {v.title}")
-            for v in videos
-        ]
-        selected: list[VideoInfo] = inquirer.fuzzy(
+        # Use display strings as choices; look up VideoInfo after selection.
+        # Avoids InquirerPy Choice.value inconsistencies across versions.
+        choice_labels = [f"{v.formatted_date}  {v.title}" for v in videos]
+        label_to_video = {label: v for label, v in zip(choice_labels, videos)}
+
+        selected_labels: list[str] = inquirer.fuzzy(
             message=f"Search and select videos ({len(videos)} available, Tab to toggle):",
-            choices=choices,
+            choices=choice_labels,
             multiselect=True,
             max_height="70%",
-        ).execute()
+        ).execute() or []
+        selected: list[VideoInfo] = [label_to_video[lbl] for lbl in selected_labels if lbl in label_to_video]
 
         if not selected:
             click.echo("No videos selected. Exiting.")
