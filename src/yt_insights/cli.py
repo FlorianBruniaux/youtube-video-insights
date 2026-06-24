@@ -4,12 +4,25 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Literal
 
 import click
 
 from .backends import resolve_backend
 from .backends.base import BackendNotFoundError, BackendUnavailableError
 from .config import CONFIG_TOML_TEMPLATE, load_config
+
+SortKey = Literal["date-desc", "date-asc", "title"]
+
+SORT_CHOICES = click.Choice(["date-desc", "date-asc", "title"])
+
+
+def _sort_videos(videos: list, sort: SortKey) -> list:
+    if sort == "date-desc":
+        return sorted(videos, key=lambda v: v.upload_date or "", reverse=True)
+    if sort == "date-asc":
+        return sorted(videos, key=lambda v: v.upload_date or "")
+    return sorted(videos, key=lambda v: v.title.lower())
 
 
 @click.group()
@@ -20,17 +33,26 @@ def cli() -> None:
 @cli.command("list")
 @click.argument("source")
 @click.option(
+    "--sort",
+    type=SORT_CHOICES,
+    default="date-desc",
+    show_default=True,
+    help="Sort order.",
+)
+@click.option(
     "--cookies-from-browser",
     default=None,
     metavar="BROWSER",
     help="Read cookies from BROWSER (chrome, firefox, safari...) to avoid rate-limiting.",
 )
-def list_cmd(source: str, cookies_from_browser: str | None) -> None:
+def list_cmd(source: str, sort: SortKey, cookies_from_browser: str | None) -> None:
     """List videos in SOURCE without downloading anything."""
     from .downloader import list_videos
 
     click.echo(f"Fetching video list from {source} ...")
-    videos = list_videos(source, cookies_from_browser=cookies_from_browser)
+    videos = _sort_videos(
+        list_videos(source, cookies_from_browser=cookies_from_browser), sort
+    )
     if not videos:
         click.echo("No videos found.", err=True)
         sys.exit(1)
@@ -45,7 +67,14 @@ def list_cmd(source: str, cookies_from_browser: str | None) -> None:
 @cli.command()
 @click.argument("source")
 @click.option("--skip-download", is_flag=True, help="Skip yt-dlp, use existing VTT files.")
-@click.option("--pick", is_flag=True, help="Interactively select which videos to process.")
+@click.option("--pick", is_flag=True, help="Interactively search and select which videos to process.")
+@click.option(
+    "--sort",
+    type=SORT_CHOICES,
+    default="date-desc",
+    show_default=True,
+    help="Sort order for --pick mode.",
+)
 @click.option("--force", is_flag=True, help="Re-analyze even if insight cache exists.")
 @click.option("--model", default=None, help="Override LLM model.")
 @click.option("--base-url", default=None, help="Override LLM API base URL.")
@@ -77,6 +106,7 @@ def run(
     source: str,
     skip_download: bool,
     pick: bool,
+    sort: SortKey,
     force: bool,
     model: str | None,
     base_url: str | None,
@@ -90,8 +120,6 @@ def run(
     SOURCE can be a YouTube channel URL, playlist URL, video URL,
     or a path to a local file containing one URL per line.
     """
-    import questionary
-
     from .analyzer import analyze_all
     from .downloader import VideoInfo, download_subtitles, list_videos, vtt_to_video_info
     from .reporter import generate_report, load_insights
@@ -115,11 +143,13 @@ def run(
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 
-    # Pick mode: interactive video selection
+    # Pick mode: fuzzy interactive video selection
     vtt_files: list[Path] = []
     if pick:
+        from InquirerPy import inquirer
+        from InquirerPy.base.control import Choice
+
         if skip_download:
-            # Select from locally available VTTs
             all_vtts = sorted(config.transcripts_dir.glob("*.vtt"))
             if not all_vtts:
                 click.echo(
@@ -128,27 +158,28 @@ def run(
                     err=True,
                 )
                 sys.exit(1)
-            videos = [vtt_to_video_info(f) for f in all_vtts]
+            videos = _sort_videos([vtt_to_video_info(f) for f in all_vtts], sort)
             vtt_by_id = {vtt_to_video_info(f).video_id: f for f in all_vtts}
         else:
             click.echo(f"Fetching video list from {source} ...")
-            videos = list_videos(source, cookies_from_browser=cookies_from_browser)
+            videos = _sort_videos(
+                list_videos(source, cookies_from_browser=cookies_from_browser), sort
+            )
             if not videos:
                 click.echo("No videos found.", err=True)
                 sys.exit(1)
             vtt_by_id = None
 
         choices = [
-            questionary.Choice(
-                title=f"{v.formatted_date}  {v.title}",
-                value=v,
-            )
+            Choice(value=v, name=f"{v.formatted_date}  {v.title}")
             for v in videos
         ]
-        selected: list[VideoInfo] = questionary.checkbox(
-            f"Select videos to analyze ({len(videos)} available):",
+        selected: list[VideoInfo] = inquirer.fuzzy(
+            message=f"Search and select videos ({len(videos)} available, Tab to toggle):",
             choices=choices,
-        ).ask()
+            multiselect=True,
+            max_height="70%",
+        ).execute()
 
         if not selected:
             click.echo("No videos selected. Exiting.")
@@ -157,7 +188,6 @@ def run(
         click.echo(f"\n{len(selected)} video(s) selected.")
 
         if not skip_download:
-            # Download only selected videos one by one
             for v in selected:
                 click.echo(f"  Downloading: {v.title}")
                 dl = download_subtitles(
@@ -218,7 +248,7 @@ def run(
 
     # Report
     report_path = config.insights_dir / "AGGREGATE_REPORT.md"
-    click.echo(f"\nGenerating aggregate report ...")
+    click.echo("\nGenerating aggregate report ...")
     try:
         backend = resolve_backend(config)
         generate_report(insights, backend, config, report_path=report_path)

@@ -20,7 +20,7 @@ classifiers = [
 dependencies = [
     "click>=8.1",
     "httpx>=0.27",
-    "questionary>=2.0",
+    "InquirerPy>=0.3.4",
     "yt-dlp>=2024.1",
 ]
 
