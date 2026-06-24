@@ -19,12 +19,18 @@ def cli() -> None:
 
 @cli.command("list")
 @click.argument("source")
-def list_cmd(source: str) -> None:
+@click.option(
+    "--cookies-from-browser",
+    default=None,
+    metavar="BROWSER",
+    help="Read cookies from BROWSER (chrome, firefox, safari...) to avoid rate-limiting.",
+)
+def list_cmd(source: str, cookies_from_browser: str | None) -> None:
     """List videos in SOURCE without downloading anything."""
     from .downloader import list_videos
 
     click.echo(f"Fetching video list from {source} ...")
-    videos = list_videos(source)
+    videos = list_videos(source, cookies_from_browser=cookies_from_browser)
     if not videos:
         click.echo("No videos found.", err=True)
         sys.exit(1)
@@ -59,7 +65,13 @@ def list_cmd(source: str) -> None:
     "--sleep-requests",
     type=int,
     default=0,
-    help="yt-dlp --sleep-requests value (seconds between requests).",
+    help="Seconds to wait between yt-dlp requests (rate limiting). Try 1-3 if blocked.",
+)
+@click.option(
+    "--cookies-from-browser",
+    default=None,
+    metavar="BROWSER",
+    help="Read cookies from BROWSER (chrome, firefox, safari...) to avoid rate-limiting.",
 )
 def run(
     source: str,
@@ -71,6 +83,7 @@ def run(
     concurrency: int | None,
     output_dir: str | None,
     sleep_requests: int,
+    cookies_from_browser: str | None,
 ) -> None:
     """Download subtitles from SOURCE and extract insights.
 
@@ -119,7 +132,7 @@ def run(
             vtt_by_id = {vtt_to_video_info(f).video_id: f for f in all_vtts}
         else:
             click.echo(f"Fetching video list from {source} ...")
-            videos = list_videos(source)
+            videos = list_videos(source, cookies_from_browser=cookies_from_browser)
             if not videos:
                 click.echo("No videos found.", err=True)
                 sys.exit(1)
@@ -148,7 +161,10 @@ def run(
             for v in selected:
                 click.echo(f"  Downloading: {v.title}")
                 dl = download_subtitles(
-                    v.watch_url, config.transcripts_dir, sleep_requests=sleep_requests
+                    v.watch_url,
+                    config.transcripts_dir,
+                    sleep_requests=sleep_requests,
+                    cookies_from_browser=cookies_from_browser,
                 )
                 vtt_files.extend(dl.vtt_files)
                 if dl.errors:
@@ -163,7 +179,10 @@ def run(
         if not skip_download:
             click.echo(f"Downloading subtitles from {source} ...")
             result = download_subtitles(
-                source, config.transcripts_dir, sleep_requests=sleep_requests
+                source,
+                config.transcripts_dir,
+                sleep_requests=sleep_requests,
+                cookies_from_browser=cookies_from_browser,
             )
             if result.errors:
                 for e in result.errors[:5]:

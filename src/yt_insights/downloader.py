@@ -26,7 +26,7 @@ class VideoInfo:
         return f"https://www.youtube.com/watch?v={self.video_id}"
 
 
-def list_videos(source: str) -> list[VideoInfo]:
+def list_videos(source: str, *, cookies_from_browser: str | None = None) -> list[VideoInfo]:
     """Fetch video metadata from a channel/playlist without downloading anything.
 
     Uses --flat-playlist so yt-dlp only queries the playlist API, no media fetch.
@@ -36,8 +36,11 @@ def list_videos(source: str) -> list[VideoInfo]:
         "--flat-playlist",
         "--print", "%(upload_date)s|%(title)s|%(id)s",
         "--ignore-errors",
-        source,
     ]
+    if cookies_from_browser:
+        cmd += ["--cookies-from-browser", cookies_from_browser]
+    cmd.append(source)
+
     result = subprocess.run(cmd, capture_output=True, text=True)
     videos: list[VideoInfo] = []
     for line in result.stdout.splitlines():
@@ -78,6 +81,7 @@ def download_subtitles(
     output_dir: Path,
     *,
     sleep_requests: int = 0,
+    cookies_from_browser: str | None = None,
 ) -> DownloadResult:
     """Download auto-generated subtitles from a YouTube channel/playlist/video.
 
@@ -99,9 +103,15 @@ def download_subtitles(
         "--ignore-errors",
         "--print", "after_move:filepath",
         "--output", str(output_dir / "%(upload_date)s - %(title)s [%(id)s].%(ext)s"),
+        # Retry up to 5 times on extractor errors (e.g. 429), with exponential
+        # backoff starting at 1s and capping at 30s between attempts.
+        "--extractor-retries", "5",
+        "--retry-sleep", "extractor:exp=1:30",
     ]
     if sleep_requests > 0:
         cmd += ["--sleep-requests", str(sleep_requests)]
+    if cookies_from_browser:
+        cmd += ["--cookies-from-browser", cookies_from_browser]
     cmd.append(channel_url)
 
     result = subprocess.run(cmd, capture_output=True, text=True)
