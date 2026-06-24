@@ -90,8 +90,6 @@ def download_subtitles(
     """
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    before: set[Path] = set(output_dir.glob("*.vtt"))
-
     cmd = [
         "yt-dlp",
         "--write-auto-subs",
@@ -111,19 +109,26 @@ def download_subtitles(
         cmd += ["--cookies-from-browser", cookies_from_browser]
     cmd.append(channel_url)
 
+    output_dir.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(cmd, capture_output=True, text=True)
 
-    after: set[Path] = set(output_dir.glob("*.vtt"))
-    new_files = sorted(after - before)
-
+    vtt_files: list[Path] = []
     errors: list[str] = []
+
     for line in result.stderr.splitlines():
         line = line.strip()
-        if line and "ERROR" in line.upper():
+        # yt-dlp logs written subtitle paths as:
+        # "[info] Writing video subtitles to: <path>"
+        if "[info] Writing video subtitles to:" in line:
+            path_str = line.split("Writing video subtitles to:", 1)[1].strip()
+            p = Path(path_str)
+            if p.suffix == ".vtt" and p.exists():
+                vtt_files.append(p)
+        elif "ERROR" in line.upper():
             errors.append(line)
 
     return DownloadResult(
-        vtt_files=new_files,
+        vtt_files=sorted(vtt_files),
         errors=errors,
         skipped_count=0,
     )
