@@ -1,0 +1,22 @@
+# Data directories (never commit)
+yt_transcripts/
+yt_insights/
+
+# Partial write artifacts
+*.tmp.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+build/
+*.egg-info/
+.superpowers/
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
