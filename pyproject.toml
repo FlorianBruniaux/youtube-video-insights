@@ -26,6 +26,7 @@ dependencies = [
 
 [project.optional-dependencies]
 mlx = ["mlx-lm>=0.15"]
+impersonation = ["curl-cffi>=0.7"]
 
 [project.scripts]
 yt-insights = "yt_insights.cli:cli"
