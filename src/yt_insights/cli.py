@@ -197,7 +197,19 @@ def run(
                     sleep_requests=sleep_requests,
                     cookies_from_browser=cookies_from_browser,
                 )
-                vtt_files.extend(dl.vtt_files)
+                if dl.vtt_files:
+                    vtt_files.extend(dl.vtt_files)
+                else:
+                    # yt-dlp may not log paths if the file was already present
+                    # and skipped without a "already exists" message.
+                    # Fall back to scanning by video_id.
+                    existing = [
+                        f for f in config.transcripts_dir.glob("*.vtt")
+                        if v.video_id in f.name
+                    ]
+                    if existing:
+                        click.echo(f"    (using cached VTT)")
+                        vtt_files.extend(existing)
                 if dl.errors:
                     for e in dl.errors[:2]:
                         click.echo(f"    warning: {e}", err=True)

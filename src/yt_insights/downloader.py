@@ -117,10 +117,15 @@ def download_subtitles(
 
     for line in result.stderr.splitlines():
         line = line.strip()
-        # yt-dlp logs written subtitle paths as:
-        # "[info] Writing video subtitles to: <path>"
-        if "[info] Writing video subtitles to:" in line:
+        # yt-dlp logs written paths as "[info] Writing video subtitles to: <path>"
+        # and skipped paths as "[info] <id>: Subtitle file already exists: <path>"
+        if "Writing video subtitles to:" in line:
             path_str = line.split("Writing video subtitles to:", 1)[1].strip()
+            p = Path(path_str)
+            if p.suffix == ".vtt" and p.exists():
+                vtt_files.append(p)
+        elif "Subtitle file already exists:" in line:
+            path_str = line.split("Subtitle file already exists:", 1)[1].strip()
             p = Path(path_str)
             if p.suffix == ".vtt" and p.exists():
                 vtt_files.append(p)
@@ -128,7 +133,7 @@ def download_subtitles(
             errors.append(line)
 
     return DownloadResult(
-        vtt_files=sorted(vtt_files),
+        vtt_files=sorted(set(vtt_files)),
         errors=errors,
         skipped_count=0,
     )
