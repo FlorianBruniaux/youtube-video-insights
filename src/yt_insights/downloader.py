@@ -85,14 +85,12 @@ def download_subtitles(
 ) -> DownloadResult:
     """Download auto-generated subtitles from a YouTube channel/playlist/video.
 
-    Uses --print after_move:filepath to get the exact list of files written
-    without a post-run glob.  Only .vtt files are collected; other yt-dlp
-    output lines (info JSON paths, etc.) are silently ignored.
-
-    yt-dlp command is verbatim from the POC (boldguy/scripts/youtube_insights.py:76-85)
-    with the addition of --print and optional --sleep-requests.
+    Detects new VTT files via a before/after snapshot of output_dir.
+    (--print after_move:filepath only fires for media downloads, not subtitles.)
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+
+    before: set[Path] = set(output_dir.glob("*.vtt"))
 
     cmd = [
         "yt-dlp",
@@ -101,7 +99,6 @@ def download_subtitles(
         "--sub-format", "vtt",
         "--skip-download",
         "--ignore-errors",
-        "--print", "after_move:filepath",
         "--output", str(output_dir / "%(upload_date)s - %(title)s [%(id)s].%(ext)s"),
         # Retry up to 5 times on extractor errors (e.g. 429), with exponential
         # backoff starting at 1s and capping at 30s between attempts.
@@ -116,29 +113,17 @@ def download_subtitles(
 
     result = subprocess.run(cmd, capture_output=True, text=True)
 
-    vtt_files: list[Path] = []
+    after: set[Path] = set(output_dir.glob("*.vtt"))
+    new_files = sorted(after - before)
+
     errors: list[str] = []
-    skipped = 0
-
-    for line in result.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        p = Path(line)
-        if p.suffix == ".vtt":
-            if p.exists():
-                vtt_files.append(p)
-            else:
-                skipped += 1
-        # Non-.vtt lines (info JSON, thumbnails) are ignored
-
     for line in result.stderr.splitlines():
         line = line.strip()
         if line and "ERROR" in line.upper():
             errors.append(line)
 
     return DownloadResult(
-        vtt_files=sorted(vtt_files),
+        vtt_files=new_files,
         errors=errors,
-        skipped_count=skipped,
+        skipped_count=0,
     )
