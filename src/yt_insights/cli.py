@@ -17,9 +17,29 @@ def cli() -> None:
     """Extract structured insights from YouTube transcripts using any LLM."""
 
 
+@cli.command("list")
+@click.argument("source")
+def list_cmd(source: str) -> None:
+    """List videos in SOURCE without downloading anything."""
+    from .downloader import list_videos
+
+    click.echo(f"Fetching video list from {source} ...")
+    videos = list_videos(source)
+    if not videos:
+        click.echo("No videos found.", err=True)
+        sys.exit(1)
+
+    click.echo(f"\n  {'#':>3}  {'Date':10}  Title")
+    click.echo(f"  {'---':>3}  {'----------':10}  -----")
+    for i, v in enumerate(videos, 1):
+        click.echo(f"  {i:3}.  {v.formatted_date:10}  {v.title}")
+    click.echo(f"\n{len(videos)} video(s) found.")
+
+
 @cli.command()
 @click.argument("source")
 @click.option("--skip-download", is_flag=True, help="Skip yt-dlp, use existing VTT files.")
+@click.option("--pick", is_flag=True, help="Interactively select which videos to process.")
 @click.option("--force", is_flag=True, help="Re-analyze even if insight cache exists.")
 @click.option("--model", default=None, help="Override LLM model.")
 @click.option("--base-url", default=None, help="Override LLM API base URL.")
@@ -44,6 +64,7 @@ def cli() -> None:
 def run(
     source: str,
     skip_download: bool,
+    pick: bool,
     force: bool,
     model: str | None,
     base_url: str | None,
@@ -56,8 +77,10 @@ def run(
     SOURCE can be a YouTube channel URL, playlist URL, video URL,
     or a path to a local file containing one URL per line.
     """
+    import questionary
+
     from .analyzer import analyze_all
-    from .downloader import download_subtitles
+    from .downloader import VideoInfo, download_subtitles, list_videos, vtt_to_video_info
     from .reporter import generate_report, load_insights
 
     # Config
@@ -79,21 +102,77 @@ def run(
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
 
-    # Download
+    # Pick mode: interactive video selection
     vtt_files: list[Path] = []
-    if not skip_download:
-        click.echo(f"Downloading subtitles from {source} ...")
-        from .downloader import download_subtitles
+    if pick:
+        if skip_download:
+            # Select from locally available VTTs
+            all_vtts = sorted(config.transcripts_dir.glob("*.vtt"))
+            if not all_vtts:
+                click.echo(
+                    f"No VTT files found in {config.transcripts_dir}/. "
+                    "Remove --skip-download to fetch them first.",
+                    err=True,
+                )
+                sys.exit(1)
+            videos = [vtt_to_video_info(f) for f in all_vtts]
+            vtt_by_id = {vtt_to_video_info(f).video_id: f for f in all_vtts}
+        else:
+            click.echo(f"Fetching video list from {source} ...")
+            videos = list_videos(source)
+            if not videos:
+                click.echo("No videos found.", err=True)
+                sys.exit(1)
+            vtt_by_id = None
 
-        result = download_subtitles(source, config.transcripts_dir, sleep_requests=sleep_requests)
-        if result.errors:
-            for e in result.errors[:5]:
-                click.echo(f"  warning: {e}", err=True)
-        vtt_files = result.vtt_files
-        click.echo(f"  {len(vtt_files)} subtitle file(s) downloaded.")
+        choices = [
+            questionary.Choice(
+                title=f"{v.formatted_date}  {v.title}",
+                value=v,
+            )
+            for v in videos
+        ]
+        selected: list[VideoInfo] = questionary.checkbox(
+            f"Select videos to analyze ({len(videos)} available):",
+            choices=choices,
+        ).ask()
+
+        if not selected:
+            click.echo("No videos selected. Exiting.")
+            sys.exit(0)
+
+        click.echo(f"\n{len(selected)} video(s) selected.")
+
+        if not skip_download:
+            # Download only selected videos one by one
+            for v in selected:
+                click.echo(f"  Downloading: {v.title}")
+                dl = download_subtitles(
+                    v.watch_url, config.transcripts_dir, sleep_requests=sleep_requests
+                )
+                vtt_files.extend(dl.vtt_files)
+                if dl.errors:
+                    for e in dl.errors[:2]:
+                        click.echo(f"    warning: {e}", err=True)
+        else:
+            selected_ids = {v.video_id for v in selected}
+            vtt_files = [f for vid_id, f in vtt_by_id.items() if vid_id in selected_ids]  # type: ignore[union-attr]
+
     else:
-        vtt_files = sorted(config.transcripts_dir.glob("*.vtt"))
-        click.echo(f"Found {len(vtt_files)} existing VTT file(s).")
+        # Normal (non-pick) download path
+        if not skip_download:
+            click.echo(f"Downloading subtitles from {source} ...")
+            result = download_subtitles(
+                source, config.transcripts_dir, sleep_requests=sleep_requests
+            )
+            if result.errors:
+                for e in result.errors[:5]:
+                    click.echo(f"  warning: {e}", err=True)
+            vtt_files = result.vtt_files
+            click.echo(f"  {len(vtt_files)} subtitle file(s) downloaded.")
+        else:
+            vtt_files = sorted(config.transcripts_dir.glob("*.vtt"))
+            click.echo(f"Found {len(vtt_files)} existing VTT file(s).")
 
     if not vtt_files:
         click.echo(

@@ -2,9 +2,68 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
+
+
+@dataclass
+class VideoInfo:
+    video_id: str
+    title: str
+    upload_date: str  # YYYYMMDD or empty string
+
+    @property
+    def formatted_date(self) -> str:
+        d = self.upload_date
+        if len(d) == 8:
+            return f"{d[:4]}-{d[4:6]}-{d[6:]}"
+        return d or "unknown"
+
+    @property
+    def watch_url(self) -> str:
+        return f"https://www.youtube.com/watch?v={self.video_id}"
+
+
+def list_videos(source: str) -> list[VideoInfo]:
+    """Fetch video metadata from a channel/playlist without downloading anything.
+
+    Uses --flat-playlist so yt-dlp only queries the playlist API, no media fetch.
+    """
+    cmd = [
+        "yt-dlp",
+        "--flat-playlist",
+        "--print", "%(upload_date)s|%(title)s|%(id)s",
+        "--ignore-errors",
+        source,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    videos: list[VideoInfo] = []
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if not line or line.count("|") < 2:
+            continue
+        date, title, vid_id = line.split("|", 2)
+        if vid_id:
+            videos.append(VideoInfo(video_id=vid_id, title=title, upload_date=date or ""))
+    return videos
+
+
+def vtt_to_video_info(vtt_path: Path) -> VideoInfo:
+    """Parse a VTT filename into VideoInfo.
+
+    Expected format: YYYYMMDD - Title [videoID].fr.vtt
+    """
+    stem = vtt_path.stem  # e.g. "20260223 - Title [nfupYzLjFGc].fr"
+    stem = re.sub(r"\.(fr|en)$", "", stem)
+    m_id = re.search(r"\[([A-Za-z0-9_-]+)\]$", stem)
+    vid_id = m_id.group(1) if m_id else ""
+    m_date = re.match(r"^(\d{8})\s*-\s*", stem)
+    date = m_date.group(1) if m_date else ""
+    title = re.sub(r"^\d{8}\s*-\s*", "", stem)
+    title = re.sub(r"\s*\[[A-Za-z0-9_-]+\]$", "", title).strip()
+    return VideoInfo(video_id=vid_id, title=title, upload_date=date)
 
 
 @dataclass
