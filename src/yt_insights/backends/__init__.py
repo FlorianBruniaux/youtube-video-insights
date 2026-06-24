@@ -25,6 +25,20 @@ _CC_BRIDGE = "http://127.0.0.1:4141"
 _OLLAMA = "http://127.0.0.1:11434"
 
 
+def _probe_llm(cfg: "Config") -> bool:
+    """Send a 1-token completion to verify the LLM endpoint actually responds."""
+    try:
+        with httpx.Client(timeout=5.0) as c:
+            r = c.post(
+                f"{cfg.base_url}/chat/completions",
+                headers={"Authorization": f"Bearer {cfg.api_key}", "x-api-key": cfg.api_key or ""},
+                json={"model": cfg.model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+            )
+        return r.status_code < 500
+    except (httpx.ConnectError, httpx.TimeoutException):
+        return False
+
+
 def resolve_backend(config: Config) -> LLMBackend:
     """Auto-detect and return a ready-to-use LLM backend."""
 
@@ -32,12 +46,14 @@ def resolve_backend(config: Config) -> LLMBackend:
     if config.base_url != DEFAULT_BASE_URL:
         return OpenAICompatBackend(config)
 
-    # Probe cc-bridge
+    # Probe cc-bridge: health check + minimal LLM call to detect 502 upstreams
     try:
         with httpx.Client(timeout=1.0) as c:
             r = c.get(f"{_CC_BRIDGE}/health")
         if r.status_code == 200:
-            return OpenAICompatBackend(config.with_url(f"{_CC_BRIDGE}/v1", api_key="local"))
+            cc_cfg = config.with_url(f"{_CC_BRIDGE}/v1", api_key="local")
+            if _probe_llm(cc_cfg):
+                return OpenAICompatBackend(cc_cfg)
     except (httpx.ConnectError, httpx.TimeoutException):
         pass
 

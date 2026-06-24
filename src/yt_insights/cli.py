@@ -233,7 +233,21 @@ def run(
             vtt_files = result.vtt_files
             click.echo(f"  {len(vtt_files)} subtitle file(s) downloaded.")
         else:
-            vtt_files = sorted(config.transcripts_dir.glob("*.vtt"))
+            # If source looks like a single video URL, filter by its video ID
+            import re as _re
+            _vid_match = _re.search(r"[?&]v=([A-Za-z0-9_-]{11})", source)
+            if _vid_match:
+                vid_id = _vid_match.group(1)
+                vtt_files = [f for f in config.transcripts_dir.glob("*.vtt") if vid_id in f.name]
+                if not vtt_files:
+                    click.echo(
+                        f"No cached VTT for video {vid_id} in {config.transcripts_dir}/. "
+                        "Remove --skip-download to fetch it.",
+                        err=True,
+                    )
+                    import sys; sys.exit(1)
+            else:
+                vtt_files = sorted(config.transcripts_dir.glob("*.vtt"))
             click.echo(f"Found {len(vtt_files)} existing VTT file(s).")
 
     if not vtt_files:
