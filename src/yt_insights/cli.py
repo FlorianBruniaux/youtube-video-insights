@@ -271,7 +271,11 @@ def run(
         click.echo("No usable insights generated.", err=True)
         sys.exit(1)
 
-    click.echo(f"  {len(insights)} insight(s) ready in {config.insights_dir}/")
+    click.echo(f"  {len(insights)} insight(s) generated:")
+    for vi in insights:
+        md_path = vi.insight_path.with_suffix(".md")
+        if md_path.exists():
+            click.echo(f"    {md_path}")
 
     # Report
     report_path = config.insights_dir / "AGGREGATE_REPORT.md"
@@ -284,7 +288,10 @@ def run(
         click.echo(f"Warning: could not generate report — {exc}", err=True)
         return
 
-    click.echo(f"  Report written to {report_path}")
+    click.echo(f"  Aggregate  → {report_path}")
+    full_report_path = report_path.parent / "FULL_REPORT.md"
+    if full_report_path.exists():
+        click.echo(f"  Full       → {full_report_path}")
     click.echo("Done.")
 
 

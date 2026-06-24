@@ -111,9 +111,11 @@ Sois factuel et direct."""
 
     # Atomic writes
     report_json = report_path.with_suffix(".json")
+    full_report_path = report_path.parent / "FULL_REPORT.md"
 
     tmp_md = report_path.with_suffix(".tmp.md")
     tmp_json = report_json.with_suffix(".tmp.json")
+    tmp_full = full_report_path.with_suffix(".tmp.md")
 
     tmp_md.write_text(md, encoding="utf-8")
     os.replace(tmp_md, report_path)
@@ -122,6 +124,44 @@ Sois factuel et direct."""
         json.dumps(json_data, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     os.replace(tmp_json, report_json)
+
+    full_md = _render_full_report(insights, tools_md, narrative)
+    tmp_full.write_text(full_md, encoding="utf-8")
+    os.replace(tmp_full, full_report_path)
+
+
+def _render_video_section(vi: "VideoInsight") -> str:
+    lines = [f"## {vi.title}\n", f"**Sujet** : {vi.subject}\n"]
+    if vi.key_points:
+        lines.append("**Points clés** :\n" + "\n".join(f"- {p}" for p in vi.key_points))
+    if vi.tools:
+        rows = "\n".join(f"| {t.get('name','')} | {t.get('context','')} |" for t in vi.tools)
+        lines.append(f"\n**Outils** :\n| Outil | Contexte |\n|---|---|\n{rows}")
+    if vi.advice:
+        lines.append("\n**Conseils** :\n" + "\n".join(f"- {a}" for a in vi.advice))
+    if vi.quotes:
+        lines.append("\n**Citations** :\n" + "\n".join(f'> "{q}"' for q in vi.quotes))
+    return "\n\n".join(lines)
+
+
+def _render_full_report(insights: list, tools_md: str, narrative: str) -> str:
+    video_sections = "\n\n---\n\n".join(_render_video_section(vi) for vi in insights)
+    return f"""# Rapport complet : {len(insights)} vidéo(s)
+
+---
+
+{video_sections}
+
+---
+
+# Synthèse agrégée
+
+## Stack et outils cités
+
+{tools_md}
+
+{narrative}
+"""
 
 
 def _render_report(video_count: int, tools_md: str, narrative: str) -> str:
