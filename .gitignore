@@ -1,6 +1,6 @@
 # Data directories (never commit)
-yt_transcripts/
-yt_insights/
+/yt_transcripts/
+/yt_insights/
 
 # Partial write artifacts
 *.tmp.json
