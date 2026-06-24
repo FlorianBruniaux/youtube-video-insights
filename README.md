@@ -4,7 +4,56 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Extract structured insights from YouTube channel transcripts using any local or cloud LLM. Downloads auto-generated subtitles via yt-dlp, cleans the VTT format, and produces per-video JSON + Markdown with subject, key points, tools mentioned, actionable advice, and notable quotes. A final aggregate report synthesises patterns across the full channel.
+Point it at a YouTube channel. Get a structured JSON + Markdown insight file per video, and an aggregate report synthesising patterns across the full channel.
+
+---
+
+## TLDR
+
+- One command: `yt-insights run https://www.youtube.com/@ChannelName` → per-video insights + aggregate report
+- 5-key insight schema per video: subject, key points, tools mentioned, actionable advice, notable quotes
+- LLM backend auto-detected at runtime: cc-bridge (port 4141) → Ollama → Anthropic API → MLX
+- JSON is the source of truth, Markdown is rendered from it. Atomic writes, no corrupt files on Ctrl-C
+- Idempotent: already-analyzed videos are cached, `--force` re-processes everything
+
+---
+
+## How it works
+
+```
+YouTube URL / channel
+        │
+        ▼
+   yt-dlp (subprocess)          Downloads auto-generated subtitles
+        │
+        ▼
+   yt_transcripts/*.vtt
+        │
+        ▼
+   cleaner.py                   Deduplicates lines, strips timestamps
+        │                       and HTML tags from VTT format
+        ▼
+   analyzer.py ─────────────►  LLM backend
+   ThreadPoolExecutor           cc-bridge │ Ollama │ Anthropic API │ MLX
+   (3× remote, 1× local)        auto-detected at first call
+        │
+        ├──► yt_insights/<video>.json   ← source of truth (atomic write)
+        └──► yt_insights/<video>.md     ← rendered from JSON
+                │
+                ▼
+        reporter.py
+        Counter (top tools, no LLM)
+        + one LLM call for narrative synthesis
+                │
+                ▼
+        AGGREGATE_REPORT.md + .json
+```
+
+**Key design decisions:**
+
+- yt-dlp runs as a subprocess, never imported as a library (subprocess is the stable contract)
+- `stop_reason == "max_tokens"` gates writes: truncated responses are never cached, retried on next run
+- `ThreadPoolExecutor` over asyncio: `httpx.Client` is thread-safe, no event loop needed
 
 ---
 
@@ -202,6 +251,25 @@ yt-insights config init  # creates ~/.config/yt-insights/config.toml
 ```
 
 All keys are optional. CLI flags and `YT_INSIGHTS_*` env vars take precedence over the file.
+
+---
+
+## Feature summary
+
+| Feature | Detail |
+|---|---|
+| Subtitle download | yt-dlp subprocess, any URL it accepts |
+| VTT cleaning | Dedup, strip timestamps, HTML tags, `[Musique]` annotations |
+| Insight extraction | 5-key JSON schema: subject, key_points, tools, advice, quotes |
+| Atomic writes | `.tmp.json` → `os.replace()`, no corrupt files on Ctrl-C |
+| Truncation guard | `stop_reason == "max_tokens"` → skip cache, retry next run |
+| Caching | Cache hit = zero LLM calls, `--force` to override |
+| Concurrency | 3 threads for remote APIs, 1 for Ollama/MLX (auto-tuned) |
+| Backends | cc-bridge, Ollama, Anthropic API, any OpenAI-compat, MLX |
+| Auto-detection | Backend probed at first LLM call, no config needed |
+| Aggregate report | `Counter` top tools (no LLM) + one narrative LLM call |
+| Config file | 4-layer merge: defaults → TOML → env vars → CLI flags |
+| Idempotence | Re-run safely at any time, skips existing insights |
 
 ---
 
