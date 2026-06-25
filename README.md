@@ -417,6 +417,50 @@ See `docs/claude-code.md` for the full reference.
 
 Each skill respects the same idempotence as the CLI: a VTT already on disk is not re-downloaded, a cached insight JSON triggers no LLM call.
 
+### Example session
+
+Paste a URL in Claude Code and the agent takes over:
+
+```
+You:   https://www.youtube.com/watch?v=nfupYzLjFGc
+
+Agent: VIDEO_ID = nfupYzLjFGc
+       Cache: no transcript, no insights, no shorts yet.
+       What do you want? (transcript / insights / shorts / everything)
+
+You:   everything
+
+Agent: [/yt-get-transcript] → output/transcripts/1200-commits-600-PRs.fr.vtt (42KB)
+
+       [/yt-get-insights]
+       Subject: 7 months solo, 1200 commits, 600 PRs, 50 releases
+       Key points: solo dev velocity, AI-assisted release pipeline, PR review automation...
+       Notable quote: "Je pensais que l'IA allait coder à ma place. Elle m'a surtout appris à
+       mieux découper le travail."
+
+       [/yt-get-shorts]
+       Option 1 | Score 5/5 | 00:00:56 → 00:01:45 (49s)
+       Hook: "1 200 commits, 600 PRs en 7 mois, seul dev"
+       Verbatim: "Les chiffres c'est 7 mois à peu près, 1 200 commits..."
+
+       Option 2 | Score 5/5 | 00:03:47 → 00:04:47 (60s)
+       Hook: "Une plateforme de zéro en 5 semaines, seul"
+       Verbatim: "La première version était en prod au bout de 5 semaines..."
+
+       Option 3 | Score 4/5 | 00:07:12 → 00:08:05 (53s)
+       Hook: "L'IA ne code pas à ta place, elle t'oblige à mieux découper"
+       Verbatim: "Ce que j'ai découvert c'est que le vrai gain..."
+
+       Which option? (1/2/3 or custom timestamps)
+
+You:   2
+
+Agent: Downloading segment 00:03:47 → 00:04:47...
+       Clip saved: output/clips/plateforme-5-semaines-seul_000347.mp4 (1.8MB)
+```
+
+Run the pipeline on any video, skip any step you have already done. The agent never re-downloads a cached file or re-runs an LLM call unless you ask it to.
+
 ---
 
 ## Contributing
