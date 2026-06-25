@@ -30,7 +30,8 @@ Practically speaking: you can audit a competitor channel in 10 minutes and know 
 
 ## How it works
 
-### Insight pipeline
+<details>
+<summary>Insight pipeline</summary>
 
 ```
 YouTube URL / channel
@@ -61,7 +62,10 @@ YouTube URL / channel
         AGGREGATE_REPORT.md + .json
 ```
 
-### Shorts suggestion pipeline
+</details>
+
+<details>
+<summary>Shorts suggestion pipeline</summary>
 
 ```
 yt_transcripts/*.vtt
@@ -91,12 +95,17 @@ yt_transcripts/*.vtt
    yt_shorts_clips/<title>.mp4
 ```
 
-**Key design decisions:**
+</details>
+
+<details>
+<summary>Key design decisions</summary>
 
 - yt-dlp runs as a subprocess, never imported as a library (subprocess is the stable contract)
 - `stop_reason == "max_tokens"` gates writes: truncated responses are never cached, retried on next run
 - `ThreadPoolExecutor` over asyncio: `httpx.Client` is thread-safe, no event loop needed
 - YouTube VTT rolling captions repeat each phrase 2-3x as it scrolls; `vtt_parser.py` tracks first occurrence per unique text fragment, giving clean timestamped segments
+
+</details>
 
 ---
 
@@ -208,6 +217,9 @@ yt-insights run <url> --model claude-sonnet-4-6 --base-url https://api.anthropic
 
 ## CLI reference
 
+<details>
+<summary>Show all commands and options</summary>
+
 ```
 yt-insights run SOURCE [OPTIONS]
 
@@ -261,9 +273,14 @@ yt-insights config init
   Create ~/.config/yt-insights/config.toml with all defaults commented.
 ```
 
+</details>
+
 ---
 
 ## Output structure
+
+<details>
+<summary>Show directory layout and example files</summary>
 
 ```
 yt_transcripts/
@@ -322,6 +339,8 @@ Example `video.json`:
 }
 ```
 
+</details>
+
 ---
 
 ## Idempotence
@@ -338,6 +357,9 @@ yt-insights run <url> --force
 
 ## Insight JSON schema
 
+<details>
+<summary>Show schema</summary>
+
 The LLM is always instructed to return exactly this structure:
 
 ```
@@ -347,6 +369,8 @@ tools        object[]      {name, context}: tools and technologies mentioned
 advice       string[]      Immediately actionable recommendations
 quotes       string[]      Notable quotes (empty array if none)
 ```
+
+</details>
 
 ---
 
