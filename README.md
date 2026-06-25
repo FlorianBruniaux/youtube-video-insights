@@ -20,6 +20,8 @@ Point it at a YouTube channel. Get a structured JSON + Markdown insight file per
 
 ## How it works
 
+### Insight pipeline
+
 ```
 YouTube URL / channel
         │
@@ -49,11 +51,42 @@ YouTube URL / channel
         AGGREGATE_REPORT.md + .json
 ```
 
+### Shorts suggestion pipeline
+
+```
+yt_transcripts/*.vtt
+        │
+        ▼
+   vtt_parser.py                Timestamped dedup: first-occurrence tracking
+        │                       strips inline <c> tags, rolling caption dedup
+        ▼
+   [HH:MM:SS] text segments
+        │
+        ▼
+   shorts.py ──────────────►   LLM backend (same auto-detection)
+   ThreadPoolExecutor           Identifies top 3 moments (30-90s) per talk:
+                                hook, score/5, verbatim, timestamps
+        │
+        ├──► yt_shorts/<video>.json   ← suggestion cache (atomic write)
+        ├──► yt_shorts/<video>.md     ← human-readable suggestions
+        └──► yt_shorts/INDEX.md       ← global index sorted by score
+                                         across all talks
+        │ (optional phase 2)
+        ▼
+   generate-short command
+   yt-dlp --download-sections   Downloads only the segment (~20-50MB,
+                                not the full video)
+        │
+        ▼
+   yt_shorts_clips/<title>.mp4
+```
+
 **Key design decisions:**
 
 - yt-dlp runs as a subprocess, never imported as a library (subprocess is the stable contract)
 - `stop_reason == "max_tokens"` gates writes: truncated responses are never cached, retried on next run
 - `ThreadPoolExecutor` over asyncio: `httpx.Client` is thread-safe, no event loop needed
+- YouTube VTT rolling captions repeat each phrase 2-3x as it scrolls; `vtt_parser.py` tracks first occurrence per unique text fragment, giving clean timestamped segments
 
 ---
 
@@ -98,6 +131,18 @@ yt-insights run https://www.youtube.com/@DevWithAIYoutube --skip-download
 
 # Regenerate the aggregate report only
 yt-insights report
+
+# Suggest Shorts from all existing VTT files
+yt-insights suggest-shorts
+
+# Suggest Shorts for a single talk
+yt-insights suggest-shorts --vtt yt_transcripts/20260423-talk.vtt
+
+# Regenerate the global Shorts index (no LLM call)
+yt-insights suggest-shorts --index-only
+
+# Download a specific clip segment (no full-video download)
+yt-insights generate-short VIDEO_ID --start 00:05:10 --end 00:05:55 --title "hook-context-engineering"
 ```
 
 Expected output:
@@ -172,6 +217,35 @@ yt-insights report [OPTIONS]
   --model TEXT
   --base-url TEXT
 
+yt-insights suggest-shorts [OPTIONS]
+
+  Identify the top 3 Short-worthy moments (30-90s) in each VTT transcript.
+  LLM criteria: autonomous hook, punchy verbatim, clean in/out points, score 1-5.
+  Skips already-processed talks unless --force is set.
+
+  --vtt PATH         Process a single VTT file instead of the full transcripts dir
+  --force            Re-analyze even if suggestion cache exists
+  --index-only       Regenerate INDEX.md only, no LLM calls
+  --model TEXT       Override LLM model
+  --base-url TEXT    Override LLM API base URL
+  --output-dir PATH  Base directory (expects yt_transcripts/, yt_insights/, yt_shorts/)
+
+yt-insights generate-short VIDEO_ID [OPTIONS]
+
+  Download a single clip segment from YouTube using yt-dlp --download-sections.
+  Only the requested range is fetched (~20-50MB), not the full video.
+
+  --start TEXT       Start timestamp HH:MM:SS  [required]
+  --end TEXT         End timestamp HH:MM:SS  [required]
+  --title TEXT       Short title for output filename
+  --output-dir PATH  Directory for clip output (default: yt_shorts_clips/)
+
+yt-insights config show [OPTIONS]
+
+  Print the resolved configuration (active values after merging all layers).
+  Shows which source each value comes from: default, config.toml, env var, or CLI flag.
+  Accepts --model and --base-url to simulate overrides before running.
+
 yt-insights config init
 
   Create ~/.config/yt-insights/config.toml with all defaults commented.
@@ -190,6 +264,28 @@ yt_insights/
   20260101 - Video Title [videoID].fr.md    # rendered from JSON
   AGGREGATE_REPORT.md                       # narrative synthesis
   AGGREGATE_REPORT.json                     # top tools + per-video index
+
+yt_shorts/
+  20260101 - Video Title [videoID].fr.json  # suggestion cache (atomic write)
+  20260101 - Video Title [videoID].fr.md    # human-readable: timestamps, hook, score, verbatim
+  INDEX.md                                  # global table sorted by score across all talks
+
+yt_shorts_clips/
+  talk-title_000510.mp4                     # downloaded segment (generate-short output)
+```
+
+Example `yt_shorts/video.md` entry:
+
+```markdown
+## Short 1 — Score : 5/5
+
+**Timestamps :** 00:05:10 -> 00:05:48 (38s)
+**Lien direct :** https://youtube.com/watch?v=VIDEO_ID&t=310s
+**Hook :** L'IA ne remplace pas le dev, elle remplace le flou
+**Rationale :** Formule autonome, tension forte, borne nette sur une chute.
+
+> "Le vrai problème c'est pas le code, c'est la spec. Et ça, l'IA ne peut pas
+> l'inventer à votre place."
 ```
 
 Example `video.json`:
@@ -270,6 +366,25 @@ All keys are optional. CLI flags and `YT_INSIGHTS_*` env vars take precedence ov
 | Aggregate report | `Counter` top tools (no LLM) + one narrative LLM call |
 | Config file | 4-layer merge: defaults → TOML → env vars → CLI flags |
 | Idempotence | Re-run safely at any time, skips existing insights |
+| Shorts suggestions | Top 3 moments per talk (30-90s), scored 1-5 by LLM, cross-talk INDEX.md |
+| Timestamped VTT | First-occurrence dedup with timestamps preserved for Shorts pipeline |
+| Clip download | `yt-dlp --download-sections`, segment only, no full-video fetch |
+
+---
+
+## For AI coding assistants
+
+`docs/machine-readable/` contains five structured reference files designed to be loaded into an AI agent's context:
+
+| File | What it covers |
+|------|---------------|
+| `llms.txt` | Full quick reference: module map, constraints, env vars, decision tree |
+| `code-map.yaml` | Every module, its exports, dedup strategies, data directories |
+| `adr-index.yaml` | 10 Architecture Decision Records with rationale |
+| `constraints.yaml` | Forbidden patterns, required patterns, open tensions |
+| `tech-decisions.yaml` | Technology stack choices per concern (VTT parsing, storage, concurrency) |
+
+Load `llms.txt` for a full context snapshot. Load individual YAML files when working on a specific area.
 
 ---
 

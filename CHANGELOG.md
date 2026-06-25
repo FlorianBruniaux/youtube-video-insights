@@ -8,6 +8,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+**Shorts suggestion pipeline**
+
+- `yt-insights suggest-shorts`: identifies the top 3 Short-worthy moments (30-90s) per VTT file using LLM scoring. Outputs `yt_shorts/<stem>.json` (cache) and `yt_shorts/<stem>.md` (human-readable suggestions with timestamps, hook, score 1-5, verbatim, rationale).
+- `yt-insights suggest-shorts --index-only`: regenerates `yt_shorts/INDEX.md` (global table sorted by score across all talks) from existing caches without any LLM call.
+- `yt-insights generate-short VIDEO_ID --start HH:MM:SS --end HH:MM:SS`: downloads a single clip segment via `yt-dlp --download-sections`. Only the requested range is fetched (~20-50MB), no full-video download.
+
+**New modules**
+
+- `vtt_parser.py`: timestamped VTT parser complementing `cleaner.py`. Preserves first-occurrence timestamps of each unique text fragment using a `dict[str, float]` dedup strategy. Key functions: `parse_vtt_timestamped()`, `format_timestamped_transcript()`, `ts_to_seconds()`, `seconds_to_hms()`, `youtube_link()`.
+- `shorts.py`: full Shorts pipeline. `ShortSuggestion` and `ShortsResult` dataclasses, `suggest_shorts()` (single file), `suggest_all()` (ThreadPoolExecutor batch), `generate_index()` (cross-talk markdown table), `generate_short_clip()` (yt-dlp subprocess).
+
+**Config**
+
+- Added `shorts_dir` (default: `yt_shorts/`) and `shorts_clips_dir` (default: `yt_shorts_clips/`) to `Config` dataclass.
+- Added `YT_INSIGHTS_SHORTS_DIR` and `YT_INSIGHTS_SHORTS_CLIPS_DIR` env vars and TOML keys.
+
+---
+
 ## [0.1.0] - 2026-06-24
 
 Initial release. Extracted and refactored from `boldguy/scripts/youtube_insights.py`

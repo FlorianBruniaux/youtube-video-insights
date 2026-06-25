@@ -10,11 +10,12 @@ Real output from running `yt-insights` on a public YouTube video.
 
 | File | What it is |
 |---|---|
-| `*.fr.vtt` | Raw subtitle file downloaded by yt-dlp. This is the input. |
-| `*.fr.json` | Structured insight extracted by the LLM. This is the source of truth. |
-| `*.fr.md` | Markdown rendered from the JSON. This is the readable output. |
+| `*.fr.vtt` | Raw subtitle file downloaded by yt-dlp. Input for the analysis. |
+| `*.fr.json` | Structured insight extracted by the LLM. Source of truth for the cache. |
+| `*.fr.md` | Markdown rendered from the JSON. Human-readable output. |
+| `prompt-claude-code.md` | Ready-to-paste prompt for running the full pipeline inside Claude Code. |
 
-The `.json` and `.md` share the same stem as the `.vtt`, which is how the cache lookup works at runtime.
+The `.json` and `.md` share the same stem as the `.vtt`, which is how cache lookup works at runtime.
 
 ---
 
@@ -24,23 +25,23 @@ The `.json` and `.md` share the same stem as the `.vtt`, which is how the cache 
 # Install yt-insights
 pipx install yt-insights
 
-# Download subtitles for the video
+# Download subtitles + extract insights
 yt-insights run https://www.youtube.com/watch?v=nfupYzLjFGc
 
 # Output lands in:
-#   yt_transcripts/*.vtt   (subtitle file)
-#   yt_insights/*.json     (structured insight)
-#   yt_insights/*.md       (rendered markdown)
-#   yt_insights/AGGREGATE_REPORT.md
+#   output/transcripts/*.vtt   subtitle file
+#   output/insights/*.json     structured insight
+#   output/insights/*.md       rendered markdown
+#   output/insights/AGGREGATE_REPORT.md
 ```
 
-To skip the download and analyze an existing VTT:
+Skip the download if the VTT is already present:
 
 ```bash
 yt-insights run https://www.youtube.com/watch?v=nfupYzLjFGc --skip-download
 ```
 
-To force re-analysis even if the cache exists:
+Force re-analysis even if the cache exists:
 
 ```bash
 yt-insights run https://www.youtube.com/watch?v=nfupYzLjFGc --force
@@ -48,16 +49,46 @@ yt-insights run https://www.youtube.com/watch?v=nfupYzLjFGc --force
 
 ---
 
-## What the JSON contains
+## Shorts pipeline
+
+```bash
+# Suggest the best Short moments from existing VTTs
+yt-insights suggest-shorts
+
+# Download the best clip as MP4
+yt-insights generate-short nfupYzLjFGc \
+  --start 00:00:56 --end 00:01:43 \
+  --title "hook-1200-commits" \
+  --output-format mp4
+
+# Output lands in output/clips/
+```
+
+---
+
+## Interactive wizard
+
+In a real terminal (TTY), the wizard guides you step by step with arrow-key menus:
+
+```bash
+yt-insights interactive
+```
+
+Inside Claude Code (no TTY), pass all flags directly. See `prompt-claude-code.md` for the ready-to-use prompt.
+
+---
+
+## What the insight JSON contains
 
 ```json
 {
-  "subject":     "One-sentence description of the video topic",
-  "key_points":  ["3-5 main points covered"],
-  "tools":       [{"name": "Tool", "context": "how it was used"}],
-  "advice":      ["Immediately actionable recommendations"],
-  "quotes":      ["Notable quotes from the speaker"]
+  "subject":    "One-sentence description of the video topic",
+  "key_points": ["3-5 main points covered"],
+  "tools":      [{"name": "Tool", "context": "how it was used"}],
+  "advice":     ["Immediately actionable recommendations"],
+  "quotes":     ["Notable quotes from the speaker"]
 }
 ```
 
-The LLM backend is auto-detected at runtime: cc-bridge (port 4141) first, then Ollama, then `ANTHROPIC_API_KEY`. No configuration needed if one of these is available.
+LLM backend is auto-detected at runtime: cc-bridge (port 4141) first, then Ollama, then
+`ANTHROPIC_API_KEY`. No configuration needed if one of these is available.

@@ -23,8 +23,10 @@ class Config:
     max_tokens: int = 2048
     timeout: int = 120
     concurrency: int = 0
-    transcripts_dir: Path = field(default_factory=lambda: Path("yt_transcripts"))
-    insights_dir: Path = field(default_factory=lambda: Path("yt_insights"))
+    transcripts_dir: Path = field(default_factory=lambda: Path("output/transcripts"))
+    insights_dir: Path = field(default_factory=lambda: Path("output/insights"))
+    shorts_dir: Path = field(default_factory=lambda: Path("output/shorts"))
+    shorts_clips_dir: Path = field(default_factory=lambda: Path("output/clips"))
 
     def with_url(
         self, url: str, *, model: str | None = None, api_key: str | None = None
@@ -59,6 +61,8 @@ def load_config(overrides: dict) -> Config:
         "YT_INSIGHTS_CONCURRENCY": "concurrency",
         "YT_INSIGHTS_TRANSCRIPTS_DIR": "transcripts_dir",
         "YT_INSIGHTS_INSIGHTS_DIR": "insights_dir",
+        "YT_INSIGHTS_SHORTS_DIR": "shorts_dir",
+        "YT_INSIGHTS_SHORTS_CLIPS_DIR": "shorts_clips_dir",
     }
     env_data: dict = {}
     for env_key, field_name in env_map.items():
@@ -86,7 +90,7 @@ def effective_concurrency(config: Config, backend_type: str) -> int:
 def _apply_dict(cfg: Config, data: dict) -> Config:
     """Apply a flat dict of field values to a Config, coercing types."""
     int_fields = {"max_transcript_chars", "max_tokens", "timeout", "concurrency"}
-    path_fields = {"transcripts_dir", "insights_dir"}
+    path_fields = {"transcripts_dir", "insights_dir", "shorts_dir", "shorts_clips_dir"}
     updates: dict = {}
     for key, val in data.items():
         if not hasattr(cfg, key):
@@ -112,6 +116,8 @@ CONFIG_TOML_TEMPLATE = """\
 # max_tokens = 2048
 # timeout = 120
 # concurrency = 0       # 0 = auto (3 for API, 1 for Ollama/MLX)
-# transcripts_dir = "yt_transcripts"
-# insights_dir = "yt_insights"
+# transcripts_dir = "output/transcripts"
+# insights_dir = "output/insights"
+# shorts_dir = "output/shorts"
+# shorts_clips_dir = "output/clips"
 """

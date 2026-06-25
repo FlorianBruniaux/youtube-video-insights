@@ -27,7 +27,26 @@ def _sort_videos(videos: list, sort: SortKey) -> list:
 
 @click.group()
 def cli() -> None:
-    """Extract structured insights from YouTube transcripts using any LLM."""
+    """YouTube transcript analysis and Shorts suggestion tool.
+
+    Two pipelines, same LLM backend auto-detection (cc-bridge → Ollama → Anthropic API):
+
+    \b
+    Insight pipeline:
+      yt-insights run SOURCE          Download subtitles + extract per-video insights
+      yt-insights report              Regenerate aggregate report from cached insights
+
+    \b
+    Shorts pipeline:
+      yt-insights suggest-shorts      Identify top 3 Short moments per talk (30-90s)
+      yt-insights generate-short ID   Download a single clip segment via yt-dlp
+
+    \b
+    Discovery:
+      yt-insights list SOURCE         List videos without downloading anything
+      yt-insights config show         Print the resolved configuration (active values)
+      yt-insights config init         Create ~/.config/yt-insights/config.toml
+    """
 
 
 @cli.command("list")
@@ -88,7 +107,7 @@ def list_cmd(source: str, sort: SortKey, cookies_from_browser: str | None) -> No
     "--output-dir",
     type=click.Path(),
     default=None,
-    help="Base directory for yt_transcripts/ and yt_insights/.",
+    help="Base output directory (default: output/).",
 )
 @click.option(
     "--sleep-requests",
@@ -132,8 +151,8 @@ def run(
     }
     if output_dir:
         base = Path(output_dir)
-        overrides["transcripts_dir"] = base / "yt_transcripts"
-        overrides["insights_dir"] = base / "yt_insights"
+        overrides["transcripts_dir"] = base / "transcripts"
+        overrides["insights_dir"] = base / "insights"
     config = load_config(overrides)
 
     # Backend (lazy probe)
@@ -245,7 +264,7 @@ def run(
                         "Remove --skip-download to fetch it.",
                         err=True,
                     )
-                    import sys; sys.exit(1)
+                    sys.exit(1)
             else:
                 vtt_files = sorted(config.transcripts_dir.glob("*.vtt"))
             click.echo(f"Found {len(vtt_files)} existing VTT file(s).")
@@ -338,6 +357,173 @@ def report(output: str | None, model: str | None, base_url: str | None) -> None:
     click.echo(f"Report written to {report_path}")
 
 
+@cli.command("suggest-shorts")
+@click.option("--vtt", "vtt_path", default=None, type=click.Path(exists=True), help="Single VTT file to process.")
+@click.option("--force", is_flag=True, help="Re-analyze even if suggestion cache exists.")
+@click.option("--index-only", is_flag=True, help="Regenerate only INDEX.md from existing caches.")
+@click.option("--model", default=None, help="Override LLM model.")
+@click.option("--base-url", default=None, help="Override LLM API base URL.")
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default=None,
+    help="Base output directory (default: output/).",
+)
+def suggest_shorts_cmd(
+    vtt_path: str | None,
+    force: bool,
+    index_only: bool,
+    model: str | None,
+    base_url: str | None,
+    output_dir: str | None,
+) -> None:
+    """Identify the top 3 Short-worthy moments in each VTT transcript.
+
+    Reads from <transcripts_dir>/*.vtt and writes suggestions to <shorts_dir>/.
+    Skips already-processed talks unless --force is set.
+    """
+    from .shorts import generate_index, suggest_all, suggest_shorts
+
+    overrides: dict = {"model": model, "base_url": base_url}
+    if output_dir:
+        base = Path(output_dir)
+        overrides["transcripts_dir"] = base / "transcripts"
+        overrides["insights_dir"] = base / "insights"
+        overrides["shorts_dir"] = base / "shorts"
+    config = load_config(overrides)
+
+    config.shorts_dir.mkdir(parents=True, exist_ok=True)
+
+    if index_only:
+        index_md = generate_index(config.shorts_dir)
+        index_path = config.shorts_dir / "INDEX.md"
+        index_path.write_text(index_md, encoding="utf-8")
+        click.echo(f"Index regenerated: {index_path}")
+        return
+
+    try:
+        backend = resolve_backend(config)
+    except BackendNotFoundError as exc:
+        click.echo(f"Error: {exc}", err=True)
+        sys.exit(1)
+
+    if vtt_path:
+        vtt_files = [Path(vtt_path)]
+    else:
+        vtt_files = sorted(config.transcripts_dir.glob("*.vtt"))
+        if not vtt_files:
+            click.echo(
+                f"No VTT files found in {config.transcripts_dir}/. "
+                "Run 'yt-insights run' first.",
+                err=True,
+            )
+            sys.exit(1)
+
+    cached = sum(1 for f in vtt_files if (config.shorts_dir / f"{f.stem}.json").exists())
+    to_process = len(vtt_files) - cached if not force else len(vtt_files)
+    click.echo(
+        f"\n{len(vtt_files)} VTT file(s) found — "
+        f"{cached} cached, {to_process} to process — "
+        f"model '{config.model}'"
+    )
+
+    try:
+        results = suggest_all(
+            vtt_files,
+            config.insights_dir,
+            config.shorts_dir,
+            backend,
+            config,
+            force=force,
+        )
+    except BackendUnavailableError as exc:
+        click.echo(f"Error: backend unavailable — {exc}", err=True)
+        sys.exit(1)
+    finally:
+        backend.close()
+
+    total_suggestions = sum(len(r.suggestions) for r in results)
+    click.echo(f"\n{len(results)} talk(s) processed, {total_suggestions} suggestion(s) generated.")
+
+    click.echo("Generating global index ...")
+    index_md = generate_index(config.shorts_dir)
+    index_path = config.shorts_dir / "INDEX.md"
+    index_path.write_text(index_md, encoding="utf-8")
+    click.echo(f"  Index -> {index_path}")
+    click.echo("Done.")
+
+
+@cli.command("generate-short")
+@click.argument("video_id")
+@click.option("--start", required=True, help="Start timestamp HH:MM:SS.")
+@click.option("--end", required=True, help="End timestamp HH:MM:SS.")
+@click.option("--title", default="", help="Short title for output filename.")
+@click.option(
+    "--output-dir",
+    type=click.Path(),
+    default=None,
+    help="Directory for clip output (default: output/clips/).",
+)
+@click.option(
+    "--output-format",
+    default="mp4",
+    show_default=True,
+    help="Container format for the clip (mp4, webm, mkv). Requires ffmpeg for mp4/mkv.",
+)
+def generate_short_cmd(
+    video_id: str,
+    start: str,
+    end: str,
+    title: str,
+    output_dir: str | None,
+    output_format: str,
+) -> None:
+    """Download a single Short clip from YouTube using yt-dlp.
+
+    VIDEO_ID is the 11-character YouTube video ID (e.g. rAfAnJcuymo).
+    Only the specified segment is downloaded (no full-video fetch).
+
+    Example:
+      yt-insights generate-short rAfAnJcuymo --start 00:05:10 --end 00:05:55 --title "hook-claude"
+    """
+    from .shorts import generate_short_clip
+
+    config = load_config({})
+    clips_dir = Path(output_dir) if output_dir else config.shorts_clips_dir
+
+    click.echo(f"Downloading clip {video_id} [{start} -> {end}] ...")
+    clip_path = generate_short_clip(video_id, start, end, clips_dir, title=title, output_format=output_format)
+    if clip_path:
+        click.echo(f"  Saved: {clip_path}")
+    else:
+        click.echo("  Clip download failed. Check yt-dlp is installed and the video is accessible.", err=True)
+        sys.exit(1)
+
+
+@cli.command("interactive")
+@click.option("--action",   default=None, type=click.Choice(["insights", "shorts", "clip", "pipeline"]), help="Action à exécuter.")
+@click.option("--source",   default=None, help="URL YouTube (vidéo, playlist ou chaîne).")
+@click.option("--duration", default=None, type=click.Choice(["very-short", "standard", "long", "any"]), help="Durée préférée du Short.")
+@click.option("--platform", default=None, type=click.Choice(["youtube-shorts", "tiktok", "reels", "linkedin", "none"]), help="Plateforme cible.")
+@click.option("--format",   "output_format", default=None, type=click.Choice(["mp4", "webm", "mkv"]), help="Format de sortie du clip.")
+def interactive_cmd(
+    action: str | None,
+    source: str | None,
+    duration: str | None,
+    platform: str | None,
+    output_format: str | None,
+) -> None:
+    """Wizard interactif. En TTY : InquirerPy. Sans TTY : passe les flags directement.
+
+    \b
+    Sans TTY (ex. Claude Code), fournir tous les flags :
+      yt-insights interactive --action pipeline --source URL \\
+        --duration standard --platform youtube-shorts --format mp4
+    """
+    from .wizard import run_wizard
+    run_wizard(action=action, source=source, duration=duration, platform=platform, output_format=output_format)
+
+
 @cli.group("config")
 def config_group() -> None:
     """Manage yt-insights configuration."""
@@ -353,3 +539,50 @@ def config_init() -> None:
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(CONFIG_TOML_TEMPLATE, encoding="utf-8")
     click.echo(f"Created {config_path}")
+
+
+@config_group.command("show")
+@click.option("--model", default=None, help="Simulate --model override.")
+@click.option("--base-url", default=None, help="Simulate --base-url override.")
+def config_show(model: str | None, base_url: str | None) -> None:
+    """Print the resolved configuration with active values and their sources.
+
+    Merges defaults → config.toml → env vars → CLI flags so you can verify
+    what yt-insights will actually use when you run a command.
+    """
+    import os as _os
+
+    config_path = Path.home() / ".config" / "yt-insights" / "config.toml"
+    config = load_config({"model": model, "base_url": base_url})
+
+    def _src(env_key: str, flag_val: object, default: object) -> str:
+        if flag_val is not None:
+            return "CLI flag"
+        if _os.getenv(env_key):
+            return f"env {env_key}"
+        if config_path.exists():
+            return "config.toml (or default)"
+        return "default"
+
+    click.echo(f"\nyt-insights resolved configuration")
+    click.echo(f"Config file : {config_path} ({'exists' if config_path.exists() else 'not found, using defaults'})")
+    click.echo()
+
+    rows = [
+        ("base_url",             config.base_url,             "YT_INSIGHTS_BASE_URL",             base_url),
+        ("model",                config.model,                "YT_INSIGHTS_MODEL",                model),
+        ("api_key",              "***" if config.api_key else "(not set)", "YT_INSIGHTS_API_KEY", None),
+        ("max_transcript_chars", config.max_transcript_chars, "YT_INSIGHTS_MAX_TRANSCRIPT_CHARS",  None),
+        ("max_tokens",           config.max_tokens,           "YT_INSIGHTS_MAX_TOKENS",            None),
+        ("timeout",              config.timeout,              "YT_INSIGHTS_TIMEOUT",               None),
+        ("concurrency",          f"{config.concurrency} (0 = auto)", "YT_INSIGHTS_CONCURRENCY",   None),
+        ("transcripts_dir",      config.transcripts_dir,      "YT_INSIGHTS_TRANSCRIPTS_DIR",       None),
+        ("insights_dir",         config.insights_dir,         "YT_INSIGHTS_INSIGHTS_DIR",          None),
+        ("shorts_dir",           config.shorts_dir,           "YT_INSIGHTS_SHORTS_DIR",            None),
+        ("shorts_clips_dir",     config.shorts_clips_dir,     "YT_INSIGHTS_SHORTS_CLIPS_DIR",      None),
+    ]
+
+    width = max(len(k) for k, *_ in rows)
+    for key, value, env_key, flag_val in rows:
+        src = _src(env_key, flag_val, None)
+        click.echo(f"  {key:<{width}}  {str(value):<40}  # {src}")

@@ -1,6 +1,10 @@
-# Data directories (never commit)
-/yt_transcripts/
+# Generated output (never commit)
+/output/
 /yt_insights/
+/yt_transcripts/
+/yt_shorts/
+/yt_shorts_clips/
+/docs/
 
 # Partial write artifacts
 *.tmp.json
