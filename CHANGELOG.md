@@ -8,6 +8,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+---
+
+## [0.2.0] - 2026-06-25
+
 ### Added
 
 **Shorts suggestion pipeline**
@@ -25,6 +29,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - Added `shorts_dir` (default: `yt_shorts/`) and `shorts_clips_dir` (default: `yt_shorts_clips/`) to `Config` dataclass.
 - Added `YT_INSIGHTS_SHORTS_DIR` and `YT_INSIGHTS_SHORTS_CLIPS_DIR` env vars and TOML keys.
+
+**Claude Code integration**
+
+- Agent `yt-video-analyst` (`.claude/agents/`): dispatches on any YouTube URL in Claude Code. Checks `output/transcripts/`, `output/insights/`, `output/shorts/` for existing cache, asks what is needed, invokes the matching skill. Never downloads a clip without user confirmation.
+- Skill `/yt-get-transcript` (`.claude/skills/`): downloads the VTT via yt-dlp, cache-aware, retries with browser cookies on HTTP 429.
+- Skill `/yt-get-insights`: runs `yt-insights run --skip-download`, reads from cache when already processed, presents subject, key points and notable quote.
+- Skill `/yt-get-shorts`: suggests the top 3 Short moments, presents each option with timestamps and verbatim, asks for choice, downloads the selected clip as mp4.
+- Skill `/yt-run-pipeline`: chains transcript, insights and Shorts selection in sequence.
+
+### Fixed
+
+- `generate_short_clip()`: replaced `--quiet` with `--no-warnings` in the yt-dlp subprocess call. `--quiet` suppressed ffmpeg stdin handling and caused mp4 mux to fail with exit code 8. mp4 clips now generate reliably.
+- Shorts prompt now enforces sentence boundaries: `start` must coincide with the beginning of a complete sentence and `end` with the end of one. Clips no longer cut mid-sentence.
 
 ---
 

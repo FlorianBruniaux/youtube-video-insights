@@ -164,6 +164,7 @@ Titre : "{title}"
 Identifie les 3 meilleurs moments pour un YouTube Short.
 Utilise UNIQUEMENT des timestamps présents dans le transcript.
 Durée entre start et end : 30 à 90 secondes.
+Contrainte impérative : start doit coïncider avec le début d'une phrase complète, end doit coïncider avec la fin d'une phrase complète (point, point d'exclamation, point d'interrogation). Ne jamais couper une phrase en cours.
 
 Réponds en JSON strict, sans texte avant ni après :
 [
@@ -397,7 +398,7 @@ def generate_short_clip(
         "--download-sections", f"*{start}-{end}",
         "-o", output_template,
         "--no-playlist",
-        "--quiet",
+        "--no-warnings",
         "--progress",
         "--merge-output-format", output_format,
     ]

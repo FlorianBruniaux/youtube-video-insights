@@ -1,6 +1,6 @@
 [project]
 name = "yt-insights"
-version = "0.1.0"
+version = "0.2.0"
 description = "Extract structured insights from YouTube channel transcripts using any local or cloud LLM"
 readme = "README.md"
 license = { text = "MIT" }

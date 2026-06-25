@@ -388,6 +388,37 @@ Load `llms.txt` for a full context snapshot. Load individual YAML files when wor
 
 ---
 
+## Claude Code integration
+
+`.claude/agents/yt-video-analyst.md` and four skills in `.claude/skills/` wrap the CLI pipeline in a conversational workflow. The agent checks caches, presents options, and waits for your input before downloading any clip.
+
+See `docs/claude-code.md` for the full reference.
+
+### Agent
+
+`yt-video-analyst` dispatches automatically when you paste a YouTube URL in Claude Code. It identifies what is already cached, asks what you want (transcript, insights, Shorts, or the full pipeline), and invokes the matching skill.
+
+### Skills
+
+| Skill | What it does |
+|---|---|
+| `/yt-get-transcript` | Downloads the VTT, checks cache first, retries with browser cookies on 429 |
+| `/yt-get-insights` | Runs insight analysis on an existing VTT, reads from cache when already processed |
+| `/yt-get-shorts` | Suggests the top 3 Short moments, presents them for your choice, downloads the chosen clip |
+| `/yt-run-pipeline` | Runs all three steps in sequence |
+
+### How it works
+
+1. You paste a YouTube URL in Claude Code
+2. Agent checks `output/transcripts/`, `output/insights/`, `output/shorts/` for existing cache
+3. Agent asks what you want: transcript, insights, Shorts, or everything
+4. For Shorts: shows all 3 suggestions with hook, timestamps, and verbatim before asking your choice
+5. Clip download starts only after you confirm the moment
+
+Each skill respects the same idempotence as the CLI: a VTT already on disk is not re-downloaded, a cached insight JSON triggers no LLM call.
+
+---
+
 ## Contributing
 
 Open a PR. No CLA, no build pipeline, just `pip install -e .` and go.
