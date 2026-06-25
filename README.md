@@ -18,6 +18,16 @@ Point it at a YouTube channel. Get a structured JSON + Markdown insight file per
 
 ---
 
+## What it's actually for
+
+Point it at any YouTube channel and get two things back. First, a structured insight file per video: subject, key takeaways, tools mentioned, actionable advice. On top of that, one aggregate report that synthesises patterns across the whole channel, so you see the editorial logic, recurring angles, what gets covered a lot and what doesn't.
+
+The second pipeline is about Shorts. The same transcripts go through a scorer that finds the top 3 moments per video, 30-90 seconds each, with verbatim text and precise timestamps. Pick the one you want, run one more command, and yt-dlp downloads just that segment rather than the full video.
+
+Practically speaking: you can audit a competitor channel in 10 minutes and know their full editorial strategy. Run it across several channels on the same topic and you'll find the angles nobody is covering yet. The exported JSON and VTT files are also ready for RAG pipelines, fine-tuning datasets, or anything else that needs clean text from video.
+
+---
+
 ## How it works
 
 ### Insight pipeline
