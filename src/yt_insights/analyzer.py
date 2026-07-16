@@ -81,8 +81,13 @@ class VideoInsight:
         if self.tools:
             lines += ["**Outils / technos** :"]
             for t in self.tools:
-                name = t.get("name", "")
-                ctx = t.get("context", "")
+                # The LLM sometimes returns a bare string instead of {name, context}.
+                if isinstance(t, dict):
+                    name = t.get("name", "")
+                    ctx = t.get("context", "")
+                else:
+                    name = str(t)
+                    ctx = ""
                 lines.append(f"- **{name}**" + (f" : {ctx}" if ctx else ""))
             lines.append("")
         if self.advice:

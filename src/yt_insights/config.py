@@ -19,6 +19,7 @@ class Config:
     api_key: str = ""
     anthropic_version: str = "2023-06-01"
     model: str = DEFAULT_MODEL
+    sub_langs: str = "fr,en"
     max_transcript_chars: int = 10_000
     max_tokens: int = 2048
     timeout: int = 120
@@ -54,6 +55,7 @@ def load_config(overrides: dict) -> Config:
         "YT_INSIGHTS_BASE_URL": "base_url",
         "YT_INSIGHTS_API_KEY": "api_key",
         "YT_INSIGHTS_MODEL": "model",
+        "YT_INSIGHTS_SUB_LANGS": "sub_langs",
         "YT_INSIGHTS_ANTHROPIC_VERSION": "anthropic_version",
         "YT_INSIGHTS_MAX_TRANSCRIPT_CHARS": "max_transcript_chars",
         "YT_INSIGHTS_MAX_TOKENS": "max_tokens",

@@ -35,12 +35,18 @@ def load_insights(insights_dir: Path) -> list[VideoInsight]:
     return results
 
 
+def _tool_name(t: object) -> str:
+    if isinstance(t, dict):
+        return (t.get("name") or "").strip()
+    return str(t).strip()
+
+
 def top_tools(insights: list[VideoInsight], n: int = 20) -> list[tuple[str, int]]:
     """Return top-N tools by mention count across all insights."""
     counter: Counter = Counter()
     for vi in insights:
         for t in vi.tools:
-            name = (t.get("name") or "").strip()
+            name = _tool_name(t)
             if name:
                 counter[name] += 1
     return counter.most_common(n)
@@ -103,7 +109,7 @@ Sois factuel et direct."""
             {
                 "title": vi.title,
                 "subject": vi.subject,
-                "tools": [t.get("name") for t in vi.tools],
+                "tools": [_tool_name(t) for t in vi.tools],
             }
             for vi in insights
         ],
@@ -135,7 +141,7 @@ def _render_video_section(vi: "VideoInsight") -> str:
     if vi.key_points:
         lines.append("**Points clés** :\n" + "\n".join(f"- {p}" for p in vi.key_points))
     if vi.tools:
-        rows = "\n".join(f"| {t.get('name','')} | {t.get('context','')} |" for t in vi.tools)
+        rows = "\n".join(f"| {_tool_name(t)} | {t.get('context','') if isinstance(t, dict) else ''} |" for t in vi.tools)
         lines.append(f"\n**Outils** :\n| Outil | Contexte |\n|---|---|\n{rows}")
     if vi.advice:
         lines.append("\n**Conseils** :\n" + "\n".join(f"- {a}" for a in vi.advice))

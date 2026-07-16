@@ -26,6 +26,19 @@ class VideoInfo:
         return f"https://www.youtube.com/watch?v={self.video_id}"
 
 
+def _source_args(source: str) -> list[str]:
+    """Turn a SOURCE into yt-dlp positional args.
+
+    A channel/playlist/video URL is passed as-is. A path to an existing local
+    file (one URL per line) is passed via --batch-file, which is how yt-dlp
+    reads a list of URLs. A bare positional file path is otherwise treated as a
+    URL and rejected with "is not a valid URL".
+    """
+    if Path(source).is_file():
+        return ["--batch-file", source]
+    return [source]
+
+
 def list_videos(source: str, *, cookies_from_browser: str | None = None) -> list[VideoInfo]:
     """Fetch video metadata from a channel/playlist without downloading anything.
 
@@ -39,7 +52,7 @@ def list_videos(source: str, *, cookies_from_browser: str | None = None) -> list
     ]
     if cookies_from_browser:
         cmd += ["--cookies-from-browser", cookies_from_browser]
-    cmd.append(source)
+    cmd += _source_args(source)
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     videos: list[VideoInfo] = []
@@ -82,6 +95,7 @@ def download_subtitles(
     *,
     sleep_requests: int = 0,
     cookies_from_browser: str | None = None,
+    sub_langs: str = "fr,en",
 ) -> DownloadResult:
     """Download auto-generated subtitles from a YouTube channel/playlist/video.
 
@@ -93,7 +107,7 @@ def download_subtitles(
     cmd = [
         "yt-dlp",
         "--write-auto-subs",
-        "--sub-langs", "fr,en",
+        "--sub-langs", sub_langs,
         "--sub-format", "vtt",
         "--skip-download",
         "--ignore-errors",
@@ -107,7 +121,7 @@ def download_subtitles(
         cmd += ["--sleep-requests", str(sleep_requests)]
     if cookies_from_browser:
         cmd += ["--cookies-from-browser", cookies_from_browser]
-    cmd.append(channel_url)
+    cmd += _source_args(channel_url)
 
     output_dir.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -115,7 +129,9 @@ def download_subtitles(
     vtt_files: list[Path] = []
     errors: list[str] = []
 
-    for line in result.stderr.splitlines():
+    # yt-dlp writes the "[info] Writing video subtitles to:" lines to stdout and
+    # WARNING/ERROR lines to stderr, so both streams must be scanned.
+    for line in (result.stdout + "\n" + result.stderr).splitlines():
         line = line.strip()
         # yt-dlp logs written paths as "[info] Writing video subtitles to: <path>"
         # and skipped paths as "[info] <id>: Subtitle file already exists: <path>"

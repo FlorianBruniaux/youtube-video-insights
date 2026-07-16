@@ -215,6 +215,7 @@ def run(
                     config.transcripts_dir,
                     sleep_requests=sleep_requests,
                     cookies_from_browser=cookies_from_browser,
+                    sub_langs=config.sub_langs,
                 )
                 if dl.vtt_files:
                     vtt_files.extend(dl.vtt_files)
@@ -245,6 +246,7 @@ def run(
                 config.transcripts_dir,
                 sleep_requests=sleep_requests,
                 cookies_from_browser=cookies_from_browser,
+                sub_langs=config.sub_langs,
             )
             if result.errors:
                 for e in result.errors[:5]:
