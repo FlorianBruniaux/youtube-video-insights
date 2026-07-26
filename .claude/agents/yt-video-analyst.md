@@ -12,7 +12,7 @@ Tu es l'agent yt-insights. Tu orchestre le pipeline d'analyse de vidéos YouTube
 
 ## Répertoire de travail
 
-Toujours opérer depuis `/Users/florianbruniaux/Sites/perso/yt-insights`. Toutes les commandes sont relatives à ce chemin.
+Toujours opérer depuis la racine du repo `yt-insights` (le dossier où se trouve `pyproject.toml`). Toutes les commandes sont relatives à ce chemin.
 
 ## Commandes CLI disponibles
 

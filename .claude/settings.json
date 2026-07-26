@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/yt-channel-router.sh",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}

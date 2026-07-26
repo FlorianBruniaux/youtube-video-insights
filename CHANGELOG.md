@@ -8,6 +8,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `INSTALL.md`: full backend setup guide for machines without a local LLM, covering Anthropic API key, Ollama, cc-bridge, and any other OpenAI-compatible provider (Gemini example included), plus a copy-paste prompt to delegate the whole setup to a Claude Code session.
+- Skill `/yt-add-channel` (`.claude/skills/`): processes an entire YouTube channel into `output/<slug>/`, then rebuilds the global catalog via `scripts/build_index.py`. Documented in README's skill table (previously missing).
+
+### Fixed
+
+- Removed hardcoded absolute paths (`/Users/florianbruniaux/Sites/perso/yt-insights`) from `.claude/agents/yt-video-analyst.md` and `.claude/skills/yt-get-transcript.md`. Skills now assume only "run from the repo root," making them portable to any machine.
+- Reverted a regression that had leaked a specific channel slug (`output/aidevcon/...`) into `.claude/skills/yt-get-insights.md` and `yt-get-shorts.md`, `README.md`, `examples/prompt-claude-code.md`. Both skills now agree on the generic `output/transcripts/` and `output/insights/` paths.
+- Corrected the "For development" clone command in `README.md`: the repository is `youtube-video-insights`, not `yt-insights`.
+- `/yt-add-channel`'s LLM backend check no longer assumes Ollama exclusively; it now also checks for `ANTHROPIC_API_KEY` before reporting no backend available.
+
+### Documented
+
+- README's Backends table now flags that `MLXBackend` (`backends/mlx.py`) is not wired into `resolve_backend()` despite being documented as available via `--base-url mlx`. Not fixed yet, only surfaced so it isn't relied upon by mistake.
+
 ---
 
 ## [0.2.0] - 2026-06-25

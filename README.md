@@ -132,10 +132,12 @@ pipx install "yt-insights[mlx]"
 For development:
 
 ```bash
-git clone https://github.com/FlorianBruniaux/yt-insights
-cd yt-insights
+git clone https://github.com/FlorianBruniaux/youtube-video-insights
+cd youtube-video-insights
 pip install -e .
 ```
+
+For a machine with no local LLM (no Ollama, no GPU), see [INSTALL.md](INSTALL.md): it covers every backend option step by step (Anthropic API key, Ollama, cc-bridge, any other OpenAI-compatible provider).
 
 ---
 
@@ -212,6 +214,8 @@ yt-insights run <url> --model claude-sonnet-4-6 --base-url https://api.anthropic
 ```
 
 **cc-bridge model ID gotcha**: use the gateway format `anthropic/{provider}/{model}` (e.g. `anthropic/github_copilot/gpt-5-mini`) to route directly to the named provider via cc-bridge's stored credentials. A plain model ID (e.g. `claude-haiku-4-5`) uses cc-bridge's `active_route` and may return 401 if active_route is set to Anthropic in OAuth passthrough mode.
+
+**MLX status**: `MLXBackend` (`backends/mlx.py`) is not currently wired into the auto-detection logic in `backends/__init__.py`. `--base-url mlx` does not select it. Treat the MLX row above as not functional until this is fixed.
 
 ---
 
@@ -424,9 +428,9 @@ Load `llms.txt` for a full context snapshot. Load individual YAML files when wor
 
 ## Claude Code integration
 
-`.claude/agents/yt-video-analyst.md` and four skills in `.claude/skills/` wrap the CLI pipeline in a conversational workflow. The agent checks caches, presents options, and waits for your input before downloading any clip.
+`.claude/agents/yt-video-analyst.md` and five skills in `.claude/skills/` wrap the CLI pipeline in a conversational workflow. The agent checks caches, presents options, and waits for your input before downloading any clip.
 
-See `docs/claude-code.md` for the full reference.
+The skill table below and the example session are the full reference.
 
 ### Agent
 
@@ -439,7 +443,8 @@ See `docs/claude-code.md` for the full reference.
 | `/yt-get-transcript` | Downloads the VTT, checks cache first, retries with browser cookies on 429 |
 | `/yt-get-insights` | Runs insight analysis on an existing VTT, reads from cache when already processed |
 | `/yt-get-shorts` | Suggests the top 3 Short moments, presents them for your choice, downloads the chosen clip |
-| `/yt-run-pipeline` | Runs all three steps in sequence |
+| `/yt-run-pipeline` | Runs transcript, insights and Shorts selection in sequence for a single video |
+| `/yt-add-channel` | Processes an entire YouTube channel into `output/<slug>/`, then rebuilds the global catalog |
 
 ### How it works
 
