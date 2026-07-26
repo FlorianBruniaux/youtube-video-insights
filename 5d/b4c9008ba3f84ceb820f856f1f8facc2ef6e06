@@ -1,0 +1,91 @@
+runbook/run-channel.sh
+  s_808e0039dfcf16::t_bf9816a67a856c 1-90
+.claude/hooks/yt-channel-router.sh
+  s_808e0039dfcf16::t_6c4796aa96fb7e 1-30,34,36-41,43-53
+  s_808e0039dfcf16::t_ade69df633948e 31-33,35,42
+CLAUDE.md
+  s_808e0039dfcf16::t_01ac7794107aa6 100-110,112,114-117,120-121,123-125
+  s_808e0039dfcf16::t_44b2a6f0ffb2c8 122
+  s_808e0039dfcf16::t_5737cdf0e8475f 118-119
+  s_808e0039dfcf16::t_9b714b383345d4 111,113
+scripts/build_index.py
+  s_808e0039dfcf16::t_2a9a0d4367f2e7 139,141,148,151-152,157,161
+  s_808e0039dfcf16::t_397dc50280714a 24-27
+  s_808e0039dfcf16::t_0bb5beb4a98b95 100-121
+  s_808e0039dfcf16::t_4205c2eee1c91f 44
+  s_808e0039dfcf16::t_b337f61b81ec09 1-23,28-43,45-49,59-61,63-88,90-99,122-138,140,142-147,149-150,153-156,158-160,162-344
+  s_808e0039dfcf16::t_7131c049988b15 50-58,62
+  s_808e0039dfcf16::t_0401ad8e8e0be5 89
+INSTALL.md
+  s_829858aeb19b51::t_beb7f5ead58415 2-36,48,50,53-63,94,97,99-131,133-145,147-151
+  s_829858aeb19b51::t_139c067836d6b3 51
+  s_829858aeb19b51::t_9b305e5add3276 68
+  s_829858aeb19b51::t_412883fd38b235 86
+  s_829858aeb19b51::t_986703503a82c9 1,37-47,49,52,64-67,69-81,83-85,87-93,95-96,98,132,146
+  s_829858aeb19b51::t_4e04f5088aca38 82
+.claude/settings.json
+  s_808e0039dfcf16::t_d42ac9d647d52a 1-15
+.claude/skills/yt-get-transcript.md
+  s_829858aeb19b51::t_5e70b00b6e0300 6
+  s_829858aeb19b51::t_521fbea050c5e6 44
+  s_829858aeb19b51::t_43ec679ccf6cdd 18
+  s_829858aeb19b51::t_37745bb085174a 10
+  s_829858aeb19b51::t_5d5bc1623c116a 13,20
+  s_ac0334b288fed5::t_9b8afd8d9cb0f2 19
+.claude/agents/yt-video-analyst.md
+  s_829858aeb19b51::t_70ab59563d2c89 15
+.gitignore
+  s_808e0039dfcf16::t_765ba5080b828e 31
+  s_808e0039dfcf16::t_31b80f60ec9484 32-35
+.claude/skills/yt-add-channel.md
+  s_808e0039dfcf16::t_28eac67af2ad09 1-20,28-41,43-60
+  s_829858aeb19b51::t_fe6f7589ef1f1c 21-27
+  s_829858aeb19b51::t_9f722e8dd220c4 42
+README.md
+  s_829858aeb19b51::t_9b77fb8d7d002e 431,433,446-447
+  s_829858aeb19b51::t_12021a8586274d 218-219
+  s_829858aeb19b51::t_6dace4e2b39965 140-141
+  s_829858aeb19b51::t_2c35f785bd1289 135-136
+CHANGELOG.md
+  s_829858aeb19b51::t_06f389668b04ad 11-26
+runbook/README.md
+  s_808e0039dfcf16::t_597c4955c17ed4 1
+  s_808e0039dfcf16::t_88f2055c78f3c9 2-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.16",
+  "base_commit_sha": "5db4c9008ba3f84ceb820f856f1f8facc2ef6e06",
+  "prompts": {},
+  "humans": {
+    "h_07916ece6468dd": {
+      "author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  },
+  "sessions": {
+    "s_808e0039dfcf16": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "a4a5090d-525e-4a72-9ede-94e0ead457d0",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_829858aeb19b51": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e0146b9a-c3e4-44b9-ab47-89fa2501a1ad",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_ac0334b288fed5": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "b3298e97-02bb-45fc-ab93-6a257a4ea74d",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
