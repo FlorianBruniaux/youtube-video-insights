@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from conftest import FakeBackend
 from yt_insights.analyzer import VideoInsight
 from yt_insights.config import Config
 from yt_insights.reporter import generate_report, top_tools
@@ -11,6 +10,7 @@ from yt_insights.reporter import generate_report, top_tools
 
 def test_generate_report_writes_the_aggregate_markdown_json_and_full_report(
     tmp_path: Path,
+    fake_backend_factory,
 ) -> None:
     """Detects a regression in aggregate report content or its output file contract."""
     report_path = tmp_path / "AGGREGATE_REPORT.md"
@@ -36,7 +36,7 @@ def test_generate_report_writes_the_aggregate_markdown_json_and_full_report(
             quotes=[],
         ),
     ]
-    backend = FakeBackend([("A focused narrative.", "end_turn")])
+    backend = fake_backend_factory([("A focused narrative.", "end_turn")])
 
     generate_report(insights, backend, Config(max_tokens=321), report_path=report_path)
 

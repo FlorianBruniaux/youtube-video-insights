@@ -6,7 +6,6 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from conftest import FakeBackend
 from yt_insights.cli import cli
 
 
@@ -51,11 +50,12 @@ def test_list_renders_videos_from_the_discovery_adapter(monkeypatch) -> None:
 
 
 def test_run_skip_download_uses_cached_vtts_and_writes_reports(
-    tmp_path: Path, sample_fr_vtt: Path, monkeypatch
+    tmp_path: Path, sample_fr_vtt: Path, monkeypatch, fake_backend_factory
 ) -> None:
     """Detects a cached-transcript pipeline regression without a network download."""
     from yt_insights import cli as cli_module
     from yt_insights import config as config_module
+    from yt_insights import downloader
 
     output_dir = tmp_path / "output"
     transcripts_dir = output_dir / "transcripts"
@@ -63,7 +63,7 @@ def test_run_skip_download_uses_cached_vtts_and_writes_reports(
     transcripts_dir.mkdir(parents=True)
     vtt_path = transcripts_dir / "20260223 - Build reliable agents [nfupYzLjFGc].fr.vtt"
     vtt_path.write_text(sample_fr_vtt.read_text(encoding="utf-8"), encoding="utf-8")
-    analysis_backend = FakeBackend(
+    analysis_backend = fake_backend_factory(
         [
             (
                 json.dumps(
@@ -79,10 +79,14 @@ def test_run_skip_download_uses_cached_vtts_and_writes_reports(
             )
         ]
     )
-    report_backend = FakeBackend([("A focused narrative.", "end_turn")])
+    report_backend = fake_backend_factory([("A focused narrative.", "end_turn")])
     backends = iter([analysis_backend, report_backend])
     monkeypatch.setattr(config_module, "_CONFIG_PATH", tmp_path / "missing-config.toml")
     monkeypatch.setattr(cli_module, "resolve_backend", lambda resolved_config: next(backends))
+    def fail_if_downloaded(*args, **kwargs) -> None:
+        raise AssertionError("--skip-download unexpectedly called download_subtitles().")
+
+    monkeypatch.setattr(downloader, "download_subtitles", fail_if_downloaded)
 
     result = CliRunner().invoke(
         cli,
@@ -123,7 +127,7 @@ def test_run_skip_download_uses_cached_vtts_and_writes_reports(
 
 
 def test_report_renders_existing_insights_without_network(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch, fake_backend_factory
 ) -> None:
     """Detects a report-command regression when its LLM adapter is replaced."""
     from yt_insights import cli as cli_module
@@ -143,7 +147,7 @@ def test_report_renders_existing_insights_without_network(
         ),
         encoding="utf-8",
     )
-    backend = FakeBackend([("A focused narrative.", "end_turn")])
+    backend = fake_backend_factory([("A focused narrative.", "end_turn")])
     monkeypatch.setattr(config_module, "_CONFIG_PATH", tmp_path / "missing-config.toml")
     monkeypatch.setattr(cli_module, "resolve_backend", lambda resolved_config: backend)
 

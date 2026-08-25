@@ -5,8 +5,6 @@ import os
 from pathlib import Path
 
 import pytest
-
-from conftest import FakeBackend
 from yt_insights import analyzer
 from yt_insights.analyzer import analyze_video
 from yt_insights.config import Config
@@ -22,14 +20,14 @@ INSIGHT_DATA = {
 
 
 def test_analyze_video_uses_a_valid_cache_without_calling_the_llm(
-    transcript_path: Path, tmp_path: Path
+    transcript_path: Path, tmp_path: Path, fake_backend_factory
 ) -> None:
     """Detects a cache-hit regression that needlessly sends a transcript to the LLM."""
     insights_dir = tmp_path / "insights"
     insights_dir.mkdir()
     cache_path = insights_dir / f"{transcript_path.stem}.json"
     cache_path.write_text(json.dumps(INSIGHT_DATA), encoding="utf-8")
-    backend = FakeBackend([])
+    backend = fake_backend_factory()
 
     result = analyze_video(transcript_path, insights_dir, backend, Config())
 
@@ -40,11 +38,11 @@ def test_analyze_video_uses_a_valid_cache_without_calling_the_llm(
 
 
 def test_analyze_video_refuses_to_write_a_truncated_llm_response(
-    transcript_path: Path, tmp_path: Path
+    transcript_path: Path, tmp_path: Path, fake_backend_factory
 ) -> None:
     """Detects persistence of a response truncated by the model token limit."""
     insights_dir = tmp_path / "insights"
-    backend = FakeBackend([("{", "max_tokens")])
+    backend = fake_backend_factory([("{", "max_tokens")])
 
     with pytest.warns(UserWarning, match="LLM hit max_tokens"):
         result = analyze_video(transcript_path, insights_dir, backend, Config())
@@ -56,11 +54,11 @@ def test_analyze_video_refuses_to_write_a_truncated_llm_response(
 
 
 def test_analyze_video_replaces_complete_temporary_files_atomically(
-    transcript_path: Path, tmp_path: Path, monkeypatch
+    transcript_path: Path, tmp_path: Path, monkeypatch, fake_backend_factory
 ) -> None:
     """Detects a regression from atomic insight writes to directly written final files."""
     insights_dir = tmp_path / "insights"
-    backend = FakeBackend([(json.dumps(INSIGHT_DATA), "end_turn")])
+    backend = fake_backend_factory([(json.dumps(INSIGHT_DATA), "end_turn")])
     actual_replace = os.replace
     replacements: list[tuple[Path, Path]] = []
 

@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+import pytest
+
 from yt_insights import downloader
 from yt_insights.downloader import VideoInfo, download_subtitles, list_videos, vtt_to_video_info
 
@@ -48,10 +50,17 @@ def test_list_videos_parses_metadata_and_uses_argument_vector(monkeypatch) -> No
     ]
 
 
-def test_download_subtitles_returns_existing_vtt_and_preserves_argument_vector(
-    tmp_path: Path, monkeypatch
+@pytest.mark.parametrize(
+    "log_template",
+    [
+        "[info] Writing video subtitles to: {path}",
+        "[info] nfupYzLjFGc: Subtitle file already exists: {path}",
+    ],
+)
+def test_download_subtitles_returns_logged_vtt_and_preserves_argument_vector(
+    tmp_path: Path, monkeypatch, log_template: str
 ) -> None:
-    """Detects a regression that drops existing subtitle paths or invokes yt-dlp through a shell."""
+    """Detects a regression that drops written or already-existing subtitles."""
     output_dir = tmp_path / "transcripts"
     output_dir.mkdir()
     vtt_path = output_dir / "20260223 - Build reliable agents [nfupYzLjFGc].fr.vtt"
@@ -63,7 +72,7 @@ def test_download_subtitles_returns_existing_vtt_and_preserves_argument_vector(
         return subprocess.CompletedProcess(
             args=args,
             returncode=0,
-            stdout=f"[info] Writing video subtitles to: {vtt_path}\n",
+            stdout=log_template.format(path=vtt_path) + "\n",
             stderr="",
         )
 

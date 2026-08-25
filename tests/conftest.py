@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Iterator
+import os
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import pytest
@@ -40,6 +41,22 @@ class FakeBackend:
 
     def close(self) -> None:
         self.closed = True
+
+
+@pytest.fixture(autouse=True)
+def clear_yt_insights_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep configuration tests independent from the caller's shell."""
+    for name in tuple(os.environ):
+        if name.startswith("YT_INSIGHTS_"):
+            monkeypatch.delenv(name)
+
+
+@pytest.fixture
+def fake_backend_factory() -> Callable[[list[tuple[str, str]] | None], FakeBackend]:
+    def create(responses: list[tuple[str, str]] | None = None) -> FakeBackend:
+        return FakeBackend(responses or [])
+
+    return create
 
 
 @pytest.fixture
