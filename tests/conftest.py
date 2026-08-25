@@ -36,7 +36,7 @@ class FakeBackend:
         max_tokens: int,
         timeout: int,
     ) -> Iterator[str]:
-        return iter(())
+        raise AssertionError("The fake backend received an unexpected stream() call.")
 
     def close(self) -> None:
         self.closed = True
