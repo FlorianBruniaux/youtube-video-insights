@@ -1,0 +1,19 @@
+tests/conftest.py
+  s_4ef5554bf194a6::t_2c8440c278e7ec 39
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "f37895c0de09fa26403077ee39322aef5bb7fee0",
+  "prompts": {},
+  "sessions": {
+    "s_4ef5554bf194a6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a03846-1217-74b1-8253-9a8b77645d36",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
