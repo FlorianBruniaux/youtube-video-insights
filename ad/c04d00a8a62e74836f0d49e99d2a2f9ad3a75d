@@ -1,0 +1,39 @@
+tests/conftest.py
+  s_4ef5554bf194a6::t_68b99f16dc57c2 1-59
+tests/test_config.py
+  s_4ef5554bf194a6::t_ff6c0c127669b9 6,49-52
+  s_4ef5554bf194a6::t_68b99f16dc57c2 1-5,7-48
+tests/fixtures/sample.en.vtt
+  s_4ef5554bf194a6::t_68b99f16dc57c2 1-15
+tests/fixtures/sample.fr.vtt
+  s_4ef5554bf194a6::t_68b99f16dc57c2 1-15
+tests/test_downloader.py
+  s_4ef5554bf194a6::t_68b99f16dc57c2 1-121
+tests/test_analyzer.py
+  s_4ef5554bf194a6::t_68b99f16dc57c2 1-100
+tests/test_reporter.py
+  s_4ef5554bf194a6::t_68b99f16dc57c2 1-62,65,67-70,72,74-76,79,81-84,86-95
+  s_4ef5554bf194a6::t_5ee96ce514f0cc 63-64,66,71,73,77-78,80,85
+tests/test_cli_smoke.py
+  s_4ef5554bf194a6::t_6c1e5181d802c3 4,27-37,58,84,90,130,147,150-157
+  s_4ef5554bf194a6::t_5786c1683486ba 1-2,7-23,41,51,56,86,92,128
+  s_4ef5554bf194a6::t_68b99f16dc57c2 3,5-6,24-26,38-40,42-50,52-55,57,59-83,85,87-89,91,93-127,129,131-146,148-149,158-169
+pyproject.toml
+  s_4ef5554bf194a6::t_5786c1683486ba 30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "adc04d00a8a62e74836f0d49e99d2a2f9ad3a75d",
+  "prompts": {},
+  "sessions": {
+    "s_4ef5554bf194a6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a03846-1217-74b1-8253-9a8b77645d36",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
