@@ -1,0 +1,37 @@
+tests/test_cli_smoke.py
+  s_4ef5554bf194a6::t_7987b10a6e802c 53,66,82,86-89,130,150
+  s_4ef5554bf194a6::t_a206414d4afbd6 58
+tests/test_reporter.py
+  s_4ef5554bf194a6::t_7987b10a6e802c 13,39
+tests/test_analyzer.py
+  s_4ef5554bf194a6::t_7987b10a6e802c 23,30,41,45,57,61
+tests/conftest.py
+  s_4ef5554bf194a6::t_7987b10a6e802c 3-4,46-59
+  s_e212f7e9f7a0c8::t_0a7250a94e51ef 60-61
+tests/test_downloader.py
+  s_4ef5554bf194a6::t_7987b10a6e802c 6-7,53-61,63,75
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.24",
+  "base_commit_sha": "4d3679013da6fdeaa740d502c5e047c27e8a7f15",
+  "prompts": {},
+  "sessions": {
+    "s_4ef5554bf194a6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a03846-1217-74b1-8253-9a8b77645d36",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_e212f7e9f7a0c8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "c1b54276-ca30-4705-966e-5c55586fab00",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
