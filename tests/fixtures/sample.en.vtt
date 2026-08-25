@@ -1,0 +1,15 @@
+WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:04.000
+Reliable agents start with decisions that can be observed and explained.
+
+00:00:04.000 --> 00:00:09.000
+Keep the useful data, measure failures, and improve the system deliberately.
+
+00:00:09.000 --> 00:00:14.000
+The goal is not autonomous magic but a tool a team can safely operate.
+
+00:00:14.000 --> 00:00:19.000
+Every step should be reviewable, testable, and clear to the people using it.
