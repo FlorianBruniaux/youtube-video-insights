@@ -1,0 +1,118 @@
+# yt-insights
+
+Local-first Python CLI for turning YouTube channels, playlists, videos, and
+existing transcript corpora into searchable structured intelligence.
+
+Repository: https://github.com/FlorianBruniaux/youtube-video-insights
+Package: yt-insights
+Python: 3.11+
+License: MIT
+
+## Primary workflows
+
+1. Analyze a source with an LLM:
+   `yt-insights run SOURCE`
+2. Import an existing corpus without an LLM:
+   `yt-insights catalog import-corpus CORPUS_ROOT`
+3. Discover video metadata without downloading media:
+   `yt-insights catalog discover SOURCE`
+4. Search the local catalog:
+   `yt-insights catalog search QUERY [--source SLUG] [--limit N]`
+5. Audit local state:
+   `yt-insights catalog stats`
+   `yt-insights catalog errors [--run-id N]`
+
+The default catalog is `output/catalog.sqlite3`. Generated output and the
+database are gitignored. Use `--db PATH` to override the database path.
+
+## Module map
+
+- `src/yt_insights/cli.py`: Click command surface.
+- `src/yt_insights/downloader.py`: yt-dlp subprocess adapter and structured
+  discovery/download results.
+- `src/yt_insights/cleaner.py`: VTT text cleaning. Preserve its existing
+  behavior when extending ingestion.
+- `src/yt_insights/analyzer.py`: transcript-to-insight LLM pipeline.
+- `src/yt_insights/reporter.py`: aggregate reports.
+- `src/yt_insights/shorts.py`: Short suggestions and clip extraction.
+- `src/yt_insights/catalog.py`: SQLite schema, corpus import, discovery
+  ingestion, FTS5 search, run history, and durable collection errors.
+- `src/yt_insights/config.py`: defaults, TOML, environment variables, and CLI
+  override merge.
+- `scripts/build_index.py`: Markdown/YAML index generation for `output/`.
+- `runbook/run-channel.sh`: repeatable full-channel ingestion.
+
+## Catalog data model
+
+- `videos`: canonical row per YouTube video ID.
+- `video_sources`: many-to-many source membership.
+- `artifacts`: transcript and insight files, language, path, searchable text,
+  and SHA-256 identity.
+- `ingestion_runs`: one auditable row per import or discovery command.
+- `collection_errors`: exact source, stage, item, and diagnostic.
+- `video_search`: SQLite FTS5 index over title, sources, insight text, and
+  cleaned transcript text.
+
+Corpus import is idempotent. Re-importing unchanged files creates an audit run
+but does not duplicate videos or artifacts. Expected file-level failures are
+recorded and produce `status=partial`. Database or programming failures roll
+back domain writes and produce `status=failed`.
+
+## Insight artifact contract
+
+Insight JSON is the source of truth. The expected keys are:
+
+- `subject`
+- `key_points`
+- `tools`
+- `advice`
+- `quotes`
+
+Markdown is rendered from JSON. Writes must remain atomic. Truncated LLM
+responses with `stop_reason == "max_tokens"` must never enter the cache.
+
+## Constraints
+
+- Run yt-dlp as a subprocess, never import it as a Python library.
+- Never put API keys, cookies, transcripts, generated reports, or SQLite files
+  in Git.
+- Every channel belongs under `output/<slug>/`; always pass an explicit
+  channel output directory.
+- Preserve source artifacts during catalog import.
+- Prefer deterministic collection, normalization, deduplication, storage,
+  scoring, and export. Use an LLM only for semantic classification, speaker
+  extraction, summarization, newsletter angles, and optional reranking.
+- Keep the MCP layer thin: it must call the same Python catalog service as the
+  CLI instead of duplicating storage or collection logic.
+
+## Current state
+
+Implemented:
+
+- yt-dlp collection and transcript download;
+- transcript cleaning and structured LLM insights;
+- aggregate reports and Short suggestions;
+- SQLite catalog and corpus import;
+- video/artifact deduplication;
+- FTS5 search and source filtering;
+- durable run and error history;
+- CLI regression tests.
+
+Planned:
+
+- YouTube Data API and channel RSS discovery adapters;
+- metadata refresh policy and quota tracking;
+- deterministic Tech/Product/AI relevance scoring;
+- newsletter selection export;
+- MCP server exposing catalog discovery, search, inspection, and export;
+- optional semantic embeddings only if FTS5 recall proves insufficient.
+
+## Documentation
+
+- `README.md`: installation, commands, workflows, and operational behavior.
+- `CHANGELOG.md`: unreleased and released changes.
+- `CLAUDE.md`: repository constraints and agent workflow.
+- `docs/superpowers/specs/2026-08-26-youtube-newsletter-watch-design.md`:
+  MVP architecture and source trade-offs.
+- `docs/superpowers/plans/2026-08-26-youtube-catalog-vertical-slice.md`:
+  phased implementation and acceptance plan.

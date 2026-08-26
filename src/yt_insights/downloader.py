@@ -39,8 +39,17 @@ def _source_args(source: str) -> list[str]:
     return [source]
 
 
-def list_videos(source: str, *, cookies_from_browser: str | None = None) -> list[VideoInfo]:
-    """Fetch video metadata from a channel/playlist without downloading anything.
+@dataclass
+class VideoListResult:
+    videos: list[VideoInfo] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+    returncode: int = 0
+
+
+def fetch_video_list(
+    source: str, *, cookies_from_browser: str | None = None
+) -> VideoListResult:
+    """Fetch videos and retain yt-dlp failures for durable collection logs.
 
     Uses --flat-playlist so yt-dlp only queries the playlist API, no media fetch.
     """
@@ -63,7 +72,29 @@ def list_videos(source: str, *, cookies_from_browser: str | None = None) -> list
         date, title, vid_id = line.split("|", 2)
         if vid_id:
             videos.append(VideoInfo(video_id=vid_id, title=title, upload_date=date or ""))
-    return videos
+
+    errors = [
+        line.strip()
+        for line in result.stderr.splitlines()
+        if "ERROR" in line.upper()
+    ]
+    if result.returncode != 0 and not errors:
+        detail = result.stderr.strip() or "no diagnostic output"
+        errors.append(f"yt-dlp exited with status {result.returncode}: {detail}")
+
+    return VideoListResult(
+        videos=videos,
+        errors=errors,
+        returncode=result.returncode,
+    )
+
+
+def list_videos(source: str, *, cookies_from_browser: str | None = None) -> list[VideoInfo]:
+    """Compatibility wrapper returning only the discovered video list."""
+    return fetch_video_list(
+        source,
+        cookies_from_browser=cookies_from_browser,
+    ).videos
 
 
 def vtt_to_video_info(vtt_path: Path) -> VideoInfo:
