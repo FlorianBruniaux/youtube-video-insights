@@ -4,20 +4,22 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Build a local, searchable YouTube intelligence corpus from channels, playlists,
-or existing transcripts. Get structured JSON and Markdown insights per video,
-aggregate reports, scored Short moments, and SQLite full-text search.
+Turn YouTube channels into a local, searchable research corpus: transcripts,
+structured insights, SQLite/FTS5 search, reports, and Shorts.
 
 ---
 
-## TLDR
+## Start here
 
-- One command: `yt-insights run https://www.youtube.com/@ChannelName` → per-video insights + aggregate report
-- 5-key insight schema per video: subject, key points, tools mentioned, actionable advice, notable quotes
-- Local SQLite catalog with idempotent corpus import, deduplication, FTS5 search, and durable collection errors
-- LLM backend auto-detected at runtime: cc-bridge (port 4141) → Ollama → Anthropic API → MLX
-- JSON is the source of truth, Markdown is rendered from it. Atomic writes, no corrupt files on Ctrl-C
-- Idempotent: already-analyzed videos are cached, `--force` re-processes everything
+| Goal | Command | Result |
+|---|---|---|
+| Analyze a channel | `yt-insights run https://www.youtube.com/@ChannelName` | Transcripts, structured insights, and an aggregate report |
+| Index an existing corpus | `yt-insights catalog import-corpus ./output` | One deduplicated SQLite catalog with durable import errors |
+| Search locally | `yt-insights catalog search "AI product discovery"` | Ranked matches across titles, insights, and cleaned transcripts |
+
+Analysis uses a local or cloud LLM. Catalog import and full-text search do not.
+Both pipelines are safe to rerun: cached analyses are reused, and unchanged
+catalog artifacts are not duplicated.
 
 ---
 
@@ -27,7 +29,9 @@ Point it at any YouTube channel and get two things back. First, a structured ins
 
 The second pipeline is about Shorts. The same transcripts go through a scorer that finds the top 3 moments per video, 30-90 seconds each, with verbatim text and precise timestamps. Pick the one you want, run one more command, and yt-dlp downloads just that segment rather than the full video.
 
-Practically speaking: you can audit a competitor channel in 10 minutes and know their full editorial strategy. Run it across several channels on the same topic and you'll find the angles nobody is covering yet. The exported JSON and VTT files are also ready for RAG pipelines, fine-tuning datasets, or anything else that needs clean text from video.
+Use it for content research, competitive monitoring, editorial analysis, or
+building a searchable source library across several channels. The exported JSON
+and VTT files can also feed downstream RAG or dataset workflows.
 
 ---
 
@@ -191,7 +195,7 @@ one local, searchable database. They do not require an LLM.
 ```bash
 # Import an existing multi-channel corpus without modifying its files
 yt-insights catalog import-corpus \
-  /Users/florianbruniaux/Sites/perso/yt-insights/output
+  ./output
 
 # Discover the current videos exposed by a channel/playlist through yt-dlp
 yt-insights catalog discover \
