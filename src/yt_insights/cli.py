@@ -526,6 +526,179 @@ def interactive_cmd(
     run_wizard(action=action, source=source, duration=duration, platform=platform, output_format=output_format)
 
 
+_DEFAULT_CATALOG_DB = "output/catalog.sqlite3"
+
+
+def _echo_catalog_run(summary: object) -> None:
+    click.echo(
+        f"run={summary.run_id} status={summary.status} "
+        f"seen={summary.items_seen} written={summary.items_written} "
+        f"errors={summary.error_count}"
+    )
+
+
+@cli.group("catalog")
+def catalog_group() -> None:
+    """Build and query the local SQLite video catalog."""
+
+
+@catalog_group.command("import-corpus")
+@click.argument(
+    "corpus_root",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--db",
+    "db_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=_DEFAULT_CATALOG_DB,
+    show_default=True,
+)
+def catalog_import_corpus(corpus_root: Path, db_path: Path) -> None:
+    """Import an existing output corpus without modifying its files."""
+    from .catalog import Catalog
+
+    try:
+        with Catalog(db_path) as catalog:
+            summary = catalog.import_corpus(corpus_root)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _echo_catalog_run(summary)
+
+
+@catalog_group.command("discover")
+@click.argument("source")
+@click.option(
+    "--cookies-from-browser",
+    default=None,
+    metavar="BROWSER",
+    help="Read cookies from BROWSER when the source requires them.",
+)
+@click.option(
+    "--db",
+    "db_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=_DEFAULT_CATALOG_DB,
+    show_default=True,
+)
+def catalog_discover(
+    source: str,
+    cookies_from_browser: str | None,
+    db_path: Path,
+) -> None:
+    """Discover a source through yt-dlp and persist its result and errors."""
+    from .catalog import Catalog
+    from .downloader import fetch_video_list
+
+    result = fetch_video_list(
+        source,
+        cookies_from_browser=cookies_from_browser,
+    )
+    try:
+        with Catalog(db_path) as catalog:
+            summary = catalog.ingest_discovery(source, result)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    _echo_catalog_run(summary)
+
+
+@catalog_group.command("search")
+@click.argument("query")
+@click.option("--source", default=None, help="Restrict results to one source slug.")
+@click.option(
+    "--limit",
+    type=click.IntRange(1, 100),
+    default=20,
+    show_default=True,
+)
+@click.option(
+    "--db",
+    "db_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=_DEFAULT_CATALOG_DB,
+    show_default=True,
+)
+def catalog_search(
+    query: str,
+    source: str | None,
+    limit: int,
+    db_path: Path,
+) -> None:
+    """Search titles, sources, insight text, and cleaned transcripts."""
+    from .catalog import Catalog
+
+    if not query.strip():
+        raise click.UsageError("Search query cannot be empty")
+    try:
+        with Catalog(db_path) as catalog:
+            results = catalog.search(query, source=source, limit=limit)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if not results:
+        click.echo("No videos found.")
+        return
+    for result in results:
+        date = result.published_at or "unknown-date"
+        sources = ",".join(result.sources) or "unknown-source"
+        click.echo(f"{date}  {sources}  {result.title}  [{result.video_id}]")
+        click.echo(f"  {result.watch_url}")
+        if result.highlight:
+            click.echo(f"  {result.highlight}")
+
+
+@catalog_group.command("stats")
+@click.option(
+    "--db",
+    "db_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=_DEFAULT_CATALOG_DB,
+    show_default=True,
+)
+def catalog_stats(db_path: Path) -> None:
+    """Print stable domain counts for the local catalog."""
+    from .catalog import Catalog
+
+    try:
+        with Catalog(db_path) as catalog:
+            stats = catalog.stats()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    click.echo(
+        f"videos={stats.videos} sources={stats.sources} "
+        f"artifacts={stats.artifacts} runs={stats.runs} errors={stats.errors}"
+    )
+
+
+@catalog_group.command("errors")
+@click.option("--run-id", type=click.IntRange(1), default=None)
+@click.option(
+    "--db",
+    "db_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=_DEFAULT_CATALOG_DB,
+    show_default=True,
+)
+def catalog_errors(run_id: int | None, db_path: Path) -> None:
+    """List durable collection/import errors, optionally for one run."""
+    from .catalog import Catalog
+
+    try:
+        with Catalog(db_path) as catalog:
+            errors = catalog.list_errors(run_id=run_id)
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise click.ClickException(str(exc)) from exc
+    if not errors:
+        click.echo("No collection errors.")
+        return
+    for error in errors:
+        item = f" item={error.item_ref}" if error.item_ref else ""
+        click.echo(
+            f"run={error.run_id} stage={error.stage} source={error.source}"
+            f"{item} error={error.message}"
+        )
+
+
 @cli.group("config")
 def config_group() -> None:
     """Manage yt-insights configuration."""
