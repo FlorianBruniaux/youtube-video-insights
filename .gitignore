@@ -8,7 +8,12 @@ tessl-2025-2026.txt
 /yt_transcripts/
 /yt_shorts/
 /yt_shorts_clips/
-/docs/
+/docs/*
+!/docs/superpowers/
+!/docs/superpowers/specs/
+!/docs/superpowers/specs/*.md
+!/docs/superpowers/plans/
+!/docs/superpowers/plans/*.md
 
 # Partial write artifacts
 *.tmp.json
