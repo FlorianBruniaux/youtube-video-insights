@@ -7,6 +7,8 @@
 Turn YouTube channels into a local, searchable research corpus: transcripts,
 structured insights, SQLite/FTS5 search, reports, and Shorts.
 
+![yt-insights workflow: YouTube channels, playlists, and videos become transcripts, structured insights, a deduplicated SQLite/FTS5 index, search results, reports, and Short suggestions.](docs/assets/yt-insights-workflow.jpg)
+
 ---
 
 ## Start here
