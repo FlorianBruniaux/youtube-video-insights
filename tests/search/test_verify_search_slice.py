@@ -75,3 +75,34 @@ def test_validate_hit_rejects_url_video_id_not_matching_source_filename(tmp_path
     )
 
     assert "source_video_id_mismatch" in errors
+
+
+def test_invoke_cli_uses_the_explicit_worktree_source_without_subprocess(
+    tmp_path: Path, monkeypatch
+) -> None:
+    verifier = _load_verifier()
+    worktree = tmp_path / "worktree"
+    cli_path = worktree / "src" / "yt_insights" / "cli.py"
+    cli_path.parent.mkdir(parents=True)
+    (cli_path.parent / "__init__.py").write_text("", encoding="utf-8")
+    cli_path.write_text(
+        "import click\n"
+        "@click.command()\n"
+        "@click.argument('value')\n"
+        "def cli(value):\n"
+        "    click.echo(f'fake:{value}')\n",
+        encoding="utf-8",
+    )
+
+    def should_not_spawn(*args, **kwargs):
+        raise AssertionError("CLI verifier must use the explicit worktree in-process")
+
+    monkeypatch.setattr(verifier, "run_command", should_not_spawn)
+    for name in tuple(sys.modules):
+        if name == "yt_insights" or name.startswith("yt_insights."):
+            monkeypatch.delitem(sys.modules, name, raising=False)
+
+    result = verifier.invoke_cli(worktree, ["value"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "fake:value\n"

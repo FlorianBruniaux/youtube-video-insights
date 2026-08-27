@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import asdict, dataclass
 import hashlib
+import importlib
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -70,6 +71,7 @@ CRITICAL_GATES = (
     "tests",
     "diff_checks",
 )
+_CLI_CACHE: dict[Path, Any] = {}
 
 
 @dataclass(frozen=True)
@@ -246,13 +248,29 @@ def find_primary_worktree(worktree: Path) -> tuple[Path | None, CommandResult]:
 
 
 def invoke_cli(worktree: Path, arguments: list[str]) -> CommandResult:
-    environment = os.environ.copy()
-    source_path = str(worktree / "src")
-    environment["PYTHONPATH"] = source_path + os.pathsep + environment.get("PYTHONPATH", "")
-    return run_command(
-        [sys.executable, "-c", "from yt_insights.cli import cli; cli()", *arguments],
-        cwd=worktree,
-        environment=environment,
+    """Invoke the real Click group from the supplied worktree without a shell."""
+    resolved_worktree = worktree.resolve()
+    cli = _CLI_CACHE.get(resolved_worktree)
+    if cli is None:
+        source_path = str(resolved_worktree / "src")
+        sys.path.insert(0, source_path)
+        for module_name in tuple(sys.modules):
+            if module_name == "yt_insights" or module_name.startswith("yt_insights."):
+                del sys.modules[module_name]
+        cli = importlib.import_module("yt_insights.cli").cli
+        _CLI_CACHE[resolved_worktree] = cli
+
+    from click.testing import CliRunner
+
+    started = time.perf_counter()
+    result = CliRunner().invoke(cli, arguments)
+    return CommandResult(
+        command=("click-cli", *arguments),
+        cwd=str(resolved_worktree),
+        exit_code=result.exit_code,
+        stdout=result.stdout,
+        stderr=result.stderr,
+        duration_ms=round((time.perf_counter() - started) * 1000, 3),
     )
 
 
