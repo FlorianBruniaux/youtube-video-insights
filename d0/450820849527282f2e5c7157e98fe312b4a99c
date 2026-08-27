@@ -1,0 +1,31 @@
+tests/search/test_corpus.py
+  s_0a442347250965::t_a0289403896d82 31,42
+  s_0a442347250965::t_ddb3d7c193b610 94,99
+  s_0a442347250965::t_ebf84aceb3c9e6 74-93,95-98,100-102
+  s_0a442347250965::t_ff0c818c3d253d 1-30,32-41,43-73,103-156
+tests/search/test_chunker.py
+  s_0a442347250965::t_a0289403896d82 50-51,53
+  s_0a442347250965::t_ff0c818c3d253d 1-49,52,54-84
+src/yt_insights/search/corpus.py
+  s_0a442347250965::t_2fa951aae50497 91
+  s_0a442347250965::t_a0289403896d82 1-53,55-63,65-68,70-90,92-118
+  s_0a442347250965::t_6da2aacda32626 54,64,69
+src/yt_insights/search/chunker.py
+  s_0a442347250965::t_a0289403896d82 1-95
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "d0450820849527282f2e5c7157e98fe312b4a99c",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
