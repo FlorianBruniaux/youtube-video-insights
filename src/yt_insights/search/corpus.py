@@ -71,17 +71,30 @@ def scan_corpus(corpus_root: Path, limit: int | None = None) -> CorpusManifest:
             continue
 
         try:
-            content = candidate.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            invalid_sources.append(_invalid(source_relpath, "invalid_utf8"))
-            continue
+            source_bytes = candidate.read_bytes()
         except OSError:
             invalid_sources.append(_invalid(source_relpath, "unreadable_source"))
             continue
+        try:
+            source_bytes.decode("utf-8")
+        except UnicodeDecodeError:
+            invalid_sources.append(_invalid(source_relpath, "invalid_utf8"))
+            continue
 
+        parse_error = False
         try:
             segments = parse_vtt_timestamped(candidate)
         except (OSError, UnicodeDecodeError, ValueError):
+            parse_error = True
+            segments = []
+        try:
+            source_changed = candidate.read_bytes() != source_bytes
+        except OSError:
+            source_changed = True
+        if source_changed:
+            invalid_sources.append(_invalid(source_relpath, "source_changed_during_parse"))
+            continue
+        if parse_error:
             invalid_sources.append(_invalid(source_relpath, "parse_error"))
             continue
         if not segments:
@@ -93,7 +106,7 @@ def scan_corpus(corpus_root: Path, limit: int | None = None) -> CorpusManifest:
         document = DocumentRef(
             document_id=compute_document_id(channel_slug, match.group("video_id"), language),
             source_relpath=source_relpath,
-            source_sha256=sha256(content.encode("utf-8")).hexdigest(),
+            source_sha256=sha256(source_bytes).hexdigest(),
             channel_id=channel_slug,
             channel_title=channel_slug,
             video_id=match.group("video_id"),
