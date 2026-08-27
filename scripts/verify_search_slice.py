@@ -71,6 +71,7 @@ CRITICAL_GATES = (
     "primary_status",
     "worktree_status",
     "head_identity",
+    "phase_1a_slice",
     "tests",
     "diff_checks",
 )
@@ -165,13 +166,21 @@ def source_snapshot(corpus_root: Path) -> list[dict[str, str]]:
         corpus_root.glob("**/transcripts/*.vtt"),
         key=lambda candidate: candidate.relative_to(corpus_root).as_posix(),
     )[:50]
-    return [
-        {
-            "source": candidate.relative_to(corpus_root).as_posix(),
-            "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
-        }
-        for candidate in candidates
-    ]
+    resolved_root = corpus_root.resolve()
+    snapshot: list[dict[str, str]] = []
+    for candidate in candidates:
+        source = candidate.relative_to(corpus_root).as_posix()
+        try:
+            candidate.resolve().relative_to(resolved_root)
+        except (OSError, ValueError) as error:
+            raise ValueError(f"selected source resolves outside corpus: {source}") from error
+        snapshot.append(
+            {
+                "source": source,
+                "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
+            }
+        )
+    return snapshot
 
 
 def snapshot_digest(snapshot: list[dict[str, str]]) -> str:
@@ -197,6 +206,36 @@ def parse_report(stdout: str) -> dict[str, int] | None:
             except ValueError:
                 return None
     return report if set(report) == set(labels.values()) else None
+
+
+def phase_1a_slice_passes(
+    report_one: dict[str, int] | None,
+    report_two: dict[str, int] | None,
+    frozen_one: list[dict[str, Any]],
+    frozen_two: list[dict[str, Any]],
+) -> bool:
+    """Require the approved real 50-source slice, not merely equal empty builds.
+
+    Each of the five frozen witnesses from each build must return at least one
+    hit, so an empty index cannot satisfy the determinism witness vacuously.
+    """
+    expected = {
+        "sources_selected": 50,
+        "sources_invalid": 0,
+        "documents_indexed": 50,
+    }
+    if report_one is None or report_two is None:
+        return False
+    if any(any(report.get(key) != value for key, value in expected.items()) for report in (report_one, report_two)):
+        return False
+    if report_one.get("passages_indexed", 0) <= 0 or report_two.get("passages_indexed", 0) <= 0:
+        return False
+    frozen_runs = (frozen_one, frozen_two)
+    return all(
+        len(run) == len(FROZEN_QUERIES)
+        and all(isinstance(item.get("hit_count"), int) and item["hit_count"] > 0 for item in run)
+        for run in frozen_runs
+    )
 
 
 def timestamp_seconds(value: object) -> int | None:
@@ -479,6 +518,7 @@ def verify(worktree: Path, corpus_root: Path, artifact_dir: Path, expected_head:
                 and worktree_final.stderr == ""
             ),
             "head_identity": head_matches,
+            "phase_1a_slice": phase_1a_slice_passes(report_one, report_two, frozen_one, frozen_two),
             "tests": tests.exit_code == 0,
             "diff_checks": (
                 worktree_diff.exit_code == 0

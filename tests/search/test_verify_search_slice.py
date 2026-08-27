@@ -81,6 +81,37 @@ def test_head_identity_requires_expected_prefix_to_resolve_to_observed_head() ->
     assert verifier.head_identity_matches("bbbb", matching, mismatching) == (False, observed, "b" * 40)
 
 
+def test_source_snapshot_refuses_to_hash_selected_symlink_escaping_corpus(tmp_path: Path) -> None:
+    verifier = _load_verifier()
+    corpus = tmp_path / "output"
+    outside = tmp_path / "outside.vtt"
+    outside.write_text("WEBVTT\n", encoding="utf-8")
+    escaped = corpus / "channel" / "transcripts" / "Evil [dQw4w9WgXcQ].en.vtt"
+    escaped.parent.mkdir(parents=True)
+    escaped.symlink_to(outside)
+
+    with pytest.raises(ValueError, match="resolves outside corpus"):
+        verifier.source_snapshot(corpus)
+
+
+def test_phase_1a_slice_gate_requires_valid_counts_and_nonvacuous_frozen_results() -> None:
+    verifier = _load_verifier()
+    report = {
+        "sources_selected": 50,
+        "sources_invalid": 0,
+        "documents_indexed": 50,
+        "passages_indexed": 1,
+    }
+    frozen = [{"hit_count": 1} for _ in verifier.FROZEN_QUERIES]
+
+    assert verifier.phase_1a_slice_passes(report, report, frozen, frozen)
+    assert not verifier.phase_1a_slice_passes({**report, "sources_selected": 49}, report, frozen, frozen)
+    assert not verifier.phase_1a_slice_passes({**report, "sources_invalid": 1}, report, frozen, frozen)
+    assert not verifier.phase_1a_slice_passes({**report, "documents_indexed": 49}, report, frozen, frozen)
+    assert not verifier.phase_1a_slice_passes({**report, "passages_indexed": 0}, report, frozen, frozen)
+    assert not verifier.phase_1a_slice_passes(report, report, [{"hit_count": 0}] * len(frozen), frozen)
+
+
 def test_validate_hit_rejects_url_video_id_not_matching_source_filename(tmp_path: Path) -> None:
     verifier = _load_verifier()
     corpus = tmp_path / "output"
