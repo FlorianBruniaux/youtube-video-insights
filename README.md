@@ -182,6 +182,31 @@ Done.
 
 ---
 
+## Local transcript search (phase 1A)
+
+The local search slice indexes at most **50 VTT files**. That ceiling is deliberate for phase 1A; it is not a full-corpus index.
+
+```bash
+# Inspect the first deterministic 50-file slice without creating a database
+yt-insights index --dry-run
+
+# Build the derived local FTS index (default: output/.search/search-v1.sqlite3)
+yt-insights index
+
+# Validate the existing index without scanning transcripts
+yt-insights index --status
+
+# Search passages, optionally narrowed to one channel or language
+yt-insights search "reliable agents" --channel my-channel --lang en
+
+# Same ranked results as deterministic JSON
+yt-insights search "reliable agents" --json
+```
+
+Use `--corpus-root`, `--database`, and `--limit` to point at a local corpus or a derived index. `index --limit` accepts only 1 through 50; `search --limit` accepts 1 through 20. The VTT corpus remains read-only and the SQLite database can be rebuilt at any time.
+
+---
+
 ## Supported sources
 
 | Source type | Example |

@@ -588,3 +588,10 @@ def config_show(model: str | None, base_url: str | None) -> None:
     for key, value, env_key, flag_val in rows:
         src = _src(env_key, flag_val, None)
         click.echo(f"  {key:<{width}}  {str(value):<40}  # {src}")
+
+
+from .cli_search import index_command, search_command
+
+
+cli.add_command(index_command)
+cli.add_command(search_command)
