@@ -29,6 +29,8 @@ SOURCE_FILENAME_RE = re.compile(
 )
 VIDEO_ID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 TIMESTAMP_RE = re.compile(r"^(?P<hours>\d{2,}):(?P<minutes>[0-5]\d):(?P<seconds>[0-5]\d)$")
+COMMIT_SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+EXPECTED_HEAD_RE = re.compile(r"^[0-9a-fA-F]{4,40}$")
 FROZEN_QUERIES = (
     "artificial intelligence",
     "developer productivity",
@@ -68,6 +70,7 @@ CRITICAL_GATES = (
     "hit_validation",
     "primary_status",
     "worktree_status",
+    "head_identity",
     "tests",
     "diff_checks",
 )
@@ -130,7 +133,31 @@ def prepare_artifact_dir(artifact_dir: Path, corpus_root: Path) -> Path:
 
 def all_gates_pass(gates: dict[str, bool]) -> bool:
     """Require every named critical predicate to be present and true."""
-    return bool(gates) and all(gates.values())
+    return set(gates) == set(CRITICAL_GATES) and all(gates[name] for name in CRITICAL_GATES)
+
+
+def normalized_commit_sha(result: CommandResult) -> str | None:
+    value = result.stdout.strip().lower()
+    if result.exit_code != 0 or COMMIT_SHA_RE.fullmatch(value) is None:
+        return None
+    return value
+
+
+def head_identity_matches(
+    expected_head: str,
+    head_result: CommandResult,
+    expected_head_result: CommandResult,
+) -> tuple[bool, str | None, str | None]:
+    """Require a valid requested prefix to resolve uniquely to the observed HEAD."""
+    observed_head = normalized_commit_sha(head_result)
+    normalized_expected_head = normalized_commit_sha(expected_head_result)
+    matches = (
+        EXPECTED_HEAD_RE.fullmatch(expected_head) is not None
+        and observed_head is not None
+        and normalized_expected_head is not None
+        and observed_head == normalized_expected_head
+    )
+    return matches, observed_head, normalized_expected_head
 
 
 def source_snapshot(corpus_root: Path) -> list[dict[str, str]]:
@@ -348,7 +375,7 @@ def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
 
-def verify(worktree: Path, corpus_root: Path, artifact_dir: Path) -> int:
+def verify(worktree: Path, corpus_root: Path, artifact_dir: Path, expected_head: str) -> int:
     """Run all checks, always write `results.json`, and fail closed on gates."""
     if not worktree.is_dir():
         raise ValueError("worktree must be an existing directory")
@@ -359,6 +386,13 @@ def verify(worktree: Path, corpus_root: Path, artifact_dir: Path) -> int:
     results_path = artifact / "results.json"
 
     try:
+        head_result = run_command(["git", "rev-parse", "HEAD"], cwd=worktree)
+        expected_head_result = run_command(
+            ["git", "rev-parse", "--verify", f"{expected_head}^{{commit}}"], cwd=worktree
+        )
+        head_matches, observed_head, normalized_expected_head = head_identity_matches(
+            expected_head, head_result, expected_head_result
+        )
         primary, primary_resolution = find_primary_worktree(worktree)
         primary_before = (
             run_command(["git", "status", "--porcelain=v1"], cwd=primary)
@@ -444,6 +478,7 @@ def verify(worktree: Path, corpus_root: Path, artifact_dir: Path) -> int:
                 and worktree_final.stdout == ""
                 and worktree_final.stderr == ""
             ),
+            "head_identity": head_matches,
             "tests": tests.exit_code == 0,
             "diff_checks": (
                 worktree_diff.exit_code == 0
@@ -456,6 +491,11 @@ def verify(worktree: Path, corpus_root: Path, artifact_dir: Path) -> int:
             "corpus_root": str(corpus_root.resolve()),
             "artifact_dir": str(artifact),
             "database": str(database),
+            "expected_head": expected_head,
+            "observed_head": observed_head,
+            "normalized_expected_head": normalized_expected_head,
+            "head_rev_parse": command_result_to_dict(head_result),
+            "expected_head_rev_parse": command_result_to_dict(expected_head_result),
             "primary_worktree": str(primary) if primary is not None else None,
             "primary_resolution": command_result_to_dict(primary_resolution),
             "primary_status_before": command_result_to_dict(primary_before) if primary_before else None,
@@ -484,6 +524,7 @@ def verify(worktree: Path, corpus_root: Path, artifact_dir: Path) -> int:
             "worktree": str(worktree),
             "corpus_root": str(corpus_root),
             "artifact_dir": str(artifact),
+            "expected_head": expected_head,
             "fatal_error": f"{type(error).__name__}: {error}",
             "gates": {name: False for name in CRITICAL_GATES},
             "overall_pass": False,
@@ -503,13 +544,18 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="New, absent directory outside the corpus; never removed or reused.",
     )
+    parser.add_argument(
+        "--expected-head",
+        required=True,
+        help="Required full commit SHA or unambiguous 4-40 hexadecimal prefix to verify.",
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     arguments = parse_args()
     try:
-        return verify(arguments.worktree, arguments.corpus, arguments.artifact_dir)
+        return verify(arguments.worktree, arguments.corpus, arguments.artifact_dir, arguments.expected_head)
     except ValueError as error:
         print(f"verification precondition failed: {error}", file=sys.stderr)
         return 2
