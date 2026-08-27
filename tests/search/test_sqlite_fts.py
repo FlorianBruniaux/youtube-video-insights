@@ -183,6 +183,92 @@ def test_status_rejects_a_schema_missing_required_constraints(tmp_path: Path) ->
         SQLiteFtsIndex(database).status()
 
 
+@pytest.mark.parametrize("operation", ["status", "search"])
+def test_runtime_rejects_nullable_business_columns_and_indexed_fts_identifier(
+    tmp_path: Path, operation: str
+) -> None:
+    from yt_insights.search.sqlite_fts import SearchIndexInvalid, SQLiteFtsIndex
+
+    database = tmp_path / "nullable-and-indexed-fts.sqlite3"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE documents (
+                document_id TEXT PRIMARY KEY,
+                source_relpath TEXT UNIQUE,
+                source_sha256 TEXT,
+                channel_id TEXT,
+                channel_title TEXT,
+                video_id TEXT,
+                video_title TEXT,
+                language TEXT
+            );
+            CREATE TABLE passages (
+                passage_id TEXT PRIMARY KEY,
+                document_id TEXT REFERENCES documents(document_id) ON DELETE CASCADE,
+                ordinal INTEGER,
+                start_seconds REAL,
+                end_seconds REAL,
+                text TEXT,
+                youtube_url TEXT,
+                UNIQUE (document_id, ordinal)
+            );
+            CREATE VIRTUAL TABLE passages_fts USING fts5(
+                passage_id, video_title, text,
+                tokenize = 'unicode61 remove_diacritics 2'
+            );
+            CREATE TABLE index_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+            """
+        )
+        connection.executemany(
+            "INSERT INTO index_meta (key, value) VALUES (?, ?)",
+            [
+                ("schema_version", "1"), ("index_version", "search-v1"),
+                ("sources_discovered", "0"), ("sources_selected", "0"),
+                ("sources_invalid", "0"), ("documents_indexed", "0"),
+                ("passages_indexed", "0"), ("invalid_sources", "[]"),
+            ],
+        )
+
+    index = SQLiteFtsIndex(database)
+    with pytest.raises(SearchIndexInvalid):
+        if operation == "status":
+            index.status()
+        else:
+            index.search(SearchQuery("needle"))
+
+
+@pytest.mark.parametrize("operation", ["status", "search"])
+@pytest.mark.parametrize("corruption", ["missing_passage", "mismatched_content"])
+def test_runtime_rejects_fts_rows_that_do_not_match_canonical_passages(
+    tmp_path: Path, operation: str, corruption: str
+) -> None:
+    from yt_insights.search.sqlite_fts import SearchIndexInvalid, SQLiteFtsIndex
+
+    database = tmp_path / f"{corruption}.sqlite3"
+    index = SQLiteFtsIndex(database)
+    index.rebuild(_manifest(text="needle"))
+    with sqlite3.connect(database) as connection:
+        if corruption == "missing_passage":
+            connection.execute("DELETE FROM passages_fts")
+            connection.execute(
+                "INSERT INTO passages_fts (passage_id, video_title, text) VALUES (?, ?, ?)",
+                ("not-a-passage", "Search video", "needle"),
+            )
+        else:
+            connection.execute(
+                "UPDATE passages_fts SET video_title = ?, text = ?",
+                ("tampered title", "tampered text"),
+            )
+        connection.commit()
+
+    with pytest.raises(SearchIndexInvalid):
+        if operation == "status":
+            index.status()
+        else:
+            index.search(SearchQuery("needle"))
+
+
 def test_search_rejects_invalid_persisted_rows(tmp_path: Path) -> None:
     from yt_insights.search.sqlite_fts import SearchIndexInvalid, SQLiteFtsIndex
 

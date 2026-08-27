@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
 import tempfile
 from typing import Any
@@ -145,7 +146,7 @@ class SQLiteFtsIndex:
         connection.executescript(
             """
             CREATE TABLE documents (
-                document_id TEXT PRIMARY KEY,
+                document_id TEXT PRIMARY KEY NOT NULL,
                 source_relpath TEXT NOT NULL UNIQUE,
                 source_sha256 TEXT NOT NULL,
                 channel_id TEXT NOT NULL,
@@ -155,7 +156,7 @@ class SQLiteFtsIndex:
                 language TEXT NOT NULL
             );
             CREATE TABLE passages (
-                passage_id TEXT PRIMARY KEY,
+                passage_id TEXT PRIMARY KEY NOT NULL,
                 document_id TEXT NOT NULL REFERENCES documents(document_id) ON DELETE CASCADE,
                 ordinal INTEGER NOT NULL,
                 start_seconds REAL NOT NULL,
@@ -171,7 +172,7 @@ class SQLiteFtsIndex:
                 tokenize = 'unicode61 remove_diacritics 2'
             );
             CREATE TABLE index_meta (
-                key TEXT PRIMARY KEY,
+                key TEXT PRIMARY KEY NOT NULL,
                 value TEXT NOT NULL
             );
             """
@@ -260,6 +261,26 @@ class SQLiteFtsIndex:
             or counts["fts_passages"] != report.passages_indexed
         ):
             raise SearchIndexInvalid("rebuilt search index has unexpected row counts")
+        fts_mismatch = connection.execute(
+            """
+            SELECT EXISTS(
+                SELECT 1
+                FROM passages
+                LEFT JOIN passages_fts ON passages_fts.passage_id = passages.passage_id
+                JOIN documents ON documents.document_id = passages.document_id
+                WHERE passages_fts.passage_id IS NULL
+                   OR passages_fts.text IS NOT passages.text
+                   OR passages_fts.video_title IS NOT documents.video_title
+                UNION ALL
+                SELECT 1
+                FROM passages_fts
+                LEFT JOIN passages ON passages.passage_id = passages_fts.passage_id
+                WHERE passages.passage_id IS NULL
+            )
+            """
+        ).fetchone()[0]
+        if fts_mismatch:
+            raise SearchIndexInvalid("rebuilt search index FTS rows do not match passages")
 
     @staticmethod
     def _report_from_manifest(manifest: CorpusManifest) -> BuildReport:
@@ -290,25 +311,42 @@ class SQLiteFtsIndex:
 
     @staticmethod
     def _validate_schema(connection: sqlite3.Connection) -> None:
-        expected_columns = {
+        expected_business_columns = {
             "documents": (
-                "document_id", "source_relpath", "source_sha256", "channel_id", "channel_title",
-                "video_id", "video_title", "language",
+                ("document_id", "TEXT", 1, 1),
+                ("source_relpath", "TEXT", 1, 0),
+                ("source_sha256", "TEXT", 1, 0),
+                ("channel_id", "TEXT", 1, 0),
+                ("channel_title", "TEXT", 1, 0),
+                ("video_id", "TEXT", 1, 0),
+                ("video_title", "TEXT", 1, 0),
+                ("language", "TEXT", 1, 0),
             ),
             "passages": (
-                "passage_id", "document_id", "ordinal", "start_seconds", "end_seconds", "text", "youtube_url",
+                ("passage_id", "TEXT", 1, 1),
+                ("document_id", "TEXT", 1, 0),
+                ("ordinal", "INTEGER", 1, 0),
+                ("start_seconds", "REAL", 1, 0),
+                ("end_seconds", "REAL", 1, 0),
+                ("text", "TEXT", 1, 0),
+                ("youtube_url", "TEXT", 1, 0),
             ),
-            "passages_fts": ("passage_id", "video_title", "text"),
-            "index_meta": ("key", "value"),
+            "index_meta": (
+                ("key", "TEXT", 1, 1),
+                ("value", "TEXT", 1, 0),
+            ),
         }
         try:
-            for table, columns in expected_columns.items():
+            for table, columns in expected_business_columns.items():
                 table_info = list(connection.execute(f"PRAGMA table_info({table})"))
-                actual = tuple(row[1] for row in table_info)
+                actual = tuple((row[1], row[2].upper(), row[3], row[5]) for row in table_info)
                 if actual != columns:
                     raise SearchIndexInvalid("search index schema is invalid")
-                if table != "passages_fts" and table_info[0][5] != 1:
-                    raise SearchIndexInvalid("search index schema is invalid")
+            fts_columns = tuple(
+                row[1] for row in connection.execute("PRAGMA table_info(passages_fts)")
+            )
+            if fts_columns != ("passage_id", "video_title", "text"):
+                raise SearchIndexInvalid("search index FTS schema is invalid")
             if not SQLiteFtsIndex._has_unique_index(connection, "documents", ("source_relpath",)):
                 raise SearchIndexInvalid("search index schema is invalid")
             if not SQLiteFtsIndex._has_unique_index(
@@ -327,11 +365,7 @@ class SQLiteFtsIndex:
             fts_sql = connection.execute(
                 "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'passages_fts'"
             ).fetchone()
-            if (
-                fts_sql is None
-                or "fts5" not in fts_sql[0].lower()
-                or "unicode61 remove_diacritics 2" not in fts_sql[0].lower()
-            ):
+            if fts_sql is None or not SQLiteFtsIndex._has_expected_fts5_configuration(fts_sql[0]):
                 raise SearchIndexInvalid("search index FTS schema is invalid")
         except sqlite3.Error as error:
             raise SearchIndexInvalid("search index schema is invalid") from error
@@ -346,6 +380,68 @@ class SQLiteFtsIndex:
             ) == columns:
                 return True
         return False
+
+    @staticmethod
+    def _has_expected_fts5_configuration(ddl: str) -> bool:
+        match = re.search(r"\bUSING\s+fts5\s*\(", ddl, flags=re.IGNORECASE)
+        if match is None:
+            return False
+        arguments = SQLiteFtsIndex._split_fts5_arguments(ddl[match.end() :])
+        if arguments is None or len(arguments) != 4:
+            return False
+        passage_id, video_title, text, tokenizer = arguments
+        tokenizer_match = re.fullmatch(
+            r"tokenize\s*=\s*'((?:''|[^'])*)'\s*", tokenizer, flags=re.IGNORECASE | re.DOTALL
+        )
+        return (
+            re.fullmatch(r"passage_id\s+UNINDEXED\s*", passage_id, flags=re.IGNORECASE)
+            is not None
+            and re.fullmatch(r"video_title\s*", video_title, flags=re.IGNORECASE) is not None
+            and re.fullmatch(r"text\s*", text, flags=re.IGNORECASE) is not None
+            and tokenizer_match is not None
+            and tokenizer_match.group(1).replace("''", "'").lower()
+            == "unicode61 remove_diacritics 2"
+        )
+
+    @staticmethod
+    def _split_fts5_arguments(ddl_tail: str) -> tuple[str, ...] | None:
+        arguments: list[str] = []
+        current: list[str] = []
+        nested_parentheses = 0
+        quote: str | None = None
+        position = 0
+        while position < len(ddl_tail):
+            character = ddl_tail[position]
+            if quote is not None:
+                current.append(character)
+                if character == quote:
+                    if position + 1 < len(ddl_tail) and ddl_tail[position + 1] == quote:
+                        current.append(ddl_tail[position + 1])
+                        position += 1
+                    else:
+                        quote = None
+            elif character in "'\"`":
+                quote = character
+                current.append(character)
+            elif character == "(":
+                nested_parentheses += 1
+                current.append(character)
+            elif character == ")":
+                if nested_parentheses == 0:
+                    arguments.append("".join(current).strip())
+                    remainder = ddl_tail[position + 1 :].strip()
+                    if remainder not in ("", ";") or any(not argument for argument in arguments):
+                        return None
+                    return tuple(arguments)
+                nested_parentheses -= 1
+                current.append(character)
+            elif character == "," and nested_parentheses == 0:
+                arguments.append("".join(current).strip())
+                current = []
+            else:
+                current.append(character)
+            position += 1
+        return None
 
     @staticmethod
     def _load_invalid_sources(value: str) -> tuple[str, ...]:
