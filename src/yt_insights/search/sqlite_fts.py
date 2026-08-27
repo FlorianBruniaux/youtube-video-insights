@@ -295,19 +295,59 @@ class SQLiteFtsIndex:
         )
 
     def _validate_and_load_report(self, connection: sqlite3.Connection) -> BuildReport:
-        self._validate_schema(connection)
-        metadata = dict(connection.execute("SELECT key, value FROM index_meta"))
-        if metadata.get("schema_version") != _SCHEMA_VERSION or metadata.get("index_version") != _INDEX_VERSION:
-            raise SearchIndexInvalid("search index version is unsupported")
         try:
+            self._validate_schema(connection)
+            metadata = dict(connection.execute("SELECT key, value FROM index_meta"))
+            if (
+                metadata.get("schema_version") != _SCHEMA_VERSION
+                or metadata.get("index_version") != _INDEX_VERSION
+            ):
+                raise SearchIndexInvalid("search index version is unsupported")
             report = BuildReport(
                 **{name: int(metadata[name]) for name in _REPORT_COUNTERS},
                 invalid_sources=self._load_invalid_sources(metadata["invalid_sources"]),
             )
-        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            self._validate_report_invalid_sources(report)
+            self._validate_persisted_domain_records(connection)
+            self._verify_built_database(connection, report)
+            return report
+        except SearchIndexError:
+            raise
+        except (KeyError, TypeError, ValueError, sqlite3.Error) as error:
             raise SearchIndexInvalid("search index metadata is invalid") from error
-        self._verify_built_database(connection, report)
-        return report
+
+    @staticmethod
+    def _validate_report_invalid_sources(report: BuildReport) -> None:
+        if (
+            report.sources_invalid != len(report.invalid_sources)
+            or report.invalid_sources != tuple(sorted(report.invalid_sources))
+            or len(set(report.invalid_sources)) != len(report.invalid_sources)
+        ):
+            raise ValueError("invalid source metadata does not match report")
+
+    @staticmethod
+    def _validate_persisted_domain_records(connection: sqlite3.Connection) -> None:
+        documents: dict[str, DocumentRef] = {}
+        for row in connection.execute(
+            """
+            SELECT document_id, source_relpath, source_sha256, channel_id, channel_title,
+                   video_id, video_title, language
+            FROM documents
+            """
+        ):
+            document = SQLiteFtsIndex._row_to_document(row)
+            documents[document.document_id] = document
+        for row in connection.execute(
+            """
+            SELECT passage_id, document_id, ordinal, start_seconds, end_seconds, text, youtube_url
+            FROM passages
+            """
+        ):
+            passage = SQLiteFtsIndex._row_to_passage(row)
+            document = documents.get(passage.document_id)
+            if document is None:
+                raise ValueError("passage document is missing")
+            SearchHit(document=document, passage=passage, rank=1, score=0.0)
 
     @staticmethod
     def _validate_schema(connection: sqlite3.Connection) -> None:
@@ -452,7 +492,13 @@ class SQLiteFtsIndex:
 
     @staticmethod
     def _row_to_hit(row: sqlite3.Row, rank: int) -> SearchHit:
-        document = DocumentRef(
+        document = SQLiteFtsIndex._row_to_document(row)
+        passage = SQLiteFtsIndex._row_to_passage(row)
+        return SearchHit(document=document, passage=passage, rank=rank, score=-float(row["bm25_score"]))
+
+    @staticmethod
+    def _row_to_document(row: sqlite3.Row) -> DocumentRef:
+        return DocumentRef(
             document_id=row["document_id"],
             source_relpath=row["source_relpath"],
             source_sha256=row["source_sha256"],
@@ -462,7 +508,10 @@ class SQLiteFtsIndex:
             video_title=row["video_title"],
             language=row["language"],
         )
-        passage = Passage(
+
+    @staticmethod
+    def _row_to_passage(row: sqlite3.Row) -> Passage:
+        return Passage(
             passage_id=row["passage_id"],
             document_id=row["document_id"],
             ordinal=row["ordinal"],
@@ -471,4 +520,3 @@ class SQLiteFtsIndex:
             text=row["text"],
             youtube_url=row["youtube_url"],
         )
-        return SearchHit(document=document, passage=passage, rank=rank, score=-float(row["bm25_score"]))

@@ -269,6 +269,49 @@ def test_runtime_rejects_fts_rows_that_do_not_match_canonical_passages(
             index.search(SearchQuery("needle"))
 
 
+@pytest.mark.parametrize("operation", ["status", "search"])
+@pytest.mark.parametrize(
+    ("name", "statement", "parameters"),
+    [
+        ("unsafe_source_path", "UPDATE documents SET source_relpath = ?", ("../escape.vtt",)),
+        ("invalid_source_hash", "UPDATE documents SET source_sha256 = ?", ("not-a-sha256",)),
+        ("noncanonical_document_identity", "UPDATE documents SET channel_id = ?", ("other-channel",)),
+        ("invalid_passage_timestamp", "UPDATE passages SET start_seconds = ?", (-1.0,)),
+        (
+            "noncanonical_passage_url",
+            "UPDATE passages SET youtube_url = ?",
+            ("https://youtube.com/watch?v=VideoId_123&t=999s",),
+        ),
+        (
+            "invalid_source_counter",
+            "UPDATE index_meta SET value = ? WHERE key = 'sources_invalid'",
+            ("0",),
+        ),
+    ],
+)
+def test_runtime_rejects_invalid_persisted_domain_records_before_no_hit_search(
+    tmp_path: Path,
+    operation: str,
+    name: str,
+    statement: str,
+    parameters: tuple[object, ...],
+) -> None:
+    from yt_insights.search.sqlite_fts import SearchIndexInvalid, SQLiteFtsIndex
+
+    database = tmp_path / f"{name}.sqlite3"
+    index = SQLiteFtsIndex(database)
+    index.rebuild(_manifest(text="needle"))
+    with sqlite3.connect(database) as connection:
+        connection.execute(statement, parameters)
+        connection.commit()
+
+    with pytest.raises(SearchIndexInvalid):
+        if operation == "status":
+            index.status()
+        else:
+            index.search(SearchQuery("absent"))
+
+
 def test_search_rejects_invalid_persisted_rows(tmp_path: Path) -> None:
     from yt_insights.search.sqlite_fts import SearchIndexInvalid, SQLiteFtsIndex
 
