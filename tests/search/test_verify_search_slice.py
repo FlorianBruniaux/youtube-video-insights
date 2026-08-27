@@ -77,6 +77,25 @@ def test_validate_hit_rejects_url_video_id_not_matching_source_filename(tmp_path
     assert "source_video_id_mismatch" in errors
 
 
+def test_validate_hit_rejects_noncanonical_url_with_extra_query_parameter(tmp_path: Path) -> None:
+    verifier = _load_verifier()
+    corpus = tmp_path / "output"
+    source = corpus / "channel" / "transcripts" / "Talk [VideoId_123].en.vtt"
+    source.parent.mkdir(parents=True)
+    source.write_text("WEBVTT\n", encoding="utf-8")
+
+    errors = verifier.validate_hit(
+        {
+            "source": "channel/transcripts/Talk [VideoId_123].en.vtt",
+            "timestamp": "00:00:00",
+            "url": "https://youtube.com/watch?v=VideoId_123&t=0s&extra=1",
+        },
+        corpus,
+    )
+
+    assert "url_not_canonical" in errors
+
+
 def test_invoke_cli_uses_the_explicit_worktree_source_without_subprocess(
     tmp_path: Path, monkeypatch
 ) -> None:

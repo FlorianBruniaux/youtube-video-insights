@@ -234,6 +234,12 @@ def validate_hit(hit: dict[str, Any], corpus_root: Path) -> list[str]:
         or time_values[0] != f"{seconds}s"
     ):
         errors.append("url_timestamp_mismatch")
+    elif (
+        video_ids is not None
+        and len(video_ids) == 1
+        and url != f"https://youtube.com/watch?v={video_ids[0]}&t={seconds}s"
+    ):
+        errors.append("url_not_canonical")
     return errors
 
 

@@ -2,7 +2,7 @@
 
 **Execution date:** 2026-08-28  
 **Plan filename retained:** `2026-08-27-search-vertical-slice.md`  
-**Worktree / base:** `/private/tmp/yt-insights-search-baseline` at `b28e9c5505c29ba13f40bb61bf9da677a2effa07` (`codex/search-baseline`)
+**Worktree / verified HEAD:** `/private/tmp/yt-insights-search-baseline` at `43c04ca` (`codex/search-baseline`); the search implementation baseline remains `b28e9c5`.
 
 ## Scope and verdicts
 
@@ -10,8 +10,8 @@
 |---|---|---|
 | Deterministic technical 50-source slice | PASS | Same selected-source snapshot, BuildReport, SQLite byte size, and five frozen JSON result sets across two builds. |
 | Corpus source immutability | PASS | SHA-256 manifest of the exact selected 50 is identical before and after the run. |
-| Returned-hit structural integrity | PASS | 492 returned hits were checked: safe existing relative source, URL video id format, non-negative timestamp, and canonical URL/timestamp coherence. |
-| Fresh full test suite | PASS | `PYTHONPATH=src rtk pytest -q` exited 0: 89 passed. |
+| Returned-hit structural integrity | PASS | 492 returned hits were checked: safe existing relative source, source filename video ID equals URL video ID, non-negative timestamp, and canonical URL/timestamp coherence. |
+| Fresh full test suite | PASS | Verifier command exited 0 and captured `93 passed` from `python -m pytest -q` with the verified worktree `src` on `PYTHONPATH`. |
 | Editorial relevance | UNKNOWN | No three real article subjects or 20-result human review exists. This run does not assess relevance. |
 | Phase 1B | BLOCKED | Requires three real subjects plus human validation of at least 16/20 top-five results. |
 
@@ -20,8 +20,9 @@ No full-corpus index, MCP, research pack, embedding, graph, or UI was run or imp
 ## Reproducible inputs and isolation
 
 - Read-only corpus root: `/Users/florianbruniaux/Sites/perso/yt-insights/output`
-- Derived index path (outside `output`): `/private/tmp/yt-insights-search-phase1a-20260828/search-v1.sqlite3`
-- Disposable artifact directory: `/private/tmp/yt-insights-search-phase1a-20260828`
+- Versioned, fail-closed verifier: `scripts/verify_search_slice.py` (commits `2929204`, `43c04ca`); options are required: `--worktree`, `--corpus`, `--artifact-dir`.
+- Derived index path (outside `output`): `/private/tmp/yt-insights-search-phase1a-fix1-20260828-run3/search-v1.sqlite3`
+- New, never-reused artifact directory: `/private/tmp/yt-insights-search-phase1a-fix1-20260828-run3` (the verifier rejects an existing directory or any artifact path inside the corpus; it never deletes a directory).
 - Selection algorithm: exactly `sorted(corpus_root.glob("**/transcripts/*.vtt"), key=relative_posix_path)[:50]`, which is the same rule as `scan_corpus(..., limit=50)`.
 - Corpus candidates discovered: `3270`; selected: `50`; invalid selected sources: `0`.
 
@@ -82,25 +83,25 @@ cd884a9e075df9197021ad1cb31bf82e748716baf6078bfad36ce3241d7fcb74  aidevcon/trans
 f900094a13a2a0199ecd4ee31a282e670d66d4d804bf53e0322dc3d99df0eae3  aidevcon/transcripts/20241231 - Crossover episode with The Infra Pod - AI Native Development with Guy Podjarny [SsOaOVPwW5I].en.vtt
 ```
 
-## Commands and exit codes
+## Commands, exit codes, and fail-closed gate
 
 | Command | Exit | Result |
 |---|---:|---|
-| `rtk run 'python /private/tmp/yt-insights-task5-verify.py'` | 0 | Runs the two CLI builds, frozen and hostile JSON searches, source snapshots, and per-hit validation; JSON record at the disposable artifact path above. |
-| `rtk pytest -q` | 2 | Not a code failure: collection imported an already-installed `yt_insights` package lacking `search` because this `src/` project is not installed editable in that shell. Retained as an environment witness, not a passing suite. |
-| `PYTHONPATH=src rtk pytest -q` | 0 | Fresh worktree suite: `89 passed`. |
-| `rtk git diff --check` | 0 | Worktree check before adding this evidence; rerun after its commit below. |
-| `rtk git -C /Users/florianbruniaux/Sites/perso/yt-insights status --porcelain=v1` | 0 | Primary-checkout protected-change snapshot before and after; unchanged. |
-| `rtk git -C /Users/florianbruniaux/Sites/perso/yt-insights diff --check` | 0 | Existing primary changes are whitespace-clean. |
+| `python scripts/verify_search_slice.py --worktree /private/tmp/yt-insights-search-baseline --corpus /Users/florianbruniaux/Sites/perso/yt-insights/output --artifact-dir /private/tmp/yt-insights-search-phase1a-fix1-20260828-run3` | 0 | Real run from clean verified HEAD `43c04ca`; writes `results.json` before returning. |
+| `PYTHONPATH=src rtk pytest -q` | 0 | Pre-run fresh worktree suite: `93 passed`. |
+| `rtk git diff --check` | 0 | Pre-run clean worktree check; the verifier also captures a final clean worktree diff check. |
+| `git status --porcelain=v1` (primary, before and after) | 0 / 0 | Full stdout/stderr/exit objects are serialized in the artefact and compared byte-for-byte. |
+| `git status --porcelain=v1` (verified worktree, final) | 0 | Serialized in the artifact; both stdout and stderr are empty. |
+| `git diff --check` (worktree and primary) | 0 / 0 | Both result objects are serialized by the verifier. |
 
-The CLI commands issued by the harness are deliberately explicit and use the worktree source: `PYTHONPATH=/private/tmp/yt-insights-search-baseline/src python -c 'from yt_insights.cli import cli; cli()' index --corpus-root /Users/florianbruniaux/Sites/perso/yt-insights/output --database /private/tmp/yt-insights-search-phase1a-20260828/search-v1.sqlite3 --limit 50`, followed by the same `search QUERY --database ... --limit 20 --json` form for each query.
+The verifier loads the actual `yt_insights.cli:cli` group from the explicit worktree `src/` path and invokes it through Click's in-process runner (no RTK assumption in Python). It records the command vector, stdout SHA-256, stderr, exit code, duration, and hit count for each index/search operation. Its compact evidence is `/private/tmp/yt-insights-search-phase1a-fix1-20260828-run3/results.json`; the source list and all frozen/hostile witnesses are retained below. Every critical predicate is computed, persisted in `gates`, and makes the process exit non-zero if false.
 
 ## Two-build comparison
 
 | Metric | Build 1 | Build 2 | Verdict |
 |---|---:|---:|---|
 | CLI exit | 0 | 0 | PASS |
-| Build duration (ms) | 1384.521 | 1354.987 | Informational |
+| Build duration (ms) | 8251.079 | 8860.479 | Informational |
 | Sources discovered | 3270 | 3270 | PASS |
 | Sources selected | 50 | 50 | PASS |
 | Invalid sources | 0 | 0 | PASS |
@@ -122,42 +123,43 @@ Each row compares parsed JSON hit arrays exactly. The SHA-256 is over the determ
 | `security` | 0 / 20 | 0 / 20 | `cb8ec72e16810dcb0d1bbec8f6ae90e0548d0d28081ceb4cd5596fd125f8f834` | PASS |
 | `agents` | 0 / 20 | 0 / 20 | `2f24466ad92e9bc252a11b1cb030bd924c9addbaa09ef839aaf9ad3717f298cb` | PASS |
 
-Query latency sample (B2, includes process and CLI startup): `artificial intelligence` 947.184 ms; `developer productivity` 946.223 ms; `software development` 886.566 ms; `security` 892.805 ms; `agents` 896.635 ms.
+Query latency sample (B2, Click invocation plus index search): `artificial intelligence` 5298.897 ms; `developer productivity` 5541.064 ms; `software development` 4188.092 ms; `security` 1059.539 ms; `agents` 1226.572 ms.
 
 ## Hostile-query results
 
-All queries contain at least one lexical token; special syntax is treated as input text, not trusted FTS grammar. `error` is null for every row. Latency includes process and CLI startup.
+All queries contain at least one lexical token; special syntax is treated as input text, not trusted FTS grammar. `error` is null for every row. Latency measures the verifier's Click invocation and search.
 
 | # | Query | Exit | Hits | Latency (ms) | Error |
 |---:|---|---:|---:|---:|---|
-| 1 | `"developer"` | 0 | 20 | 885.905 | null |
-| 2 | `ai-driven` | 0 | 20 | 888.906 | null |
-| 3 | `security:` | 0 | 20 | 894.268 | null |
-| 4 | `NEAR developer` | 0 | 1 | 918.263 | null |
-| 5 | `AI OR developer` | 0 | 20 | 901.797 | null |
-| 6 | `agent*` | 0 | 20 | 893.484 | null |
-| 7 | `(developer)` | 0 | 20 | 894.484 | null |
-| 8 | `don't` | 0 | 20 | 884.996 | null |
-| 9 | `design/engineering` | 0 | 12 | 900.186 | null |
-| 10 | `back\\end` | 0 | 20 | 888.09 | null |
-| 11 | `évaluation` | 0 | 20 | 892.263 | null |
-| 12 | `"machine learning"` | 0 | 20 | 899.02 | null |
-| 13 | `long-term` | 0 | 15 | 886.096 | null |
-| 14 | `title:developer` | 0 | 3 | 883.492 | null |
-| 15 | `NEAR/5 agent` | 0 | 0 | 886.266 | null |
-| 16 | `OR security` | 0 | 20 | 911.926 | null |
-| 17 | `deploy*` | 0 | 20 | 965.759 | null |
-| 18 | `(AI OR security)` | 0 | 20 | 901.541 | null |
-| 19 | `l'IA` | 0 | 0 | 892.774 | null |
-| 20 | `résumé` | 0 | 1 | 919.742 | null |
+| 1 | `"developer"` | 0 | 20 | 1401.682 | null |
+| 2 | `ai-driven` | 0 | 20 | 1748.6 | null |
+| 3 | `security:` | 0 | 20 | 1729.59 | null |
+| 4 | `NEAR developer` | 0 | 1 | 1683.445 | null |
+| 5 | `AI OR developer` | 0 | 20 | 1351.334 | null |
+| 6 | `agent*` | 0 | 20 | 1348.594 | null |
+| 7 | `(developer)` | 0 | 20 | 1481.685 | null |
+| 8 | `don't` | 0 | 20 | 1754.39 | null |
+| 9 | `design/engineering` | 0 | 12 | 1547.343 | null |
+| 10 | `back\end` | 0 | 20 | 1409.391 | null |
+| 11 | `évaluation` | 0 | 20 | 1514.706 | null |
+| 12 | `"machine learning"` | 0 | 20 | 1525.513 | null |
+| 13 | `long-term` | 0 | 15 | 1596.527 | null |
+| 14 | `title:developer` | 0 | 3 | 1572.988 | null |
+| 15 | `NEAR/5 agent` | 0 | 0 | 1542.963 | null |
+| 16 | `OR security` | 0 | 20 | 1393.33 | null |
+| 17 | `deploy*` | 0 | 20 | 1305.456 | null |
+| 18 | `(AI OR security)` | 0 | 20 | 1222.814 | null |
+| 19 | `l'IA` | 0 | 0 | 1284.604 | null |
+| 20 | `résumé` | 0 | 1 | 1372.702 | null |
 
 Coverage includes quotes, hyphens, colons, `NEAR`, `OR`, `*`, parentheses, apostrophes, slash, backslash, and Unicode. Result: 20/20 exit 0, 20/20 error null.
 
 ## Every returned-hit validation
 
-The verifier checked every hit returned by the two frozen rounds and all hostile searches (`492` hits total); its `all_returned_hits_valid` result is `True`. For each payload it verified:
+The fail-closed verifier checked every hit returned by the two frozen rounds and all hostile searches (`492` hits total); `hit_validation_error_count` is `0`. For each payload it verified:
 
 - `source` is a POSIX relative path with no backslash, absolute component, or `..`, remains under the corpus root, and names an existing file.
+- The source filename matches the canonical VTT rule and its extracted `[<video_id>]` exactly equals the `<id>` in `url`.
 - `url` is canonical `https://youtube.com/watch?v=<id>&t=<seconds>s`; `<id>` matches `[A-Za-z0-9_-]{11}`.
 - `timestamp` is canonical `HH:MM:SS`, converts to a non-negative second count, and exactly agrees with the URL `t` parameter.
 
@@ -165,7 +167,7 @@ Validation failures recorded: `0`. This is structural correctness only; it says 
 
 ## Checkout protection
 
-Primary checkout (`/Users/florianbruniaux/Sites/perso/yt-insights`) status was observed both before and after this Task 5 execution and is byte-for-byte the same protected-change list:
+The primary checkout was discovered with `git worktree list --porcelain`. The verifier serializes full command objects (command, cwd, exit, stdout, stderr, duration) for the primary status before/after and requires exact equality of stdout and stderr. Both exits are `0`; the exact protected-change stdout is:
 
 ```text
  M .claude/skills/yt-add-channel.md
@@ -177,9 +179,8 @@ Primary checkout (`/Users/florianbruniaux/Sites/perso/yt-insights`) status was o
 ?? scripts/build_speakers.py
 ```
 
-The verification wrote no corpus source and no primary-checkout production/test/corpus file. Before this evidence was created, the dedicated worktree was clean; its final diff check and commit are recorded in the Task 5 SDD report.
+The verified run began at committed clean HEAD `43c04ca`: scripts/tests were committed first specifically so `worktree_status_final` could legitimately require empty stdout/stderr. It wrote no corpus source and no primary-checkout production/test/corpus file. All eleven persisted gates are `true`: build commands, build reports, DB bytes, frozen results, hostile queries, snapshot, hit validation, primary status, final worktree status, tests, and diff checks.
 
 ## Limit
 
 **UNKNOWN remains UNKNOWN:** no relevance PASS is claimed. Phase 1B remains blocked pending exactly the human inputs stated above. Stop boundary respected.
-
