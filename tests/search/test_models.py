@@ -139,6 +139,33 @@ def test_document_id_helper_uses_utf8_nul_separated_identity() -> None:
     assert compute_document_id(CHANNEL_ID, VIDEO_ID, LANGUAGE) == expected_document_id()
 
 
+@pytest.mark.parametrize(
+    ("channel_id", "language"),
+    (("channel\0identity", LANGUAGE), (CHANNEL_ID, "en\0identity")),
+)
+def test_document_identity_rejects_nul_delimited_components(channel_id: str, language: str) -> None:
+    with pytest.raises(ValueError, match="channel_id|language"):
+        compute_document_id(channel_id, VIDEO_ID, language)
+    with pytest.raises(ValueError, match="channel_id|language"):
+        make_document(channel_id=channel_id, language=language)
+
+
+def test_both_nul_collision_tuples_cannot_construct_documents() -> None:
+    colliding_id = expected_document_id("alpha", VIDEO_ID, f"{VIDEO_ID}\0en")
+    assert colliding_id == expected_document_id(f"alpha\0{VIDEO_ID}", VIDEO_ID, "en")
+
+    for channel_id, language in (
+        ("alpha", f"{VIDEO_ID}\0en"),
+        (f"alpha\0{VIDEO_ID}", "en"),
+    ):
+        with pytest.raises(ValueError, match="channel_id|language"):
+            make_document(
+                document_id=colliding_id,
+                channel_id=channel_id,
+                language=language,
+            )
+
+
 def test_document_rejects_an_id_not_derived_from_its_identity() -> None:
     with pytest.raises(ValueError, match="document_id"):
         make_document(document_id="b" * 64)
@@ -210,6 +237,18 @@ def test_youtube_url_helper_matches_existing_timestamp_url_format() -> None:
     assert youtube_url(VIDEO_ID, 12.9) == "https://youtube.com/watch?v=dQw4w9WgXcQ&t=12s"
 
 
+@pytest.mark.parametrize(
+    "url",
+    (
+        "https://example.com/watch?v=dQw4w9WgXcQ&t=12s",
+        "https://youtube.com/watch?v=dQw4w9WgXcQ&t=13s",
+    ),
+)
+def test_passage_rejects_noncanonical_youtube_urls(url: str) -> None:
+    with pytest.raises(ValueError, match="youtube_url"):
+        make_passage(youtube_url=url)
+
+
 def test_search_query_defaults_and_rejects_invalid_inputs() -> None:
     assert SearchQuery("observability") == SearchQuery("observability", limit=10)
 
@@ -231,6 +270,13 @@ def test_search_hit_requires_matching_document_rank_and_finite_score() -> None:
 
     with pytest.raises(ValueError, match="document_id"):
         SearchHit(document=document, passage=make_passage(document_id="c" * 64), rank=1, score=0.8)
+    with pytest.raises(ValueError, match="youtube_url"):
+        SearchHit(
+            document=document,
+            passage=make_passage(youtube_url=youtube_url("abcdefghijk", 12.5)),
+            rank=1,
+            score=0.8,
+        )
     with pytest.raises(ValueError, match="rank"):
         SearchHit(document=document, passage=passage, rank=0, score=0.8)
     with pytest.raises(ValueError, match="score"):

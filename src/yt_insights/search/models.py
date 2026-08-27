@@ -11,11 +11,17 @@ import re
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _VIDEO_ID_RE = re.compile(r"[A-Za-z0-9_-]{11}")
+_YOUTUBE_URL_RE = re.compile(r"https://youtube\.com/watch\?v=([A-Za-z0-9_-]{11})&t=(\d+)s")
 
 
 def _require_nonblank(name: str, value: str) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be non-empty")
+
+
+def _require_no_nul(name: str, value: str) -> None:
+    if "\0" in value:
+        raise ValueError(f"{name} must not contain a NUL byte")
 
 
 def _require_sha256(name: str, value: str) -> None:
@@ -41,8 +47,10 @@ def _require_timestamp(name: str, value: float) -> None:
 def compute_document_id(channel_id: str, video_id: str, language: str) -> str:
     """Return the deterministic identity of one channel/video/language document."""
     _require_nonblank("channel_id", channel_id)
+    _require_no_nul("channel_id", channel_id)
     _require_video_id(video_id)
     _require_nonblank("language", language)
+    _require_no_nul("language", language)
     return sha256(f"{channel_id}\0{video_id}\0{language}".encode("utf-8")).hexdigest()
 
 
@@ -132,6 +140,9 @@ class Passage:
             raise ValueError("end_seconds must be greater than or equal to start_seconds")
         _require_nonblank("text", self.text)
         _require_nonblank("youtube_url", self.youtube_url)
+        url_match = _YOUTUBE_URL_RE.fullmatch(self.youtube_url)
+        if url_match is None or url_match.group(2) != str(int(self.start_seconds)):
+            raise ValueError("youtube_url must be a canonical timestamped YouTube URL")
         if self.passage_id != compute_passage_id(
             self.document_id,
             self.ordinal,
@@ -170,6 +181,10 @@ class SearchHit:
     def __post_init__(self) -> None:
         if self.passage.document_id != self.document.document_id:
             raise ValueError("passage document_id must match document")
+        if self.passage.youtube_url != youtube_url(
+            self.document.video_id, self.passage.start_seconds
+        ):
+            raise ValueError("passage youtube_url must match document video_id and start_seconds")
         _require_nonnegative_int("rank", self.rank, minimum=1)
         if (
             isinstance(self.score, bool)
