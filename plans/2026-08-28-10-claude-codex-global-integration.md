@@ -41,7 +41,7 @@
 - Consumes: `yt-insights doctor`, `acquire`, `export` and MCP tools from Plan 09
 - Produces: three Agent Skills with implicit invocation enabled
 
-- [ ] **Step 1: Write failing structural tests**
+- [x] **Step 1: Write failing structural tests**
 
 ```python
 SKILLS = ("youtube-acquire", "youtube-research", "youtube-export")
@@ -60,13 +60,13 @@ def test_agent_skill_has_portable_entrypoint(name: str) -> None:
 
 Reject `echo $...KEY`, `cat ~/.claude`, `cat ~/.codex`, raw SQL and generic permission bypass instructions.
 
-- [ ] **Step 2: Verify the skills are absent**
+- [x] **Step 2: Verify the skills are absent**
 
 ```bash
 rtk pytest tests/test_agent_assets.py -q
 ```
 
-- [ ] **Step 3: Write `youtube-acquire` with this routing contract**
+- [x] **Step 3: Write `youtube-acquire` with this routing contract**
 
 ```yaml
 ---
@@ -86,7 +86,7 @@ The body must require this sequence:
 
 It must not fall back to raw `yt-dlp`. It may suggest explicit `--cookies-from-browser chrome` only after the CLI reports a relevant failure.
 
-- [ ] **Step 4: Write `youtube-research` with this routing contract**
+- [x] **Step 4: Write `youtube-research` with this routing contract**
 
 ```yaml
 ---
@@ -97,7 +97,7 @@ description: Search and compare the local yt-insights YouTube corpus with source
 
 The body must prefer MCP in this order: `list_corpora`, `search_videos`, `search_passages`, `get_passage`. It returns title, channel, timestamped URL and a bounded excerpt. It states when the index lacks evidence instead of inventing a match.
 
-- [ ] **Step 5: Write `youtube-export` with this routing contract**
+- [x] **Step 5: Write `youtube-export` with this routing contract**
 
 ```yaml
 ---
@@ -108,11 +108,11 @@ description: Export an existing yt-insights video transcript as Markdown, plain 
 
 The body checks availability through the MCP or `catalog search`, asks for a language only when several exist, runs `yt-insights export video`, and returns the output path plus source hash.
 
-- [ ] **Step 6: Add OpenAI UI metadata and MCP dependency**
+- [x] **Step 6: Add OpenAI UI metadata and MCP dependency**
 
 Each `agents/openai.yaml` contains a distinct display name and prompt. `youtube-research` declares the `yt-insights` MCP dependency. Keep `allow_implicit_invocation` at its default `true`.
 
-- [ ] **Step 7: Validate with the bundled skill validator**
+- [x] **Step 7: Validate with the bundled skill validator**
 
 ```bash
 python3 /Users/florianbruniaux/.codex/skills/.system/skill-creator/scripts/quick_validate.py .agents/skills/youtube-acquire
@@ -121,7 +121,7 @@ python3 /Users/florianbruniaux/.codex/skills/.system/skill-creator/scripts/quick
 rtk pytest tests/test_agent_assets.py -q
 ```
 
-- [ ] **Step 8: Commit the canonical skills**
+- [x] **Step 8: Commit the canonical skills**
 
 ```bash
 rtk git add .agents/skills/youtube-acquire .agents/skills/youtube-research .agents/skills/youtube-export tests/test_agent_assets.py
@@ -139,7 +139,7 @@ rtk git commit -m "feat: add portable YouTube corpus skills"
 - Consumes: `youtube-research` and MCP server `yt-insights`
 - Produces: one Claude Code subagent and one Codex custom agent named `youtube_corpus_researcher`
 
-- [ ] **Step 1: Add failing agent-schema tests**
+- [x] **Step 1: Add failing agent-schema tests**
 
 ```python
 def test_codex_researcher_is_read_only() -> None:
@@ -155,17 +155,17 @@ def test_claude_researcher_preloads_only_research_skill() -> None:
     assert frontmatter["permissionMode"] == "plan"
 ```
 
-- [ ] **Step 2: Verify failures**
+- [x] **Step 2: Verify failures**
 
 ```bash
 rtk pytest tests/test_agent_assets.py -q
 ```
 
-- [ ] **Step 3: Implement the Claude Code agent**
+- [x] **Step 3: Implement the Claude Code agent**
 
 Use `name: youtube-corpus-researcher`, `model: inherit`, `permissionMode: plan`, `skills: [youtube-research]`, `mcpServers: [yt-insights]` and tools limited to `Read`, `Grep`, `Glob` plus the configured MCP. Its output contract requires claims, passages, timestamped URLs, coverage limits and unresolved questions.
 
-- [ ] **Step 4: Implement the Codex custom agent**
+- [x] **Step 4: Implement the Codex custom agent**
 
 ```toml
 name = "youtube_corpus_researcher"
@@ -178,7 +178,7 @@ Use the youtube-research skill and the yt-insights MCP. Return source-backed pas
 
 Do not pin a model. The agent inherits the parent unless the user explicitly chooses another model.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 ```bash
 rtk pytest tests/test_agent_assets.py -q
@@ -249,7 +249,7 @@ rtk git commit -m "chore: retire legacy implicit YouTube skill routing"
 - Consumes: 45 French and English prompts with expected skill or `none`
 - Produces: deterministic fixture validation and host-level acceptance prompts
 
-- [ ] **Step 1: Add the 30 positive cases**
+- [x] **Step 1: Add the 30 positive cases**
 
 Include ten prompts for each skill. Cover URLs, video IDs, channel handles, transcript wording, article-source exports and corpus queries. Use realistic prompts such as:
 
@@ -259,7 +259,7 @@ Include ten prompts for each skill. Cover URLs, video IDs, channel handles, tran
 {"prompt": "Exporte nfupYzLjFGc en Markdown pour mon article", "expected": "youtube-export"}
 ```
 
-- [ ] **Step 2: Add the 15 negative cases**
+- [x] **Step 2: Add the 15 negative cases**
 
 Cover code for a YouTube player, SEO, video editing, writing a title, discussing a watched video, generic web scraping and non-YouTube corpora.
 
@@ -268,11 +268,11 @@ Cover code for a YouTube player, SEO, video editing, writing a title, discussing
 {"prompt": "Optimise le SEO de ma prochaine vidéo", "expected": "none"}
 ```
 
-- [ ] **Step 3: Validate fixture integrity**
+- [x] **Step 3: Validate fixture integrity**
 
 The script rejects duplicate prompts, unknown expected values, fewer than ten positives per skill, fewer than fifteen negatives, and non-UTF-8 text.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 ```bash
 python3 scripts/check_agent_routing_fixture.py tests/fixtures/agent-routing.json

@@ -68,7 +68,7 @@ directement des VTT et conserve les passages horodatés. Aucun des deux ne doit
 | Évolution | Pourquoi elle n'est pas active | Gate avant développement |
 |---|---|---|
 | Revue humaine de la pertinence | La technique est validée, pas la qualité éditoriale des résultats | Juger les requêtes de l'artefact P2 et enregistrer `PASS` ou `FAIL` |
-| Skills et agents Claude Code/Codex | Le runtime est prêt, les assets projet sont en cours de validation | Trois skills communs, deux agents natifs et corpus de routage |
+| Routage global Claude Code/Codex | Trois skills, deux agents read-only et une fixture 45 prompts sont versionnés | Mesurer le routeur réel avant installation globale |
 | Installation globale | Aucune release yt-insights n'est installée globalement | Construire trois candidats inertes pour runtime, skills et intégrations, puis attendre les approbations exactes |
 | Découpage LLM des longs transcripts | Insights et Shorts utilisent actuellement les 10 000 premiers caractères | Mesurer les pertes sur des articles réels, puis définir chunking et fusion |
 | MLX direct | `MLXBackend` existe mais le résolveur ne le sélectionne pas | Ajouter une option explicite et des tests sur Apple Silicon |

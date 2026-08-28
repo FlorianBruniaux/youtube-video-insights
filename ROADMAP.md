@@ -3,7 +3,8 @@
 **Mise à jour :** 2026-08-28
 **Statut du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **Statut du runtime pour Claude Code et Codex :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**Statut des skills, agents et de l'installation globale :** `PLANIFIÉ, NON IMPLÉMENTÉ`.
+**Statut des skills et agents projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
+**Statut du routage réel et de l'installation globale :** `NON IMPLÉMENTÉ`.
 **Readiness éditoriale :** `UNKNOWN` ; ce statut bloque la promotion produit, pas l'implémentation autorisée.
 
 La CLI, l'index complet et le MCP sont utilisables localement. Le statut
@@ -106,8 +107,8 @@ preview obligatoire pour channel/playlist
 | A3 | `TERMINÉ` | `acquire` unifié avec preview et confirmation des volumes | Aucun channel, playlist ou batch sans confirmation explicite |
 | A4 | `TERMINÉ` | `export video` en VTT, TXT et Markdown sans LLM | Sortie déterministe avec URL, identité source et timestamps |
 | B1 | `TERMINÉ` | MCP étendu de deux à quatre outils read-only | Smoke réel sur les quatre outils, aucun outil de mutation |
-| B2 | `À FAIRE` | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | Même comportement dans Claude Code et Codex |
-| B3 | `À FAIRE` | Agents chercheurs natifs et routage évalué | 27/30 positifs minimum, 0/15 négatifs |
+| B2 | `TERMINÉ` | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | Trois validateurs officiels et tests de portabilité au vert |
+| B3 | `PARTIEL` | Agents chercheurs natifs terminés; fixture de 45 prompts terminée | Routeur réel encore à mesurer: 27/30 positifs minimum, 0/15 négatifs |
 | C1 | `À FAIRE` | Candidats globaux immuables avec diffs expurgés et rollback | Trois digests approuvables, aucune écriture globale |
 | C2 | `BLOQUÉ PAR APPROBATION` | Runtime, config, skills, agents et MCP globaux | Même corpus depuis deux cwd, parité de cinq requêtes et restauration testée |
 | D1 | `OPTIONNEL` | Choix explicite Ollama, MLX, cc-bridge ou remote | Backend réellement résolu, canari MLX séparé |
@@ -155,7 +156,7 @@ index dérivés, ouverts uniquement par un corpus de questions en échec.
 
 | Priorité | Décision | Critère de sortie |
 |---:|---|---|
-| 1 | Implémenter B2 et B3 en parallèle | Trois skills, deux agents et corpus de routage au vert |
+| 1 | Mesurer la fixture sur le routeur global existant | Au moins 27/30 positifs, 0/15 négatifs, aucune nouvelle interception interdite |
 | 2 | Construire les trois candidats globaux C1 | Runtime, shared et integrations ont chacun diff expurgé, digest, test inerte et rollback |
 | 3 | Installer C2 après approbation explicite | Claude Code et Codex neufs voient les mêmes skills, agent et corpus |
 | 4 | Revoir humainement l'artefact P2 sur un article réel | Statut `PASS` ou `FAIL`, passages conservés et frictions consignées |

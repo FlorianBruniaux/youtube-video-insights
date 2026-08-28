@@ -2,7 +2,8 @@
 
 **Mise à jour :** 2026-08-28
 **État du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**État du lot agentique :** `PLANIFIÉ, NON IMPLÉMENTÉ`.
+**État du runtime et des assets agentiques projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
+**État du routeur réel et de l'installation globale :** `NON IMPLÉMENTÉ`.
 **Règle :** `UNKNOWN` bloque promotion/readiness produit, pas l'implémentation P3 à P5 autorisée.
 
 **Références :** [architecture agentique](specs/AGENT-PLATFORM.md), [runtime](2026-08-28-09-agent-ready-runtime.md), [intégration globale](2026-08-28-10-claude-codex-global-integration.md), [plan consolidé V2](2026-08-27-CONSOLIDATED-v2.md) et [roadmap](../ROADMAP.md).
@@ -26,7 +27,7 @@ P1 resolver Ollama [terminé]
 P2 recherche technique [terminée] ; jugement humain [UNKNOWN]
              ↓ décision humaine : promotion seulement
 
-P3 corpus complet [terminé] -> P4 MCP 2 outils [terminé] -> P5 installation [terminée]
+P3 corpus complet [terminé] -> P4 MCP 4 outils [terminé] -> P5 installation locale [terminée]
 
 A0 contrats runtime -> A1 chemins
                          ↓
@@ -139,8 +140,8 @@ existant, mais pas des backends LLM.
 | Session | Propriété exclusive | Peut démarrer en parallèle avec | Gate de fusion |
 |---|---|---|---|
 | B1 `codex/agent-mcp-four-tools` | serveur MCP, quatre contrats read-only et tests | `TERMINÉ` | exactement quatre outils, chemins absolus, aucune mutation |
-| B2 `codex/agent-portable-skills` | trois dossiers `.agents/skills/youtube-*` et fixtures de skills | `EN COURS` | mêmes commandes sur Claude Code et Codex, aucune dépendance au cwd |
-| B3 `codex/agent-native-adapters` | agent Claude, agent Codex, corpus 45 prompts et évaluation | `EN COURS` | au moins 27/30 positifs, 0/15 négatifs, p95 chaud inférieur ou égal à 10 ms |
+| B2 `codex/agent-portable-skills` | trois dossiers `.agents/skills/youtube-*` et fixtures de skills | `TERMINÉ` | mêmes commandes sur Claude Code et Codex, aucune dépendance au cwd |
+| B3 `codex/agent-native-adapters` | agent Claude, agent Codex et corpus 45 prompts | `PARTIEL`: assets et fixture terminés | benchmark routeur restant: 27/30 positifs, 0/15 négatifs, p95 chaud inférieur ou égal à 10 ms |
 | B4 `codex/agent-packaging-docs` | smoke wheel et docs repo | `TERMINÉ` | installation minimale et MCP hors checkout, cinq commandes agent testées |
 
 ### Vague C : préparer puis installer la configuration globale

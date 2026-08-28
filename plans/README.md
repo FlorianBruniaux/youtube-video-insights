@@ -3,7 +3,8 @@
 **Dernière mise à jour :** 2026-08-28
 **État du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **État du runtime agentique :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**État des skills et agents :** `EN COURS DE VALIDATION`.
+**État des skills et agents projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
+**État du routeur réel et de l'installation globale :** `NON IMPLÉMENTÉ`.
 **Readiness produit :** `UNKNOWN` jusqu'à la revue humaine P2 ; ce n'est pas un veto de développement.
 
 ## À lire maintenant
@@ -27,7 +28,7 @@ répertoire par Claude Code et Codex, sans dupliquer la logique métier :
 | Vague | Résultat | État |
 |---|---|---|
 | A | Runtime indépendant du répertoire courant, `doctor`, acquisition avec preview, export et MCP quatre outils | `TERMINÉ`, 394 tests plus 10 sous-tests et smoke wheel offline |
-| B | Trois skills communs, deux agents natifs et corpus de routage | `EN COURS`; packaging runtime déjà terminé |
+| B | Trois skills communs, deux agents natifs et corpus de routage | `PARTIEL`: assets et fixture terminés; benchmark du routeur réel restant |
 | C | Trois candidats globaux immuables pour runtime, skills et intégrations, avec diffs expurgés, digests, rollback et tests en sessions neuves | `BLOQUÉ` jusqu'à validation A et B puis trois approbations explicites |
 | H | API hébergée, worker, extension et MCP distant | `CONDITIONNEL` aux déclencheurs d'usage |
 
