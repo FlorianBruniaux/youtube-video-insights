@@ -1,0 +1,9 @@
+interface:
+  display_name: "Research YouTube Corpus"
+  short_description: "Find source-backed passages in a local corpus"
+  default_prompt: "Use $youtube-research to find source-backed passages for this question in my local YouTube corpus."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "yt-insights"
+      description: "Read-only search over the local yt-insights catalog and transcript index"
