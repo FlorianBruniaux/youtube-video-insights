@@ -4,6 +4,11 @@
 **Statut du lot actif :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **Readiness éditoriale :** `UNKNOWN` ; ce statut bloque la promotion produit, pas l'implémentation autorisée.
 
+La CLI, l'index complet et le MCP sont utilisables localement. Le statut
+`UNKNOWN` porte uniquement sur la pertinence éditoriale des classements, qui
+n'a pas encore reçu de jugement humain. Le [diagramme d'implémentation et guide
+de test](docs/IMPLEMENTATION-STATUS.md) donnent la vue opérationnelle actuelle.
+
 ## État historique avant ce lot
 
 - Baseline historique : **121 tests `PASS`** au snapshot `aebd6a474244bdf000544a076675ba43481f90f5`, avec `PYTHONPATH=src pytest -q`.
@@ -76,8 +81,20 @@ Les packs et exports ne sont pas une phase active. Ils démarrent seulement lors
 
 Ces pistes restent conditionnelles et n'ouvrent aucune promotion sans leur déclencheur.
 
+## Prochaines décisions, dans l'ordre
+
+| Priorité | Décision | Critère de sortie |
+|---:|---|---|
+| 1 | Revoir humainement l'artefact P2 | Statut explicite `PASS` ou `FAIL`, avec jugements enregistrés |
+| 2 | Utiliser CLI et MCP sur un article réel | Angle, requêtes, passages conservés et frictions consignés |
+| 3 | Corriger la première friction mesurée | Petit lot avec test d'acceptation, sans ouvrir une plateforme hébergée par défaut |
+| 4 | Évaluer MLX direct, UI ou extension | Besoin confirmé par les usages des étapes 1 à 3 |
+| 5 | Étudier hybride, graphe ou Qdrant | Échec mesuré de FTS5 ou limite SQLite reproduite |
+
 ## Documents de référence
 
 - [Plan consolidé V2](plans/2026-08-27-CONSOLIDATED-v2.md)
 - [Index et suivi](plans/README.md)
 - [Sessions parallèles](plans/PARALLEL-SESSIONS.md)
+- [État d'implémentation et tests](docs/IMPLEMENTATION-STATUS.md)
+- [Changelog](CHANGELOG.md)

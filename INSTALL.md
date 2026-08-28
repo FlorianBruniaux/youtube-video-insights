@@ -76,6 +76,11 @@ La base dérivée se trouve par défaut dans
 `output/.search/search-v1.sqlite3`. Les VTT restent la source de vérité et ne
 sont pas modifiés.
 
+Le reçu d'intégrité de l'index contient maintenant le SHA-256 de la base. Un
+index construit avec une version de développement antérieure au commit
+`4124f42` doit être reconstruit avec `yt-insights index --all` avant d'être
+utilisé par la CLI ou le MCP.
+
 Rechercher un passage :
 
 ```bash
@@ -202,11 +207,16 @@ Les commandes suivantes ne téléchargent aucune vidéo et ne contactent aucun
 LLM :
 
 ```bash
-uv run pytest -q
-uv build
+uv run --extra mcp --extra dev pytest -q
+uv lock --check
+git diff --check
 uv run yt-insights index --dry-run
 .venv/bin/python scripts/smoke_wheel.py --offline
 ```
+
+Le snapshot livré au commit `4124f42` compte 258 tests réussis. Le guide
+[État d'implémentation](docs/IMPLEMENTATION-STATUS.md) ajoute les scénarios de
+tranche 50 VTT, corpus complet, benchmark et MCP.
 
 Le smoke wheel crée deux environnements temporaires hors checkout. Il vérifie
 l’installation minimale, puis l’extra MCP. En mode `--offline`, uv ne télécharge

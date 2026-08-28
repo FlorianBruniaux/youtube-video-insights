@@ -9,8 +9,9 @@
 | Ordre | Document | Rôle |
 |---:|---|---|
 | 1 | [Roadmap produit](../ROADMAP.md) | Vérité des données, droits d'exécution et déclencheurs |
-| 2 | [Plan consolidé V2](2026-08-27-CONSOLIDATED-v2.md) | Contrats et séparation implémentation/promotion |
-| 3 | [Sessions parallèles](PARALLEL-SESSIONS.md) | Propriétés, handoff P2 et ordre de fusion |
+| 2 | [État d'implémentation](../docs/IMPLEMENTATION-STATUS.md) | Diagramme, fonctions livrées, reste et commandes de test |
+| 3 | [Plan consolidé V2](2026-08-27-CONSOLIDATED-v2.md) | Contrats et séparation implémentation/promotion |
+| 4 | [Sessions parallèles](PARALLEL-SESSIONS.md) | Propriétés, handoff P2 et ordre de fusion |
 
 ## Plans détaillés conservés
 

@@ -10,6 +10,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Timestamped transcript search with `yt-insights index`, `index --all`,
+  `index --status`, and `yt-insights search`. Results include bounded excerpts,
+  language and channel filters, timestamps, and direct YouTube links.
+- Full-corpus indexing with a disk-capacity preflight, representative 50-file
+  selection, deterministic passage identities, and atomic SQLite publication.
+- Read-only MCP server with two closed-world tools, `search_passages` and
+  `get_passage`, backed by the same search service as the CLI.
+- Optional `mcp` dependency, `yt-insights-mcp` entrypoint, versioned `uv.lock`,
+  clean-source wheel smoke test, and reproducible search benchmark script.
+- SHA-256 generation receipts for derived search indexes. Each process validates
+  the database content on first access and invalidates its cache when the file
+  identity or `ctime` changes.
+- Implementation status document with the delivered architecture, conditional
+  roadmap, Mermaid diagram, and layered test commands.
 - Local SQLite watch catalog with five new commands: `catalog import-corpus`,
   `catalog discover`, `catalog search`, `catalog stats`, and `catalog errors`.
   The catalog stores canonical videos, source membership, transcript/insight
@@ -30,6 +44,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Backend resolution now keeps endpoint and model intent separate, honors an
+  explicitly requested Ollama model, rejects unavailable models with an
+  actionable error, and falls back after failed cc-bridge probes.
+- Backend and `config show` diagnostics remove URL userinfo, query strings, and
+  fragments before printing endpoints.
+- CLI and wizard now report `USED/TOTAL` transcript characters before each real
+  LLM call and mark the 10,000-character truncation boundary. Cache hits remain
+  silent and perform no generation call.
+- Flat transcript layouts now use validated yt-dlp `.info.json` sidecars to
+  preserve channel identity instead of collapsing unrelated videos together.
 - Removed hardcoded absolute paths (`/Users/florianbruniaux/Sites/perso/yt-insights`) from `.claude/agents/yt-video-analyst.md` and `.claude/skills/yt-get-transcript.md`. Skills now assume only "run from the repo root," making them portable to any machine.
 - Reverted a regression that had leaked a specific channel slug (`output/aidevcon/...`) into `.claude/skills/yt-get-insights.md` and `yt-get-shorts.md`, `README.md`, `examples/prompt-claude-code.md`. Both skills now agree on the generic `output/transcripts/` and `output/insights/` paths.
 - Corrected the "For development" clone command in `README.md`: the repository is `youtube-video-insights`, not `yt-insights`.
@@ -37,6 +61,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Documented
 
+- README, installation guide, roadmap, changelog, plan index, and `llms.txt`
+  now distinguish `catalog.sqlite3` from the timestamped `search-v1.sqlite3`
+  index.
+- The full-corpus evidence records 3,270 documents, 183,789 passages, a
+  48.75-second build, 13.81 ms warm p95, and 258 passing tests on the measured
+  development snapshot. Editorial relevance remains unreviewed.
 - README, Claude Code instructions, `/yt-add-channel`, and the channel-routing
   hook now include the local SQLite catalog workflow.
 - README's Backends table now flags that `MLXBackend` (`backends/mlx.py`) is not wired into `resolve_backend()` despite being documented as available via `--base-url mlx`. Not fixed yet, only surfaced so it isn't relied upon by mistake.

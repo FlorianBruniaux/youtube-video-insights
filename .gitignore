@@ -9,6 +9,7 @@ tessl-2025-2026.txt
 /yt_shorts/
 /yt_shorts_clips/
 /docs/*
+!/docs/IMPLEMENTATION-STATUS.md
 !/docs/assets/
 !/docs/assets/*.jpg
 !/docs/superpowers/

@@ -18,12 +18,18 @@ License: MIT
    `yt-insights catalog discover SOURCE`
 4. Search the local catalog:
    `yt-insights catalog search QUERY [--source SLUG] [--limit N]`
-5. Audit local state:
+5. Build and search timestamped transcript passages:
+   `yt-insights index [--all|--status|--dry-run]`
+   `yt-insights search QUERY [--channel ID] [--lang CODE] [--limit N]`
+6. Expose transcript search to a local LLM client:
+   `yt-insights-mcp`
+7. Audit local catalog state:
    `yt-insights catalog stats`
    `yt-insights catalog errors [--run-id N]`
 
-The default catalog is `output/catalog.sqlite3`. Generated output and the
-database are gitignored. Use `--db PATH` to override the database path.
+The catalog defaults to `output/catalog.sqlite3`. Timestamped passage search
+defaults to `output/.search/search-v1.sqlite3`. Both databases are derived and
+gitignored. The VTT files remain the source of truth.
 
 ## Module map
 
@@ -37,6 +43,17 @@ database are gitignored. Use `--db PATH` to override the database path.
 - `src/yt_insights/shorts.py`: Short suggestions and clip extraction.
 - `src/yt_insights/catalog.py`: SQLite schema, corpus import, discovery
   ingestion, FTS5 search, run history, and durable collection errors.
+- `src/yt_insights/cli_search.py`: Click adapters for transcript index, status,
+  dry-run, and search commands.
+- `src/yt_insights/search/corpus.py`: safe VTT discovery and channel metadata
+  association.
+- `src/yt_insights/search/preflight.py`: full-corpus disk-capacity preflight.
+- `src/yt_insights/search/sqlite_fts.py`: atomic timestamped FTS5 index,
+  SHA-256 generation receipt, validation, and passage lookup.
+- `src/yt_insights/search/service.py`: shared read-only search service.
+- `src/yt_insights/mcp_server.py`: closed-world MCP facade with exactly two
+  read-only tools.
+- `src/yt_insights/mcp_entrypoint.py`: optional MCP console entrypoint.
 - `src/yt_insights/config.py`: defaults, TOML, environment variables, and CLI
   override merge.
 - `scripts/build_index.py`: Markdown/YAML index generation for `output/`.
@@ -70,6 +87,23 @@ Insight JSON is the source of truth. The expected keys are:
 
 Markdown is rendered from JSON. Writes must remain atomic. Truncated LLM
 responses with `stop_reason == "max_tokens"` must never enter the cache.
+Insight and Shorts generation receive at most 10,000 transcript characters per
+call. Timestamped FTS search indexes the full VTT content independently.
+
+## Timestamped search contract
+
+- VTT text and timestamps are authoritative.
+- A default build selects at most 50 files. `index --all` requires a disk-space
+  preflight and indexes every valid transcript.
+- `search-v1.sqlite3` is published through a sibling temporary file and
+  `os.replace()`.
+- The generation receipt binds the index `generation_id` to the database
+  SHA-256. Validation is cached only while device, inode, size, mtime, and ctime
+  remain unchanged.
+- CLI and MCP use the same `SearchService`; the MCP exposes only
+  `search_passages` and `get_passage`.
+- `catalog.sqlite3` is an inventory database. It never supplies timestamped
+  passages to `search-v1.sqlite3`.
 
 ## Constraints
 
@@ -82,8 +116,8 @@ responses with `stop_reason == "max_tokens"` must never enter the cache.
 - Prefer deterministic collection, normalization, deduplication, storage,
   scoring, and export. Use an LLM only for semantic classification, speaker
   extraction, summarization, newsletter angles, and optional reranking.
-- Keep the MCP layer thin: it must call the same Python catalog service as the
-  CLI instead of duplicating storage or collection logic.
+- Keep the MCP layer thin: it must call the same Python transcript search
+  service as the CLI instead of duplicating storage or query logic.
 
 ## Current state
 
@@ -96,21 +130,31 @@ Implemented:
 - video/artifact deduplication;
 - FTS5 search and source filtering;
 - durable run and error history;
-- CLI regression tests.
+- timestamped full-corpus FTS5 indexing and passage search;
+- read-only MCP tools for search and passage retrieval;
+- backend/model identity reporting and secret-safe endpoint display;
+- clean-source wheel smoke tests and 258 automated tests on commit `4124f42`.
 
 Planned:
 
+- human relevance review for the frozen P2 search artifact;
+- chunked LLM analysis for transcripts longer than 10,000 characters;
+- explicit MLX selection in the backend resolver;
 - YouTube Data API and channel RSS discovery adapters;
 - metadata refresh policy and quota tracking;
 - deterministic Tech/Product/AI relevance scoring;
 - newsletter selection export;
-- MCP server exposing catalog discovery, search, inspection, and export;
+- local UI or browser extension only after measured workflow friction;
+- hosted API only after a real remote or multi-user requirement;
 - optional semantic embeddings only if FTS5 recall proves insufficient.
 
 ## Documentation
 
 - `README.md`: installation, commands, workflows, and operational behavior.
 - `CHANGELOG.md`: unreleased and released changes.
+- `ROADMAP.md`: delivered phases, promotion gates, and conditional work.
+- `docs/IMPLEMENTATION-STATUS.md`: current diagram, remaining work, and test
+  commands.
 - `CLAUDE.md`: repository constraints and agent workflow.
 - `docs/superpowers/specs/2026-08-26-youtube-newsletter-watch-design.md`:
   MVP architecture and source trade-offs.

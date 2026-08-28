@@ -6,6 +6,10 @@
 Turn YouTube channels into a local, searchable research corpus: transcripts,
 structured insights, SQLite/FTS5 search, reports, and Shorts.
 
+The current implementation can index every timestamped VTT passage and expose
+the same search through the CLI or two read-only MCP tools. See the
+[implementation status, diagram, and test guide](docs/IMPLEMENTATION-STATUS.md).
+
 ![yt-insights workflow: YouTube channels, playlists, and videos become transcripts, structured insights, a deduplicated SQLite/FTS5 index, search results, reports, and Short suggestions.](docs/assets/yt-insights-workflow.jpg)
 
 ---
@@ -16,19 +20,26 @@ structured insights, SQLite/FTS5 search, reports, and Shorts.
 |---|---|---|
 | Analyze a channel | `yt-insights run https://www.youtube.com/@ChannelName` | Transcripts, structured insights, and an aggregate report |
 | Index an existing corpus | `yt-insights catalog import-corpus ./output` | One deduplicated SQLite catalog with durable import errors |
-| Search locally | `yt-insights catalog search "AI product discovery"` | Ranked matches across titles, insights, and cleaned transcripts |
+| Build the timestamped search index | `yt-insights index --all` | A derived FTS5 index over every VTT passage |
+| Find a sourced passage | `yt-insights search "AI product discovery"` | Ranked excerpts, timestamps, and direct YouTube links |
+| Query from an LLM client | `yt-insights-mcp` | Read-only `search_passages` and `get_passage` tools |
 
-Analysis uses a local or cloud LLM. Catalog import and full-text search do not.
-Both pipelines are safe to rerun: cached analyses are reused, and unchanged
-catalog artifacts are not duplicated.
+Analysis uses a local or cloud LLM. Catalog import, transcript indexing, and
+both search commands do not. Repeated runs reuse analysis caches and avoid
+duplicating unchanged catalog artifacts.
 
 ---
 
 ## What it's actually for
 
-Point it at any YouTube channel and get two things back. First, a structured insight file per video: subject, key takeaways, tools mentioned, actionable advice. On top of that, one aggregate report that synthesises patterns across the whole channel, so you see the editorial logic, recurring angles, what gets covered a lot and what doesn't.
+Point it at a YouTube channel to keep the VTT sources locally, generate one
+structured insight file per video, and build an aggregate report across the
+channel. The same VTT corpus can be indexed as timestamped passages, searched
+from the CLI, or queried by an LLM through MCP while preserving the source link.
 
-The second pipeline is about Shorts. The same transcripts go through a scorer that finds the top 3 moments per video, 30-90 seconds each, with verbatim text and precise timestamps. Pick the one you want, run one more command, and yt-dlp downloads just that segment rather than the full video.
+The Shorts pipeline uses those transcripts to score the top three moments per
+video, with verbatim text and precise timestamps. After you choose one,
+`yt-dlp` downloads that segment instead of the full video.
 
 Use it for content research, competitive monitoring, editorial analysis, or
 building a searchable source library across several channels. The exported JSON
@@ -37,6 +48,21 @@ and VTT files can also feed downstream RAG or dataset workflows.
 ---
 
 ## How it works
+
+### Local knowledge path
+
+```mermaid
+flowchart LR
+    A[YouTube source] --> B[VTT + metadata]
+    B --> C[search-v1.sqlite3]
+    C --> D[yt-insights search]
+    C --> E[Read-only MCP]
+    D --> F[Sourced article research]
+    E --> F
+```
+
+The local catalog remains a separate inventory database. The timestamped search
+index derives directly from VTT files and can be rebuilt without changing them.
 
 <details>
 <summary>Insight pipeline</summary>
@@ -48,7 +74,7 @@ YouTube URL / channel
    yt-dlp (subprocess)          Downloads auto-generated subtitles
         │
         ▼
-   yt_transcripts/*.vtt
+   output/transcripts/*.vtt
         │
         ▼
    cleaner.py                   Deduplicates lines, strips timestamps
@@ -58,8 +84,8 @@ YouTube URL / channel
    ThreadPoolExecutor           cc-bridge │ Ollama │ Anthropic API
    (3× remote, 1× Ollama)       OpenAI-compatible endpoint supported
         │
-        ├──► yt_insights/<video>.json   ← source of truth (atomic write)
-        └──► yt_insights/<video>.md     ← rendered from JSON
+        ├──► output/insights/<video>.json   ← source of truth (atomic write)
+        └──► output/insights/<video>.md     ← rendered from JSON
                 │
                 ▼
         reporter.py
@@ -76,7 +102,7 @@ YouTube URL / channel
 <summary>Shorts suggestion pipeline</summary>
 
 ```
-yt_transcripts/*.vtt
+output/transcripts/*.vtt
         │
         ▼
    vtt_parser.py                Timestamped dedup: first-occurrence tracking
@@ -89,9 +115,9 @@ yt_transcripts/*.vtt
    ThreadPoolExecutor           Identifies top 3 moments (30-90s) per talk:
                                 hook, score/5, verbatim, timestamps
         │
-        ├──► yt_shorts/<video>.json   ← suggestion cache (atomic write)
-        ├──► yt_shorts/<video>.md     ← human-readable suggestions
-        └──► yt_shorts/INDEX.md       ← global index sorted by score
+        ├──► output/shorts/<video>.json   ← suggestion cache (atomic write)
+        ├──► output/shorts/<video>.md     ← human-readable suggestions
+        └──► output/shorts/INDEX.md       ← global index sorted by score
                                          across all talks
         │ (optional phase 2)
         ▼
@@ -100,7 +126,7 @@ yt_transcripts/*.vtt
                                 not the full video)
         │
         ▼
-   yt_shorts_clips/<title>.mp4
+   output/clips/<title>.mp4
 ```
 
 </details>
@@ -167,7 +193,7 @@ yt-insights report
 yt-insights suggest-shorts
 
 # Suggest Shorts for a single talk
-yt-insights suggest-shorts --vtt yt_transcripts/20260423-talk.vtt
+yt-insights suggest-shorts --vtt output/transcripts/20260423-talk.vtt
 
 # Regenerate the global Shorts index (no LLM call)
 yt-insights suggest-shorts --index-only
@@ -184,13 +210,14 @@ Downloading subtitles from https://www.youtube.com/@DevWithAIYoutube ...
   47 subtitle file(s) downloaded.
 
 Analyzing 47 video(s) with model 'qwen3:8b' ...
+Transcript input: 10000/45678 characters (truncated)
   47 insight(s) generated:
-    yt_insights/<video>.md
+    output/insights/<video>.md
 
 Generating aggregate report ...
 Resolved backend: backend=ollama endpoint=http://127.0.0.1:11434/v1 model=qwen3:8b
-  Aggregate  → yt_insights/AGGREGATE_REPORT.md
-  Full       → yt_insights/FULL_REPORT.md
+  Aggregate  → output/insights/AGGREGATE_REPORT.md
+  Full       → output/insights/FULL_REPORT.md
 Done.
 ```
 
@@ -362,17 +389,17 @@ yt-insights run SOURCE [OPTIONS]
 
   SOURCE  YouTube channel, playlist, video URL, or local file with one URL per line.
 
-  --skip-download           Skip yt-dlp, use existing VTT files in yt_transcripts/
+  --skip-download           Skip yt-dlp, use existing VTT files in output/transcripts/
   --force                   Re-analyze even if insight cache exists
   --model TEXT              Override LLM model
   --base-url TEXT           Override LLM API base URL
   --concurrency INTEGER     Max parallel LLM calls (0 = auto: 3 for API, 1 for Ollama)
-  --output-dir PATH         Base directory for yt_transcripts/ and yt_insights/
+  --output-dir PATH         Base directory for transcripts/ and insights/
   --sleep-requests INTEGER  Seconds to wait between yt-dlp requests (rate limiting)
 
 yt-insights report [OPTIONS]
 
-  --output PATH    Output path (default: yt_insights/AGGREGATE_REPORT.md)
+  --output PATH    Output path (default: <insights_dir>/AGGREGATE_REPORT.md)
   --model TEXT
   --base-url TEXT
 
@@ -387,7 +414,7 @@ yt-insights suggest-shorts [OPTIONS]
   --index-only       Regenerate INDEX.md only, no LLM calls
   --model TEXT       Override LLM model
   --base-url TEXT    Override LLM API base URL
-  --output-dir PATH  Base directory (expects yt_transcripts/, yt_insights/, yt_shorts/)
+  --output-dir PATH  Base output directory (default: output/)
 
 yt-insights generate-short VIDEO_ID [OPTIONS]
 
@@ -397,17 +424,26 @@ yt-insights generate-short VIDEO_ID [OPTIONS]
   --start TEXT       Start timestamp HH:MM:SS  [required]
   --end TEXT         End timestamp HH:MM:SS  [required]
   --title TEXT       Short title for output filename
-  --output-dir PATH  Directory for clip output (default: yt_shorts_clips/)
+  --output-dir PATH  Directory for clip output (default: output/clips/)
+  --output-format TEXT  Container format: mp4, webm, or mkv
 
 yt-insights config show [OPTIONS]
 
-  Print the resolved configuration (active values after merging all layers).
-  Shows which source each value comes from: default, config.toml, env var, or CLI flag.
+  Print effective values and sources without probing or resolving a backend.
+  Endpoint diagnostics remove URL credentials, query strings, and fragments.
   Accepts --model and --base-url to simulate overrides before running.
 
 yt-insights config init
 
   Create ~/.config/yt-insights/config.toml with all defaults commented.
+
+yt-insights index [--dry-run|--status|--all]
+
+  Build or validate the timestamped SQLite transcript index.
+
+yt-insights search QUERY [--channel ID] [--lang CODE] [--limit 1..20] [--json]
+
+  Search timestamped passages in the derived transcript index.
 ```
 
 </details>
@@ -420,25 +456,31 @@ yt-insights config init
 <summary>Show directory layout and example files</summary>
 
 ```
-yt_transcripts/
-  20260101 - Video Title [videoID].fr.vtt   # raw subtitles (gitignored)
-
-yt_insights/
-  20260101 - Video Title [videoID].fr.json  # source of truth
-  20260101 - Video Title [videoID].fr.md    # rendered from JSON
-  AGGREGATE_REPORT.md                       # narrative synthesis
-  AGGREGATE_REPORT.json                     # top tools + per-video index
-
-yt_shorts/
-  20260101 - Video Title [videoID].fr.json  # suggestion cache (atomic write)
-  20260101 - Video Title [videoID].fr.md    # human-readable: timestamps, hook, score, verbatim
-  INDEX.md                                  # global table sorted by score across all talks
-
-yt_shorts_clips/
-  talk-title_000510.mp4                     # downloaded segment (generate-short output)
+output/
+  transcripts/
+    20260101 - Video Title [videoID].fr.vtt   # raw subtitles
+    20260101 - Video Title [videoID].info.json # channel metadata sidecar
+  insights/
+    20260101 - Video Title [videoID].fr.json  # source of truth
+    20260101 - Video Title [videoID].fr.md    # rendered from JSON
+    AGGREGATE_REPORT.md                       # narrative synthesis
+    AGGREGATE_REPORT.json                     # top tools + per-video index
+  shorts/
+    20260101 - Video Title [videoID].fr.json  # suggestion cache
+    20260101 - Video Title [videoID].fr.md    # timestamps, hook, score, verbatim
+    INDEX.md                                  # table sorted across talks
+  clips/
+    talk-title_000510.mp4                     # downloaded segment
+  catalog.sqlite3                             # inventory database
+  .search/search-v1.sqlite3                   # timestamped passage index
 ```
 
-Example `yt_shorts/video.md` entry:
+Full-channel automation may place the same `transcripts/`, `insights/`, and
+`shorts/` subdirectories under `output/<channel-slug>/`. The corpus scanner
+supports both layouts. Flat layouts require the adjacent `.info.json` sidecar
+to preserve channel identity.
+
+Example `output/shorts/video.md` entry:
 
 ```markdown
 ## Short 1 — Score : 5/5
@@ -542,6 +584,11 @@ All keys are optional. CLI flags and `YT_INSIGHTS_*` env vars take precedence ov
 | Clip download | `yt-dlp --download-sections`, segment only, no full-video fetch |
 | Local catalog | SQLite storage for canonical videos, sources, transcripts, insights, runs, and errors |
 | Full-text search | FTS5 across titles, sources, insight text, and cleaned transcripts |
+| Timestamped passage index | Full VTT corpus in `search-v1.sqlite3`, with deterministic excerpts and YouTube links |
+| MCP access | Read-only `search_passages` and `get_passage` tools over the same search service as the CLI |
+| Index integrity | Generation receipt bound to the database SHA-256; cached validation invalidated by file identity and `ctime` |
+| Backend identity | CLI reports the resolved backend, endpoint, and exact model without exposing URL credentials |
+| LLM input visibility | CLI reports used and total transcript characters before each real generation call |
 
 ---
 
@@ -551,6 +598,8 @@ Load [`llms.txt`](llms.txt) for the tracked, machine-readable project snapshot:
 commands, modules, storage model, invariants, generated data, and current gaps.
 The architecture rationale and implementation sequence live under
 [`docs/superpowers/`](docs/superpowers/).
+The [implementation status](docs/IMPLEMENTATION-STATUS.md) separates delivered
+features, conditional work, and reproducible validation commands.
 
 ---
 
@@ -633,7 +682,13 @@ Run the pipeline on any video, skip any step you have already done. The agent ne
 ## Contributing
 
 Open a PR. No CLA is required. Run `uv sync --extra mcp --extra dev`, then the
-test suite before submitting a change.
+following checks before submitting a change:
+
+```bash
+uv run --extra mcp --extra dev pytest -q
+uv lock --check
+git diff --check
+```
 
 ---
 
