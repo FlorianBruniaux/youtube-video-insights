@@ -8,6 +8,8 @@ from pathlib import Path
 from mcp import Client
 import pytest
 
+from yt_insights.catalog import Catalog
+from yt_insights.downloader import VideoInfo, VideoListResult
 from yt_insights.search.corpus import CorpusManifest
 from yt_insights.search.models import (
     DocumentRef,
@@ -100,33 +102,115 @@ def _run(coroutine: object) -> object:
     return asyncio.run(coroutine)  # type: ignore[arg-type]
 
 
-def test_server_exposes_exactly_two_read_only_closed_world_tools(tmp_path: Path) -> None:
+def _catalog_database(tmp_path: Path) -> Path:
+    database = tmp_path / "catalog.sqlite3"
+    with Catalog(database) as catalog:
+        catalog.checkpoint()
+    return database
+
+
+def _server(search_database: Path, tmp_path: Path):
+    from yt_insights.mcp_server import create_server
+
+    return create_server(search_database, _catalog_database(tmp_path))
+
+
+def test_server_exposes_exactly_four_read_only_closed_world_tools(tmp_path: Path) -> None:
     from yt_insights.mcp_server import create_server
 
     database, _passage = _indexed_passage(tmp_path)
+    catalog_database = _catalog_database(tmp_path)
 
     async def scenario() -> None:
-        async with Client(create_server(database)) as client:
+        async with Client(create_server(database, catalog_database)) as client:
             tools = (await client.list_tools()).tools
 
-        assert [tool.name for tool in tools] == ["search_passages", "get_passage"]
+        assert [tool.name for tool in tools] == [
+            "list_corpora",
+            "search_videos",
+            "search_passages",
+            "get_passage",
+        ]
         for tool in tools:
             assert tool.annotations is not None
             assert tool.annotations.read_only_hint is True
             assert tool.annotations.destructive_hint is False
+            assert tool.annotations.idempotent_hint is True
             assert tool.annotations.open_world_hint is False
             assert "database" not in tool.input_schema.get("properties", {})
             assert "path" not in tool.input_schema.get("properties", {})
             assert "sql" not in tool.input_schema.get("properties", {})
             assert "url" not in tool.input_schema.get("properties", {})
-        search_schema = tools[0].input_schema["properties"]
+        assert tools[0].input_schema.get("properties", {}) == {}
+        video_schema = tools[1].input_schema["properties"]
+        assert set(video_schema) == {"query", "source", "limit"}
+        assert video_schema["limit"]["minimum"] == 1
+        assert video_schema["limit"]["maximum"] == 20
+        search_schema = tools[2].input_schema["properties"]
         assert search_schema["query"]["maxLength"] == 500
         assert search_schema["limit"]["minimum"] == 1
         assert search_schema["limit"]["maximum"] == 20
-        passage_schema = tools[1].input_schema["properties"]["passage_id"]
+        passage_schema = tools[3].input_schema["properties"]["passage_id"]
         assert passage_schema["pattern"] == "^[0-9a-f]{64}$"
 
     _run(scenario())
+
+
+def test_discovery_tools_return_bounded_metadata_without_paths_or_transcripts(
+    tmp_path: Path,
+) -> None:
+    from yt_insights.mcp_server import create_server
+
+    search_database, _passage = _indexed_passage(tmp_path)
+    catalog_database = tmp_path / "catalog.sqlite3"
+    with Catalog(catalog_database) as catalog:
+        for index in range(105):
+            catalog.ingest_discovery(
+                f"https://www.youtube.com/@source-{index:03d}/videos",
+                VideoListResult(
+                    videos=[
+                        VideoInfo(
+                            video_id=f"V{index:010d}",
+                            title=f"Metadata needle {index:03d}",
+                            upload_date="20260828",
+                        )
+                    ],
+                    errors=[],
+                    returncode=0,
+                ),
+            )
+        catalog.checkpoint()
+
+    before_search_database = search_database.read_bytes()
+    before_database = catalog_database.read_bytes()
+    before_sidecars = sorted(path.name for path in tmp_path.iterdir())
+
+    async def scenario() -> None:
+        async with Client(create_server(search_database, catalog_database)) as client:
+            corpora = await client.call_tool("list_corpora", {})
+            found = await client.call_tool(
+                "search_videos",
+                {"query": "metadata needle", "source": "source-000", "limit": 20},
+            )
+
+        assert corpora.is_error is False
+        assert found.is_error is False
+        assert corpora.structured_content is not None
+        assert found.structured_content is not None
+        assert len(corpora.structured_content["corpora"]) == 100
+        assert len(found.structured_content["videos"]) <= 20
+        rendered = json.dumps(
+            [corpora.structured_content, found.structured_content], ensure_ascii=False
+        )
+        assert str(tmp_path) not in rendered
+        assert "SELECT " not in rendered
+        assert "Traceback" not in rendered
+        assert "transcript" not in rendered.lower()
+
+    _run(scenario())
+    assert search_database.read_bytes() == before_search_database
+    assert catalog_database.read_bytes() == before_database
+    assert sorted(path.name for path in tmp_path.iterdir()) == before_sidecars
 
 
 def test_search_passages_uses_the_local_index_and_bounds_its_payload(tmp_path: Path) -> None:
@@ -135,7 +219,7 @@ def test_search_passages_uses_the_local_index_and_bounds_its_payload(tmp_path: P
     database, passage = _indexed_passage(tmp_path, text="needle " + "context " * 500)
 
     async def scenario() -> None:
-        async with Client(create_server(database)) as client:
+        async with Client(_server(database, tmp_path)) as client:
             result = await client.call_tool(
                 "search_passages",
                 {"query": "needle", "channel": "channel-a", "language": "en", "limit": 20},
@@ -158,7 +242,7 @@ def test_search_passages_bounds_the_complete_mcp_result_below_64_kib(tmp_path: P
     database = _large_index(tmp_path)
 
     async def scenario() -> None:
-        async with Client(create_server(database)) as client:
+        async with Client(_server(database, tmp_path)) as client:
             result = await client.call_tool(
                 "search_passages", {"query": "needle", "limit": 20}
             )
@@ -179,7 +263,7 @@ def test_get_passage_returns_one_bounded_source_backed_record(tmp_path: Path) ->
     )
 
     async def scenario() -> None:
-        async with Client(create_server(database)) as client:
+        async with Client(_server(database, tmp_path)) as client:
             result = await client.call_tool("get_passage", {"passage_id": passage.passage_id})
 
         assert result.is_error is False
@@ -199,16 +283,13 @@ def test_invalid_tool_input_and_index_errors_are_clean_mcp_errors(tmp_path: Path
     database, _passage = _indexed_passage(tmp_path)
 
     async def scenario() -> None:
-        async with Client(create_server(database)) as client:
+        async with Client(_server(database, tmp_path)) as client:
             invalid_query = await client.call_tool("search_passages", {"query": "x" * 501})
             invalid_limit = await client.call_tool(
                 "search_passages", {"query": "safe", "limit": 21}
             )
             invalid_id = await client.call_tool("get_passage", {"passage_id": "A" * 64})
-        async with Client(create_server(tmp_path / "missing.sqlite3")) as client:
-            missing_index = await client.call_tool("search_passages", {"query": "safe"})
-
-        for result in (invalid_query, invalid_limit, invalid_id, missing_index):
+        for result in (invalid_query, invalid_limit, invalid_id):
             assert result.is_error is True
             assert result.structured_content is None
             rendered = " ".join(getattr(item, "text", "") for item in result.content)
@@ -216,6 +297,11 @@ def test_invalid_tool_input_and_index_errors_are_clean_mcp_errors(tmp_path: Path
             assert str(database) not in rendered
 
     _run(scenario())
+
+    with pytest.raises(RuntimeError, match="Search database is unavailable"):
+        create_server(tmp_path / "missing.sqlite3", _catalog_database(tmp_path))
+    with pytest.raises(RuntimeError, match="Catalog database is unavailable"):
+        create_server(database, tmp_path / "missing-catalog.sqlite3")
 
 
 def test_search_passages_rejects_in_place_corruption_after_mtime_is_restored(
@@ -232,18 +318,10 @@ def test_search_passages_rejects_in_place_corruption_after_mtime_is_restored(
         connection.commit()
     os.utime(database, ns=(original.st_atime_ns, original.st_mtime_ns))
 
-    async def scenario() -> None:
-        async with Client(create_server(database)) as client:
-            result = await client.call_tool("search_passages", {"query": "absent"})
+    with pytest.raises(RuntimeError, match="Search database is unavailable") as raised:
+        _server(database, tmp_path)
 
-        assert result.is_error is True
-        assert result.structured_content is None
-        rendered = result.model_dump_json(by_alias=True)
-        assert "Search index is unavailable" in rendered
-        assert '"hits":[]' not in rendered
-        assert "escape.vtt" not in rendered
-
-    _run(scenario())
+    assert "escape.vtt" not in str(raised.value)
 
 
 def test_pre_handler_validation_never_reflects_invalid_values_or_extra_fields(
@@ -262,10 +340,12 @@ def test_pre_handler_validation_never_reflects_invalid_values_or_extra_fields(
         "SECRET_PASSAGE_CANARY",
         "SECRET_EXTRA_FIELD",
         "SECRET_EXTRA_VALUE",
+        "SECRET_VIDEO_QUERY",
+        "SECRET_CORPUS_VALUE",
     }
 
     async def scenario() -> list[object]:
-        async with Client(create_server(database)) as client:
+        async with Client(_server(database, tmp_path)) as client:
             return [
                 await client.call_tool(
                     "search_passages", {"query": ["SECRET_QUERY_CANARY"]}
@@ -298,6 +378,12 @@ def test_pre_handler_validation_never_reflects_invalid_values_or_extra_fields(
                         "SECRET_EXTRA_FIELD": "SECRET_EXTRA_VALUE",
                     },
                 ),
+                await client.call_tool(
+                    "search_videos", {"query": ["SECRET_VIDEO_QUERY"]}
+                ),
+                await client.call_tool(
+                    "list_corpora", {"unexpected": "SECRET_CORPUS_VALUE"}
+                ),
             ]
 
     results = _run(scenario())
@@ -320,18 +406,29 @@ def test_get_passage_reports_a_concurrent_database_replacement_as_index_error(
     database, _passage = _indexed_passage(tmp_path)
 
     class ReplacingIndex(SQLiteFtsIndex):
+        armed = False
+
+        def status(self):
+            report = super().status()
+            self.armed = True
+            return report
+
         def _require_database_identity(
             self, expected: tuple[int, int, int, int, int]
         ) -> None:
-            replacement = database.with_suffix(".replacement")
-            replacement.write_bytes(database.read_bytes())
-            os.replace(replacement, database)
+            if self.armed:
+                self.armed = False
+                replacement = database.with_suffix(".replacement")
+                replacement.write_bytes(database.read_bytes())
+                os.replace(replacement, database)
             super()._require_database_identity(expected)
 
     monkeypatch.setattr(mcp_server, "SQLiteFtsIndex", ReplacingIndex)
 
     async def scenario() -> None:
-        async with Client(mcp_server.create_server(database)) as client:
+        async with Client(
+            mcp_server.create_server(database, _catalog_database(tmp_path))
+        ) as client:
             result = await client.call_tool("get_passage", {"passage_id": "f" * 64})
 
         assert result.is_error is True
@@ -342,31 +439,46 @@ def test_get_passage_reports_a_concurrent_database_replacement_as_index_error(
     _run(scenario())
 
 
-def test_main_prefers_an_explicit_database_over_the_environment(
+def test_main_prefers_explicit_databases_over_the_environment(
     tmp_path: Path, monkeypatch
 ) -> None:
     import yt_insights.mcp_server as mcp_server
 
-    explicit = tmp_path / "explicit.sqlite3"
+    explicit_search = tmp_path / "explicit-search.sqlite3"
+    explicit_catalog = tmp_path / "explicit-catalog.sqlite3"
     monkeypatch.setenv("YT_INSIGHTS_SEARCH_DATABASE", str(tmp_path / "environment.sqlite3"))
+    monkeypatch.setenv(
+        "YT_INSIGHTS_CATALOG_DATABASE", str(tmp_path / "environment-catalog.sqlite3")
+    )
     captured: dict[str, object] = {}
 
     class FakeServer:
         def run(self, transport: str) -> None:
             captured["transport"] = transport
 
-    monkeypatch.setattr(mcp_server, "create_server", lambda database: captured.update(database=database) or FakeServer())
+    monkeypatch.setattr(
+        mcp_server,
+        "create_server",
+        lambda search_database, catalog_database: captured.update(
+            search_database=search_database, catalog_database=catalog_database
+        )
+        or FakeServer(),
+    )
 
-    mcp_server.main(explicit)
+    mcp_server.main(explicit_search, explicit_catalog)
 
-    assert captured == {"database": explicit, "transport": "stdio"}
+    assert captured == {
+        "search_database": explicit_search,
+        "catalog_database": explicit_catalog,
+        "transport": "stdio",
+    }
 
 
 def test_main_uses_the_environment_then_the_configured_data_root(tmp_path: Path, monkeypatch) -> None:
     import yt_insights.mcp_server as mcp_server
     from yt_insights import config as config_module
 
-    captured: list[Path] = []
+    captured: list[tuple[Path, Path]] = []
 
     class FakeServer:
         def run(self, transport: str) -> None:
@@ -375,16 +487,44 @@ def test_main_uses_the_environment_then_the_configured_data_root(tmp_path: Path,
     monkeypatch.setattr(
         mcp_server,
         "create_server",
-        lambda database: captured.append(database) or FakeServer(),
+        lambda search_database, catalog_database: captured.append(
+            (search_database, catalog_database)
+        )
+        or FakeServer(),
     )
-    environment = tmp_path / "environment.sqlite3"
+    environment_search = tmp_path / "environment-search.sqlite3"
+    environment_catalog = tmp_path / "environment-catalog.sqlite3"
     config_path = tmp_path / "config.toml"
     data_root = tmp_path / "configured-corpus"
     config_path.write_text(f'data_root = "{data_root}"\n', encoding="utf-8")
     monkeypatch.setattr(config_module, "_CONFIG_PATH", config_path)
-    monkeypatch.setenv("YT_INSIGHTS_SEARCH_DATABASE", str(environment))
+    monkeypatch.setenv("YT_INSIGHTS_SEARCH_DATABASE", str(environment_search))
+    monkeypatch.setenv("YT_INSIGHTS_CATALOG_DATABASE", str(environment_catalog))
     mcp_server.main()
     monkeypatch.delenv("YT_INSIGHTS_SEARCH_DATABASE")
+    monkeypatch.delenv("YT_INSIGHTS_CATALOG_DATABASE")
     mcp_server.main()
 
-    assert captured == [environment, data_root / ".search" / "search-v1.sqlite3"]
+    assert captured == [
+        (environment_search, environment_catalog),
+        (
+            data_root / ".search" / "search-v1.sqlite3",
+            data_root / "catalog.sqlite3",
+        ),
+    ]
+
+
+def test_explicit_invalid_environment_database_never_falls_back_to_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.mcp_server as mcp_server
+
+    search_database, _passage = _indexed_passage(tmp_path)
+    catalog_database = _catalog_database(tmp_path)
+    monkeypatch.setenv("YT_INSIGHTS_SEARCH_DATABASE", str(search_database))
+    monkeypatch.setenv("YT_INSIGHTS_CATALOG_DATABASE", "relative-catalog.sqlite3")
+
+    with pytest.raises(RuntimeError, match="Catalog database must be an absolute path"):
+        mcp_server.main()
+
+    assert catalog_database.exists()

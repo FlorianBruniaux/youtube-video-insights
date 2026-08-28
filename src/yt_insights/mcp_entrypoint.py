@@ -19,7 +19,11 @@ def main() -> None:
         )
         raise SystemExit(2) from None
 
-    run_server()
+    try:
+        run_server()
+    except RuntimeError as error:
+        print(f"yt-insights MCP startup failed: {error}", file=sys.stderr)
+        raise SystemExit(2) from None
 
 
 if __name__ == "__main__":

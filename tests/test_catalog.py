@@ -370,6 +370,59 @@ class CatalogSearchTests(unittest.TestCase):
                 )
             self.assertEqual(excluded, [])
 
+    def test_read_only_discovery_queries_are_bounded_stable_and_non_mutating(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            corpus = base / "corpus"
+            _write_video_artifacts(
+                corpus,
+                channel="zeta-channel",
+                language="en",
+                transcript="A shared deterministic signal in a transcript.",
+                video_id="zeta123ABCD",
+            )
+            _write_video_artifacts(
+                corpus,
+                channel="alpha-channel",
+                language="en",
+                transcript="A shared deterministic signal in a transcript.",
+                video_id="alpha12ABCD",
+            )
+            database = base / "catalog.sqlite3"
+            with Catalog(database) as catalog:
+                catalog.import_corpus(corpus)
+                catalog.checkpoint()
+
+            before_database = database.read_bytes()
+            before_names = sorted(path.name for path in base.iterdir())
+            with Catalog.open_read_only(database) as reader:
+                corpora = reader.list_corpora(limit=100)
+                videos = reader.search_videos("shared deterministic", limit=20)
+
+            self.assertEqual(
+                [summary.source for summary in corpora],
+                ["alpha-channel", "zeta-channel"],
+            )
+            self.assertEqual(
+                [item.video_id for item in videos],
+                sorted(item.video_id for item in videos),
+            )
+            self.assertTrue(all(not hasattr(item, "highlight") for item in videos))
+            self.assertEqual(database.read_bytes(), before_database)
+            self.assertEqual(sorted(path.name for path in base.iterdir()), before_names)
+
+    def test_read_only_discovery_rejects_limits_outside_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / "catalog.sqlite3"
+            with Catalog(database) as catalog:
+                catalog.checkpoint()
+
+            with Catalog.open_read_only(database) as reader:
+                with self.assertRaisesRegex(ValueError, "between 1 and 100"):
+                    reader.list_corpora(limit=101)
+                with self.assertRaisesRegex(ValueError, "between 1 and 20"):
+                    reader.search_videos("query", limit=21)
+
 
 class CatalogDiscoveryTests(unittest.TestCase):
     def test_discovery_upserts_videos_and_persists_partial_errors(self) -> None:

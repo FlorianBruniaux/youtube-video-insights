@@ -166,6 +166,24 @@ class SearchResult:
 
 
 @dataclass(frozen=True)
+class CorpusSummary:
+    source: str
+    video_count: int
+    artifact_count: int
+
+
+@dataclass(frozen=True)
+class VideoSearchResult:
+    video_id: str
+    title: str
+    published_at: str | None
+    sources: tuple[str, ...]
+    sources_truncated: bool
+    watch_url: str
+    rank: float
+
+
+@dataclass(frozen=True)
 class _ArtifactName:
     published_at: str
     title: str
@@ -397,6 +415,11 @@ class Catalog:
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
         self.close()
+
+    @staticmethod
+    def open_read_only(db_path: Path) -> "ReadOnlyCatalog":
+        """Open catalog discovery queries without locks, journals, or writes."""
+        return ReadOnlyCatalog(db_path)
 
     def close(self) -> None:
         connection = self._connection
@@ -1035,3 +1058,231 @@ class Catalog:
             runs=count("ingestion_runs"),
             errors=count("collection_errors"),
         )
+
+
+_CatalogIdentity = tuple[int, int, int, int, int]
+
+
+class ReadOnlyCatalog:
+    """Validated immutable catalog view used by read-only integrations."""
+
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = Path(db_path)
+        if not self.db_path.is_absolute():
+            raise CatalogError("catalog database path must be absolute")
+        self._identity = self._database_identity()
+        self._reject_uncheckpointed_wal()
+        self._connection: sqlite3.Connection | None = None
+        try:
+            self._connection = sqlite3.connect(
+                f"{self.db_path.as_uri()}?mode=ro&immutable=1",
+                uri=True,
+            )
+            self._connection.row_factory = sqlite3.Row
+            self._connection.execute("PRAGMA query_only = ON")
+            self._validate_schema()
+            self._require_database_identity()
+        except CatalogError:
+            self.close()
+            raise
+        except (OSError, sqlite3.Error, TypeError, ValueError) as exc:
+            self.close()
+            raise CatalogError("catalog database is unavailable or invalid") from exc
+
+    def __enter__(self) -> "ReadOnlyCatalog":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        connection = self._connection
+        self._connection = None
+        if connection is not None:
+            connection.close()
+
+    def _database_identity(self) -> _CatalogIdentity:
+        try:
+            details = self.db_path.lstat()
+        except (FileNotFoundError, OSError) as exc:
+            raise CatalogError("catalog database is unavailable or invalid") from exc
+        if not stat.S_ISREG(details.st_mode):
+            raise CatalogError("catalog database is unavailable or invalid")
+        return (
+            details.st_dev,
+            details.st_ino,
+            details.st_size,
+            details.st_mtime_ns,
+            details.st_ctime_ns,
+        )
+
+    def _require_database_identity(self) -> None:
+        self._reject_uncheckpointed_wal()
+        if self._database_identity() != self._identity:
+            raise CatalogError("catalog database changed during access")
+
+    def _reject_uncheckpointed_wal(self) -> None:
+        wal_path = self.db_path.with_name(self.db_path.name + "-wal")
+        try:
+            details = wal_path.lstat()
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise CatalogError("catalog database is unavailable or invalid") from exc
+        if not stat.S_ISREG(details.st_mode) or details.st_size:
+            raise CatalogError("catalog database has uncheckpointed changes")
+
+    def _connection_or_raise(self) -> sqlite3.Connection:
+        if self._connection is None:
+            raise CatalogError("catalog database is closed")
+        return self._connection
+
+    def _validate_schema(self) -> None:
+        connection = self._connection_or_raise()
+        quick_check = connection.execute("PRAGMA quick_check").fetchone()
+        if quick_check is None or quick_check[0] != "ok":
+            raise CatalogError("catalog database is unavailable or invalid")
+        row = connection.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
+        if row is None or int(row["version"]) != _SCHEMA_VERSION:
+            raise CatalogError("catalog database is unavailable or invalid")
+        required = {
+            "artifacts",
+            "schema_meta",
+            "video_search",
+            "video_sources",
+            "videos",
+        }
+        present = {
+            str(item["name"])
+            for item in connection.execute(
+                "SELECT name FROM sqlite_master WHERE type IN ('table', 'view')"
+            )
+        }
+        if not required.issubset(present):
+            raise CatalogError("catalog database is unavailable or invalid")
+
+    @staticmethod
+    def _require_limit(limit: int, *, maximum: int) -> None:
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= maximum
+        ):
+            raise ValueError(f"limit must be between 1 and {maximum}")
+
+    def list_corpora(self, *, limit: int = 100) -> tuple[CorpusSummary, ...]:
+        self._require_limit(limit, maximum=100)
+        self._require_database_identity()
+        connection = self._connection_or_raise()
+        try:
+            rows = connection.execute(
+                """
+                SELECT
+                    video_sources.source_slug AS source,
+                    COUNT(DISTINCT video_sources.video_id) AS video_count,
+                    COUNT(DISTINCT artifacts.id) AS artifact_count
+                FROM video_sources
+                LEFT JOIN artifacts
+                  ON artifacts.video_id = video_sources.video_id
+                 AND artifacts.source_slug = video_sources.source_slug
+                GROUP BY video_sources.source_slug
+                ORDER BY video_sources.source_slug ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            result = tuple(
+                CorpusSummary(
+                    source=str(row["source"]),
+                    video_count=int(row["video_count"]),
+                    artifact_count=int(row["artifact_count"]),
+                )
+                for row in rows
+            )
+            self._require_database_identity()
+            return result
+        except CatalogError:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            raise CatalogError("catalog query failed") from exc
+
+    def search_videos(
+        self,
+        query: str,
+        *,
+        source: str | None = None,
+        limit: int = 10,
+    ) -> tuple[VideoSearchResult, ...]:
+        self._require_limit(limit, maximum=20)
+        if not isinstance(query, str):
+            raise ValueError("query must be text")
+        tokens = re.findall(r"\w+", query, flags=re.UNICODE)
+        if not tokens:
+            return ()
+        if source is not None and (not isinstance(source, str) or not source.strip()):
+            raise ValueError("source must be non-empty text")
+        match_query = " AND ".join(
+            f'"{token.replace(chr(34), chr(34) * 2)}"' for token in tokens
+        )
+        self._require_database_identity()
+        connection = self._connection_or_raise()
+        sql = """
+            SELECT
+                video_search.video_id,
+                videos.title,
+                videos.published_at,
+                videos.watch_url,
+                bm25(video_search) AS rank
+            FROM video_search
+            JOIN videos ON videos.video_id = video_search.video_id
+            WHERE video_search MATCH ?
+        """
+        parameters: list[object] = [match_query]
+        if source is not None:
+            sql += """
+                AND EXISTS (
+                    SELECT 1 FROM video_sources
+                    WHERE video_sources.video_id = videos.video_id
+                      AND video_sources.source_slug = ?
+                )
+            """
+            parameters.append(source)
+        sql += " ORDER BY rank ASC, videos.video_id ASC LIMIT ?"
+        parameters.append(limit)
+        try:
+            rows = connection.execute(sql, parameters).fetchall()
+            results: list[VideoSearchResult] = []
+            for row in rows:
+                source_rows = connection.execute(
+                    """
+                    SELECT source_slug FROM video_sources
+                    WHERE video_id = ? ORDER BY source_slug ASC
+                    LIMIT 11
+                    """,
+                    (row["video_id"],),
+                ).fetchall()
+                sources = tuple(
+                    str(source_row["source_slug"])
+                    for source_row in source_rows[:10]
+                )
+                results.append(
+                    VideoSearchResult(
+                        video_id=str(row["video_id"]),
+                        title=str(row["title"]),
+                        published_at=(
+                            str(row["published_at"])
+                            if row["published_at"] is not None
+                            else None
+                        ),
+                        sources=sources,
+                        sources_truncated=len(source_rows) > 10,
+                        watch_url=str(row["watch_url"]),
+                        rank=float(row["rank"]),
+                    )
+                )
+            self._require_database_identity()
+            return tuple(results)
+        except CatalogError:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            raise CatalogError("catalog query failed") from exc
