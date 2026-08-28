@@ -601,6 +601,24 @@ The architecture rationale and implementation sequence live under
 The [implementation status](docs/IMPLEMENTATION-STATUS.md) separates delivered
 features, conditional work, and reproducible validation commands.
 
+### Planned portable agent integration
+
+The current project contains Claude Code wrappers, but they still assume the
+repository workflow and do not provide equivalent Codex integration. The next
+implementation lot will add one absolute data root, safe acquisition and export
+commands, four read-only MCP tools, three shared skills, and one native
+researcher agent for each host.
+
+| Document | Purpose |
+|---|---|
+| [Agent platform architecture](plans/specs/AGENT-PLATFORM.md) | Target behavior, data boundaries, skills, agents and safety rules |
+| [Agent-ready runtime plan](plans/2026-08-28-09-agent-ready-runtime.md) | CLI, paths, backends, acquisition, export and MCP work |
+| [Claude Code and Codex integration plan](plans/2026-08-28-10-claude-codex-global-integration.md) | Portable skills, native agents, routing evaluation and digest-bound global installation |
+| [Hosted service and extension plan](plans/2026-08-28-11-hosted-extension.md) | Conditional browser and remote-access path |
+
+These features are planned, not delivered. No global Claude Code or Codex
+configuration is installed by the current repository setup.
+
 ---
 
 ## Claude Code integration

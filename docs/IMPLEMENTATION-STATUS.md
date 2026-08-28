@@ -63,6 +63,10 @@ directement des VTT et conserve les passages horodatés. Aucun des deux ne doit
 | Évolution | Pourquoi elle n'est pas active | Gate avant développement |
 |---|---|---|
 | Revue humaine de la pertinence | La technique est validée, pas la qualité éditoriale des résultats | Juger les requêtes de l'artefact P2 et enregistrer `PASS` ou `FAIL` |
+| Runtime indépendant du repo | Les chemins par défaut reposent encore sur le répertoire courant | Ajouter un `data_root` absolu et un `doctor --json` sûr |
+| Acquisition et export pour agents | Les skills historiques dupliquent encore des commandes et hypothèses | Centraliser `acquire` avec preview et `export video` dans la CLI |
+| Parité Claude Code et Codex | L'intégration actuelle cible Claude Code seulement | Trois skills communs, deux agents natifs et un MCP quatre outils |
+| Installation globale | Aucune release yt-insights n'est installée globalement | Construire trois candidats inertes pour runtime, skills et intégrations, puis attendre les approbations exactes |
 | Découpage LLM des longs transcripts | Insights et Shorts utilisent actuellement les 10 000 premiers caractères | Mesurer les pertes sur des articles réels, puis définir chunking et fusion |
 | MLX direct | `MLXBackend` existe mais le résolveur ne le sélectionne pas | Ajouter une option explicite et des tests sur Apple Silicon |
 | UI locale | CLI et MCP couvrent déjà la recherche locale | Documenter une friction répétée lors de recherches réelles |
@@ -140,5 +144,9 @@ MCP, et vérifie l'entrypoint stdio.
 - [Installation locale](../INSTALL.md)
 - [Roadmap produit](../ROADMAP.md)
 - [Plan consolidé](../plans/2026-08-27-CONSOLIDATED-v2.md)
+- [Architecture Claude Code et Codex](../plans/specs/AGENT-PLATFORM.md)
+- [Plan runtime agentique](../plans/2026-08-28-09-agent-ready-runtime.md)
+- [Plan intégration globale](../plans/2026-08-28-10-claude-codex-global-integration.md)
+- [Plan hébergé et extension](../plans/2026-08-28-11-hosted-extension.md)
 - [Preuve du corpus complet](../plans/evidence/2026-08-28-full-corpus-benchmark.md)
 - [Artefact de revue humaine P2](../plans/evidence/2026-08-28-p2-50-vtt-evaluation.md)

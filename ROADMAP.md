@@ -1,7 +1,8 @@
 # Roadmap produit YT Insights
 
 **Mise à jour :** 2026-08-28
-**Statut du lot actif :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
+**Statut du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
+**Statut du lot Claude Code et Codex :** `PLANIFIÉ, NON IMPLÉMENTÉ`.
 **Readiness éditoriale :** `UNKNOWN` ; ce statut bloque la promotion produit, pas l'implémentation autorisée.
 
 La CLI, l'index complet et le MCP sont utilisables localement. Le statut
@@ -64,6 +65,68 @@ VTT YouTube + métadonnées vidéo
 
 `catalog.sqlite3` ne précède pas et n'alimente pas `search-v1.sqlite3`.
 
+## Cible Claude Code et Codex
+
+Le produit doit devenir un service local de corpus, utilisable depuis n'importe
+quel projet. Claude Code et Codex ne réimplémentent pas YouTube, l'indexation ou
+l'export. Ils découvrent trois skills communs, interrogent un MCP en lecture
+seule et délèguent toute mutation à la CLI empaquetée.
+
+```text
+YouTube URL
+    │
+    ▼
+yt-insights acquire
+preview obligatoire pour channel/playlist
+    │
+    ├──► VTT + métadonnées ──► catalog.sqlite3
+    │                    └────► search-v1.sqlite3
+    │
+    ├──► yt-insights export ──► VTT, TXT ou Markdown sourcé
+    │
+    └──► MCP read-only
+             ├── list_corpora
+             ├── search_videos
+             ├── search_passages
+             └── get_passage
+                      │
+              ┌───────┴────────┐
+              ▼                ▼
+        Claude Code          Codex
+        3 skills + agent     3 skills + agent
+```
+
+### Lots à construire
+
+| Vague | Apport concret | Dépendance | Gate |
+|---|---|---|---|
+| A1 | Un `data_root` absolu et stable, utilisable hors du repo | Aucune | Même corpus depuis deux répertoires différents |
+| A2 | `doctor --json` secret-safe | A1 | Aucun secret affiché, corpus et dépendances diagnostiqués |
+| A3 | `acquire` unifié avec preview et confirmation des volumes | A1 | Aucun channel ou playlist sans confirmation explicite |
+| A4 | `export video` en VTT, TXT et Markdown sans LLM | A1 | Sortie déterministe avec URL et timestamps |
+| B1 | MCP étendu de deux à quatre outils read-only | A1, A3 | Aucun outil de mutation ou lecture arbitraire |
+| B2 | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | A3, A4, B1 | Même comportement dans Claude Code et Codex |
+| B3 | Agents chercheurs natifs et routage évalué | B1, B2 | 27/30 positifs minimum, 0/15 négatifs |
+| C1 | Candidats globaux immuables avec diffs expurgés et rollback | B1 à B3 | Trois digests approuvables, aucune écriture globale |
+| C2 | Runtime, config, skills, agents et MCP globaux | Trois approbations exactes | Même corpus depuis deux cwd, parité de cinq requêtes et restauration testée |
+| D1 | Choix explicite Ollama, MLX, cc-bridge ou remote | Hors chemin critique | Backend réellement résolu, canari MLX séparé |
+
+Les détails exécutables sont dans le [plan runtime](plans/2026-08-28-09-agent-ready-runtime.md), le [plan d'intégration globale](plans/2026-08-28-10-claude-codex-global-integration.md) et le [suivi parallèle](plans/PARALLEL-SESSIONS.md).
+
+### Politique de backends
+
+| Besoin | Backend par défaut | Pourquoi |
+|---|---|---|
+| Récupérer les sous-titres | Aucun LLM | YouTube fournit déjà les VTT |
+| Rechercher et exporter | Aucun LLM | FTS5 et transformations déterministes suffisent |
+| Produire des insights en volume | Ollama local ou cc-bridge | Coût maîtrisé et modèle interchangeable |
+| Analyse exigeant plus de qualité | Backend distant explicite | Choix volontaire, jamais un fallback silencieux |
+| MLX direct | Lot D1 optionnel après l'intégration agentique | L'implémentation actuelle ne charge pas encore correctement modèle et tokenizer |
+
+La transcription audio n'entre pas dans ce lot. Elle ne devient pertinente que
+si une vidéo ne fournit aucun sous-titre exploitable et qu'un cas réel justifie
+le coût de téléchargement et de transcription.
+
 ## Déclenchement à la demande d'article
 
 Les packs et exports ne sont pas une phase active. Ils démarrent seulement lorsqu'un article réel nécessite une sélection sourcée et nomme son angle ainsi que les passages à conserver.
@@ -81,15 +144,23 @@ Les packs et exports ne sont pas une phase active. Ils démarrent seulement lors
 
 Ces pistes restent conditionnelles et n'ouvrent aucune promotion sans leur déclencheur.
 
+Le [plan service hébergé et extension](plans/2026-08-28-11-hosted-extension.md)
+précise quatre déclencheurs vérifiables. La première version hébergée conserve
+SQLite sur un volume persistant. PostgreSQL n'arrive qu'avec un second utilisateur
+ou des écritures concurrentes. Les embeddings et une base graphe restent des
+index dérivés, ouverts uniquement par un corpus de questions en échec.
+
 ## Prochaines décisions, dans l'ordre
 
 | Priorité | Décision | Critère de sortie |
 |---:|---|---|
-| 1 | Revoir humainement l'artefact P2 | Statut explicite `PASS` ou `FAIL`, avec jugements enregistrés |
-| 2 | Utiliser CLI et MCP sur un article réel | Angle, requêtes, passages conservés et frictions consignés |
-| 3 | Corriger la première friction mesurée | Petit lot avec test d'acceptation, sans ouvrir une plateforme hébergée par défaut |
-| 4 | Évaluer MLX direct, UI ou extension | Besoin confirmé par les usages des étapes 1 à 3 |
-| 5 | Étudier hybride, graphe ou Qdrant | Échec mesuré de FTS5 ou limite SQLite reproduite |
+| 1 | Implémenter la vague A du runtime agentique | Chemins absolus, doctor sûr, acquisition avec preview, export déterministe |
+| 2 | Implémenter B1 à B3 en parallèle | MCP quatre outils, trois skills, deux agents et corpus de routage au vert |
+| 3 | Construire les trois candidats globaux C1 | Runtime, shared et integrations ont chacun diff expurgé, digest, test inerte et rollback |
+| 4 | Installer C2 après approbation explicite | Claude Code et Codex neufs voient les mêmes skills, agent et corpus |
+| 5 | Revoir humainement l'artefact P2 sur un article réel | Statut `PASS` ou `FAIL`, passages conservés et frictions consignées |
+| 6 | Activer ou rejeter le lot hébergé | Au moins un déclencheur du plan H est prouvé |
+| 7 | Étudier hybride, graphe ou Qdrant | Échec mesuré de FTS5 ou limite SQLite reproduite |
 
 ## Documents de référence
 
@@ -98,3 +169,7 @@ Ces pistes restent conditionnelles et n'ouvrent aucune promotion sans leur décl
 - [Sessions parallèles](plans/PARALLEL-SESSIONS.md)
 - [État d'implémentation et tests](docs/IMPLEMENTATION-STATUS.md)
 - [Changelog](CHANGELOG.md)
+- [Architecture Claude Code et Codex](plans/specs/AGENT-PLATFORM.md)
+- [Plan runtime agentique](plans/2026-08-28-09-agent-ready-runtime.md)
+- [Plan intégration globale](plans/2026-08-28-10-claude-codex-global-integration.md)
+- [Plan hébergé et extension](plans/2026-08-28-11-hosted-extension.md)

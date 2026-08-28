@@ -1,7 +1,8 @@
 # YT Insights : index des plans
 
 **Dernière mise à jour :** 2026-08-28
-**État du lot actif :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
+**État du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
+**État du lot agentique :** `PLANIFIÉ, NON IMPLÉMENTÉ`.
 **Readiness produit :** `UNKNOWN` jusqu'à la revue humaine P2 ; ce n'est pas un veto de développement.
 
 ## À lire maintenant
@@ -10,8 +11,28 @@
 |---:|---|---|
 | 1 | [Roadmap produit](../ROADMAP.md) | Vérité des données, droits d'exécution et déclencheurs |
 | 2 | [État d'implémentation](../docs/IMPLEMENTATION-STATUS.md) | Diagramme, fonctions livrées, reste et commandes de test |
-| 3 | [Plan consolidé V2](2026-08-27-CONSOLIDATED-v2.md) | Contrats et séparation implémentation/promotion |
-| 4 | [Sessions parallèles](PARALLEL-SESSIONS.md) | Propriétés, handoff P2 et ordre de fusion |
+| 3 | [Architecture Claude Code et Codex](specs/AGENT-PLATFORM.md) | Cible locale, sécurité, MCP, skills et agents |
+| 4 | [Runtime utilisable par les agents](2026-08-28-09-agent-ready-runtime.md) | Chemins globaux, acquisition, export, backends et MCP |
+| 5 | [Intégration globale Claude Code et Codex](2026-08-28-10-claude-codex-global-integration.md) | Skills, agents, routage et installation transactionnelle |
+| 6 | [Service hébergé et extension](2026-08-28-11-hosted-extension.md) | Voie conditionnelle, déclencheurs et architecture distante |
+| 7 | [Sessions parallèles](PARALLEL-SESSIONS.md) | Propriétés, dépendances, vagues et ordre de fusion |
+| 8 | [Plan consolidé V2](2026-08-27-CONSOLIDATED-v2.md) | Contrats historiques et séparation implémentation/promotion |
+
+## Nouveau lot agentique
+
+Le plan transforme le socle local en outil appelable depuis n'importe quel
+répertoire par Claude Code et Codex, sans dupliquer la logique métier :
+
+| Vague | Résultat | État |
+|---|---|---|
+| A | Runtime indépendant du répertoire courant, `doctor`, backends explicites, acquisition avec preview, export et MCP quatre outils | `PLANIFIÉ` |
+| B | Trois skills communs, deux agents natifs, corpus de routage et packaging | `PLANIFIÉ`, parallélisable après gel des contrats A |
+| C | Trois candidats globaux immuables pour runtime, skills et intégrations, avec diffs expurgés, digests, rollback et tests en sessions neuves | `BLOQUÉ` jusqu'à validation A et B puis trois approbations explicites |
+| H | API hébergée, worker, extension et MCP distant | `CONDITIONNEL` aux déclencheurs d'usage |
+
+Aucune modification de `~/.claude`, `~/.codex` ou `~/.config/ai-agents` ne fait
+partie du plan documentaire. Ces écritures exigent une transaction approuvée
+par digest après construction et validation d'un candidat inerte.
 
 ## Plans détaillés conservés
 
@@ -31,6 +52,10 @@ actif ci-dessus.
 | [06 - UI locale](2026-08-27-06-local-search-ui.md) | Conditionnel à une friction d'usage réelle |
 | [07 - Qdrant](2026-08-27-07-qdrant-scale.md) | Conditionnel à l'adoption des embeddings et aux limites SQLite |
 | [08 - Tranche verticale](2026-08-27-08-search-vertical-slice.md) | Historique de l'implémentation initiale sur 50 VTT |
+| [09 - Runtime utilisable par les agents](2026-08-28-09-agent-ready-runtime.md) | Plan d'exécution prioritaire du socle local |
+| [10 - Intégration globale Claude Code et Codex](2026-08-28-10-claude-codex-global-integration.md) | Plan d'exécution des skills, agents, MCP et garde-fous globaux |
+| [11 - Service hébergé et extension](2026-08-28-11-hosted-extension.md) | Plan conditionnel pour navigateur, accès distant et multi-utilisateur |
+| [Spécification de la plateforme agentique](specs/AGENT-PLATFORM.md) | Architecture cible et décisions de périmètre |
 | [Spécification d'architecture](specs/SEARCH-ARCHITECTURE.md) | Contrats de conception initiaux |
 | [Critique architecture et plan](reviews/2026-08-27-architecture-plan-critique.md) | Décisions écartées, risques et garde-fous |
 

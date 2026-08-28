@@ -61,6 +61,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Documented
 
+- Added a consolidated Claude Code and Codex architecture plus executable plans
+  for an agent-ready runtime, portable skills, native agents, read-only MCP,
+  digest-bound global installation, and a conditional hosted extension.
+- Added parallel ownership, dependency and acceptance gates for the new agent
+  integration lot. The documents do not install or alter global configuration.
 - README, installation guide, roadmap, changelog, plan index, and `llms.txt`
   now distinguish `catalog.sqlite3` from the timestamped `search-v1.sqlite3`
   index.

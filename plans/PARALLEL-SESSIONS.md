@@ -1,10 +1,11 @@
 # Sessions parallèles : suivi d'exécution
 
 **Mise à jour :** 2026-08-28
-**État du lot actif :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
+**État du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
+**État du lot agentique :** `PLANIFIÉ, NON IMPLÉMENTÉ`.
 **Règle :** `UNKNOWN` bloque promotion/readiness produit, pas l'implémentation P3 à P5 autorisée.
 
-**Références :** [Plan consolidé V2](2026-08-27-CONSOLIDATED-v2.md) et [roadmap](../ROADMAP.md).
+**Références :** [architecture agentique](specs/AGENT-PLATFORM.md), [runtime](2026-08-28-09-agent-ready-runtime.md), [intégration globale](2026-08-28-10-claude-codex-global-integration.md), [plan consolidé V2](2026-08-27-CONSOLIDATED-v2.md) et [roadmap](../ROADMAP.md).
 
 ## Règles communes
 
@@ -26,6 +27,23 @@ P2 recherche technique [terminée] ; jugement humain [UNKNOWN]
              ↓ décision humaine : promotion seulement
 
 P3 corpus complet [terminé] -> P4 MCP 2 outils [terminé] -> P5 installation [terminée]
+
+A0 contrats runtime -> A1 chemins
+                         ↓
+              ┌──────────┼──────────┐
+              A2 doctor  A3 acquire A4 export
+              └──────────┼──────────┘
+                         ↓ A5 intégration CLI
+             contrats runtime gelés
+    ┌────────┼─────────────┐
+    B1 MCP   B2 skills     B3 agents + routage
+    └────────┼─────────────┘
+             ↓ candidat local validé
+        C1 trois candidats -> trois approbations digest -> C2 installation + sessions neuves
+
+D1 backends + MLX : optionnel, hors chemin critique A-C
+
+H service hébergé + extension : conditionnel aux signaux d'usage, hors chemin critique A-C
 ```
 
 P3 à P5 suivent leurs dépendances techniques, non une autorisation éditoriale. P2 décide uniquement si leurs résultats peuvent être promus comme produit prêt.
@@ -92,6 +110,83 @@ P2-S2 démarre après fusion de P2-S1 et consomme l'identifiant de commit ainsi 
 | Embeddings/hybride | Échec lexical mesuré sur des requêtes réelles |
 | Graphe | Questions multi-hop nommées non résolues par FTS5 et filtres |
 | Qdrant | Embeddings adoptés et budget SQLite échoué après profilage |
+
+## Nouveau lot A à C : exécution parallèle Claude Code et Codex
+
+Le lot démarre sur des worktrees isolés. Aucun agent ne possède les fichiers
+utilisateur déjà modifiés dans le checkout principal : `.claude/skills/yt-add-channel.md`,
+`CLAUDE.md`, `runbook/run-channel.sh`, `batches/` et `scripts/build_speakers.py`.
+
+### Vague A : rendre le runtime appelable partout
+
+| Session | Propriété exclusive | Dépendance | Gate de fusion |
+|---|---|---|---|
+| A1 `codex/agent-paths` | `config.py`, nouveau `paths.py`, adaptateurs de chemins et tests associés | A0 contrat `DataPaths` relu | Priorité CLI > env > TOML > défaut, même corpus depuis deux cwd |
+| A2 `codex/agent-doctor` | `doctor.py`, `cli_doctor.py` non enregistré et tests associés | A1 fusionné | Aucune valeur de secret affichée |
+| A3 `codex/agent-acquire` | façade `acquire`, module Click non enregistré, preview, downloader et tests associés | A1 fusionné | vidéo unitaire immédiate, channel/playlist bloqués sans `--yes`, aucun cookie automatique |
+| A4 `codex/agent-export` | exporteur, module Click non enregistré, formats VTT/TXT/Markdown et tests associés | A1 fusionné | export déterministe, sourcé, sans appel LLM |
+| A5 coordinateur | `cli.py` et test d'intégration des commandes | A2 à A4 fusionnés | Tous les anciens et nouveaux noms de commande restent stables |
+
+Le coordinateur possède les contrats partagés et `cli.py`. Les sessions
+proposent leurs ajouts sous forme de fonctions isolées. Le coordinateur intègre
+les sous-commandes dans `cli.py` pour éviter les conflits de fusion.
+
+### Vague B : exposer le runtime aux deux hôtes
+
+Cette vague démarre après fusion de A5. B1 dépend aussi de l'index
+existant, mais pas des backends LLM.
+
+| Session | Propriété exclusive | Peut démarrer en parallèle avec | Gate de fusion |
+|---|---|---|---|
+| B1 `codex/agent-mcp-four-tools` | serveur MCP, quatre contrats read-only et tests | B2, B3 | exactement quatre outils, chemins absolus, aucune mutation |
+| B2 `codex/agent-portable-skills` | trois dossiers `.agents/skills/youtube-*` et fixtures de skills | B1, B3 | mêmes commandes sur Claude Code et Codex, aucune dépendance au cwd |
+| B3 `codex/agent-native-adapters` | agent Claude, agent Codex, corpus 45 prompts et évaluation | B1, B2 | au moins 27/30 positifs, 0/15 négatifs, p95 chaud inférieur ou égal à 10 ms |
+| B4 `codex/agent-packaging-docs` | scripts d'installation locale, smoke tests et docs repo | après première fusion B1-B3 | installation en répertoire temporaire, cinq requêtes de parité |
+
+### Vague C : préparer puis installer la configuration globale
+
+C1 peut construire et tester un candidat dans un faux répertoire personnel.
+C1 n'a pas l'autorisation d'écrire dans la configuration globale en direct.
+
+| Session | Propriété exclusive | Gate |
+|---|---|---|
+| C1 `codex/agent-global-candidate` | source de release `~/.config/ai-agents`, transaction runtime, tests inertes, manifestes et diffs expurgés | Présenter `GO INSTALL YT RUNTIME <digest>`, `GO INSTALL SHARED <digest>` et `GO INSTALL YT INTEGRATIONS <digest>`, puis s'arrêter |
+| C2 installation | wheel, config runtime et fichiers globaux approuvés avec trois journaux de rollback | Démarre uniquement après les trois confirmations exactes et la relecture des préimages |
+| C3 validation | sessions Claude Code et Codex neuves, canaris de refus d'écriture | Même corpus depuis deux cwd, cinq requêtes identiques, agents chercheurs incapables d'écrire ou d'acquérir |
+
+La configuration globale n'installe pas un second hook YouTube. Le routeur
+global existant n'est ajusté que si le corpus de 45 prompts prouve un manque.
+Après réussite du corpus, le hook Claude local est retiré de
+`.claude/settings.json` dans une modification dédiée. Son script reste conservé
+pour rollback jusqu'à validation des sessions neuves.
+
+### Lot D : optimisation LLM non bloquante
+
+D1 répare la sélection MLX et explicite Ollama, MLX, cc-bridge et remote. Il
+démarre après A1 et ne possède jamais `config.py` en parallèle avec A1. Son
+statut, y compris un canari MLX `UNKNOWN`, ne bloque pas A3 à C3.
+
+### Charge indicative du lot local et agentique
+
+| Lot | Charge | Durée murale avec trois sessions |
+|---|---:|---:|
+| A0 contrats et intégration CLI | 0,5 à 1 jour | 0,5 à 1 jour |
+| A1 à A4 runtime | 4 à 7 jours cumulés | 1,5 à 3 jours |
+| B1 à B4 MCP, skills, agents et packaging | 3,5 à 6 jours cumulés | 2 à 3 jours |
+| C1 candidat global | 2 à 3 jours | 2 à 3 jours |
+| C2 et C3 installation et validation | 0,5 à 1 jour | 0,5 à 1 jour, hors attente d'approbation |
+| Total | 10,5 à 18 jours cumulés | 6,5 à 11 jours |
+
+Ces fourchettes couvrent code, tests, revue et documentation. Elles excluent le
+lot hébergé, les appels réseau longs et le temps d'attente entre présentation
+des digests et approbation globale.
+
+### Lot H : hébergement conditionnel
+
+Le [plan hébergé et extension](2026-08-28-11-hosted-extension.md) reste hors du
+chemin critique. H1 menace/contrats et H4 maquettes d'extension peuvent avancer
+en parallèle après activation. API, worker et extension ne démarrent pas avant
+un signal d'usage consigné et un schéma d'API gelé.
 
 ## Handoff obligatoire
 

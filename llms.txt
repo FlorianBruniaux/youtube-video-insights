@@ -138,6 +138,13 @@ Implemented:
 Planned:
 
 - human relevance review for the frozen P2 search artifact;
+- a cwd-independent data root and secret-safe `doctor --json` command;
+- safe `acquire` preview/confirmation and deterministic `export video` commands;
+- four read-only MCP tools: corpus listing, video search, passage search, and
+  passage retrieval;
+- three portable YouTube skills plus native read-only researcher agents for
+  Claude Code and Codex;
+- a digest-bound, reversible global installation only after explicit approval;
 - chunked LLM analysis for transcripts longer than 10,000 characters;
 - explicit MLX selection in the backend resolver;
 - YouTube Data API and channel RSS discovery adapters;
@@ -153,6 +160,12 @@ Planned:
 - `README.md`: installation, commands, workflows, and operational behavior.
 - `CHANGELOG.md`: unreleased and released changes.
 - `ROADMAP.md`: delivered phases, promotion gates, and conditional work.
+- `plans/specs/AGENT-PLATFORM.md`: Claude Code and Codex target architecture.
+- `plans/2026-08-28-09-agent-ready-runtime.md`: executable runtime plan.
+- `plans/2026-08-28-10-claude-codex-global-integration.md`: portable skills,
+  native agents, routing evaluation, and global installation plan.
+- `plans/2026-08-28-11-hosted-extension.md`: conditional hosted service and
+  browser extension plan.
 - `docs/IMPLEMENTATION-STATUS.md`: current diagram, remaining work, and test
   commands.
 - `CLAUDE.md`: repository constraints and agent workflow.
