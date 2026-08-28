@@ -19,6 +19,29 @@ class _DefaultModel(str):
     """Private marker used only when Config.model is omitted."""
 
 
+class _UnsetPath:
+    """Private marker used only when a legacy directory is omitted."""
+
+
+_UNSET_PATH = _UnsetPath()
+_LEGACY_PATH_FIELDS = frozenset(
+    (
+        "transcripts_dir",
+        "insights_dir",
+        "shorts_dir",
+        "shorts_clips_dir",
+        "exports_dir",
+    )
+)
+_HISTORIC_PATH_DEFAULTS = {
+    "transcripts_dir": Path("output/transcripts"),
+    "insights_dir": Path("output/insights"),
+    "shorts_dir": Path("output/shorts"),
+    "shorts_clips_dir": Path("output/clips"),
+    "exports_dir": Path("output/exports"),
+}
+
+
 def _default_model() -> str:
     return _DefaultModel(DEFAULT_MODEL)
 
@@ -43,13 +66,22 @@ class Config:
     timeout: int = 120
     concurrency: int = 0
     data_root: Path = field(default_factory=lambda: Path("output"))
-    transcripts_dir: Path | None = field(default_factory=lambda: Path("output/transcripts"))
-    insights_dir: Path | None = field(default_factory=lambda: Path("output/insights"))
-    shorts_dir: Path | None = field(default_factory=lambda: Path("output/shorts"))
-    shorts_clips_dir: Path | None = field(default_factory=lambda: Path("output/clips"))
-    exports_dir: Path | None = field(default_factory=lambda: Path("output/exports"))
+    transcripts_dir: Path | None | _UnsetPath = _UNSET_PATH
+    insights_dir: Path | None | _UnsetPath = _UNSET_PATH
+    shorts_dir: Path | None | _UnsetPath = _UNSET_PATH
+    shorts_clips_dir: Path | None | _UnsetPath = _UNSET_PATH
+    exports_dir: Path | None | _UnsetPath = _UNSET_PATH
+    _omitted_legacy_paths: frozenset[str] = field(
+        default_factory=frozenset, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
+        omitted = set(self._omitted_legacy_paths)
+        for field_name, default in _HISTORIC_PATH_DEFAULTS.items():
+            if getattr(self, field_name) is _UNSET_PATH:
+                setattr(self, field_name, default)
+                omitted.add(field_name)
+        self._omitted_legacy_paths = frozenset(omitted)
         if isinstance(self.model, _DefaultModel):
             self._model_was_omitted = True
         self.model = str(self.model)
@@ -87,25 +119,46 @@ class Config:
         defaults = DataPaths.from_root(self.data_root)
         return replace(
             defaults,
-            transcripts=self.transcripts_dir or defaults.transcripts,
-            insights=self.insights_dir or defaults.insights,
-            shorts=self.shorts_dir or defaults.shorts,
-            clips=self.shorts_clips_dir or defaults.clips,
-            exports=self.exports_dir or defaults.exports,
+            transcripts=(
+                defaults.transcripts
+                if "transcripts_dir" in self._omitted_legacy_paths
+                else self.transcripts_dir or defaults.transcripts
+            ),
+            insights=(
+                defaults.insights
+                if "insights_dir" in self._omitted_legacy_paths
+                else self.insights_dir or defaults.insights
+            ),
+            shorts=(
+                defaults.shorts
+                if "shorts_dir" in self._omitted_legacy_paths
+                else self.shorts_dir or defaults.shorts
+            ),
+            clips=(
+                defaults.clips
+                if "shorts_clips_dir" in self._omitted_legacy_paths
+                else self.shorts_clips_dir or defaults.clips
+            ),
+            exports=(
+                defaults.exports
+                if "exports_dir" in self._omitted_legacy_paths
+                else self.exports_dir or defaults.exports
+            ),
         )
+
+
+def _with_explicit_legacy_paths(cfg: Config, updates: dict) -> dict:
+    """Record named directory values as explicit across dataclass replacements."""
+    explicit_paths = _LEGACY_PATH_FIELDS.intersection(updates)
+    if not explicit_paths:
+        return updates
+    updates["_omitted_legacy_paths"] = cfg._omitted_legacy_paths - explicit_paths
+    return updates
 
 
 def load_config(overrides: dict) -> Config:
     """Merge config from defaults → TOML → env vars → CLI overrides."""
-    # Keep Config() compatible for library callers while allowing this merge
-    # pipeline to derive all artifact defaults only after its final data root.
-    cfg = Config(
-        transcripts_dir=None,
-        insights_dir=None,
-        shorts_dir=None,
-        shorts_clips_dir=None,
-        exports_dir=None,
-    )
+    cfg = Config()
 
     # Layer 1: TOML file (optional)
     if _CONFIG_PATH.exists():
@@ -179,7 +232,7 @@ def _apply_dict(cfg: Config, data: dict, source: str) -> Config:
             updates["model_source"] = source
         elif key == "base_url":
             updates["base_url_source"] = source
-    return replace(cfg, **updates) if updates else cfg
+    return replace(cfg, **_with_explicit_legacy_paths(cfg, updates)) if updates else cfg
 
 
 def _derive_data_paths(cfg: Config) -> Config:

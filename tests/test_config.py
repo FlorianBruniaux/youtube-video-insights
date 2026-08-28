@@ -23,6 +23,29 @@ def test_direct_config_keeps_the_historic_output_directory_defaults() -> None:
     assert config.shorts_clips_dir == Path("output/clips")
 
 
+def test_direct_config_derives_data_paths_from_a_custom_data_root(tmp_path: Path) -> None:
+    custom_root = tmp_path / "custom-corpus"
+
+    paths = Config(data_root=custom_root).data_paths
+
+    assert paths.transcripts == custom_root / "transcripts"
+    assert paths.insights == custom_root / "insights"
+    assert paths.shorts == custom_root / "shorts"
+    assert paths.clips == custom_root / "clips"
+
+
+def test_direct_config_honors_an_explicit_legacy_directory_override(tmp_path: Path) -> None:
+    custom_root = tmp_path / "custom-corpus"
+    transcript_override = Path("output/transcripts")
+
+    paths = Config(
+        data_root=custom_root, transcripts_dir=transcript_override
+    ).data_paths
+
+    assert paths.transcripts == transcript_override
+    assert paths.insights == custom_root / "insights"
+
+
 def test_with_url_marks_a_supplied_default_model_as_direct() -> None:
     """Detects retaining omission state when with_url receives an explicit model."""
     result = Config().with_url(OLLAMA_URL, model=DEFAULT_MODEL)
