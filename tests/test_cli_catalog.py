@@ -66,6 +66,7 @@ class CatalogCliTests(unittest.TestCase):
         self.assertIn(VIDEO_ID, search.output)
         self.assertIn("Agentic product discovery", search.output)
         self.assertIn("product-channel", search.output)
+        self.assertIn("[market]", search.output.lower())
 
         self.assertEqual(stats.exit_code, 0, stats.output)
         self.assertIn("videos=1", stats.output)
@@ -122,6 +123,50 @@ class CatalogCliTests(unittest.TestCase):
         self.assertIn("seen=1 written=1 errors=0", result.output)
         self.assertEqual(search.exit_code, 0, search.output)
         self.assertIn("disc123ABCD", search.output)
+
+    def test_read_commands_do_not_create_catalog_lock_or_sqlite_sidecars(self) -> None:
+        runner = CliRunner()
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            database = base / "catalog.sqlite3"
+            corpus = base / "corpus"
+            _write_video_artifacts(
+                corpus,
+                channel="product-channel",
+                language="en",
+                transcript="Immutable command witness.",
+            )
+            from yt_insights.catalog import Catalog
+
+            with Catalog(database) as catalog:
+                catalog.import_corpus(corpus)
+                catalog.checkpoint()
+            (base / ".catalog.sqlite3.lock").unlink()
+            before_names = sorted(path.name for path in base.iterdir())
+            before_database = database.read_bytes()
+
+            search = runner.invoke(cli, ["catalog", "search", "immutable", "--db", str(database)])
+            wide_search = runner.invoke(
+                cli,
+                [
+                    "catalog",
+                    "search",
+                    "immutable",
+                    "--limit",
+                    "100",
+                    "--db",
+                    str(database),
+                ],
+            )
+            stats = runner.invoke(cli, ["catalog", "stats", "--db", str(database)])
+            errors = runner.invoke(cli, ["catalog", "errors", "--db", str(database)])
+
+            self.assertEqual(search.exit_code, 0, search.output)
+            self.assertEqual(wide_search.exit_code, 0, wide_search.output)
+            self.assertEqual(stats.exit_code, 0, stats.output)
+            self.assertEqual(errors.exit_code, 0, errors.output)
+            self.assertEqual(sorted(path.name for path in base.iterdir()), before_names)
+            self.assertEqual(database.read_bytes(), before_database)
 
 
 if __name__ == "__main__":

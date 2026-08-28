@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import hashlib
+import ctypes
 import fcntl
 import json
 import math
 import os
 import re
+import secrets
 import sqlite3
 import stat
 import tempfile
@@ -15,7 +17,7 @@ import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterator
 from urllib.parse import urlparse
 
@@ -30,7 +32,7 @@ from .downloader import (
 )
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _ARTIFACT_NAME = re.compile(
     r"^(?P<date>\d{8})\s*-\s*(?P<title>.*?)\s*"
     r"\[(?P<video_id>[A-Za-z0-9_-]{11})\]\."
@@ -39,15 +41,56 @@ _ARTIFACT_NAME = re.compile(
 _INSIGHT_KEYS = {"subject", "key_points", "tools", "advice", "quotes"}
 _VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 _SOURCE_SLUG = re.compile(r"[^\W_][\w.-]{0,199}", flags=re.UNICODE)
+_CatalogIdentity = tuple[int, int, int, int, int]
+_STAGE_TOKEN = re.compile(r"[0-9a-f]{32}")
 
 
 class CatalogError(RuntimeError):
     """Raised when the catalog database path cannot be trusted."""
 
 
+def _validate_artifact_relative_path(value: object) -> str:
+    if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
+        raise CatalogError("catalog artifact path is invalid")
+    raw_parts = value.split("/")
+    windows_path = PureWindowsPath(value)
+    path = PurePosixPath(value)
+    if (
+        value.startswith("//")
+        or path.is_absolute()
+        or windows_path.is_absolute()
+        or windows_path.drive
+        or not path.parts
+        or any(part in {"", ".", ".."} for part in raw_parts)
+    ):
+        raise CatalogError("catalog artifact path is invalid")
+    return path.as_posix()
+
+
+def _read_portable_artifact_at(root_fd: int, stored_path: object) -> bytes:
+    """Read one stored artifact through held no-follow corpus descriptors."""
+    relative_path = _validate_artifact_relative_path(stored_path)
+    parts = PurePosixPath(relative_path).parts
+    with _relative_directory(root_fd, parts[:-1]) as directory_fd:
+        return _read_regular_at(directory_fd, parts[-1])
+
+
+def _validate_schema_metadata(connection: sqlite3.Connection) -> None:
+    rows = connection.execute("SELECT version FROM schema_meta").fetchall()
+    if (
+        len(rows) != 1
+        or not isinstance(rows[0][0], int)
+        or isinstance(rows[0][0], bool)
+        or rows[0][0] != _SCHEMA_VERSION
+    ):
+        raise CatalogError("catalog schema metadata is invalid")
+    if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise CatalogError("catalog foreign keys are invalid")
+
+
 def _catalog_database_identity(
     parent_fd: int, database_name: str
-) -> tuple[int, int] | None:
+) -> _CatalogIdentity | None:
     try:
         details = os.stat(database_name, dir_fd=parent_fd, follow_symlinks=False)
     except FileNotFoundError:
@@ -56,7 +99,192 @@ def _catalog_database_identity(
         raise CatalogError("catalog database path is unsafe") from exc
     if not stat.S_ISREG(details.st_mode):
         raise CatalogError("catalog database path is unsafe")
-    return details.st_dev, details.st_ino
+    return (
+        details.st_dev,
+        details.st_ino,
+        details.st_size,
+        details.st_mtime_ns,
+        details.st_ctime_ns,
+    )
+
+
+def _same_catalog_object(
+    actual: _CatalogIdentity | None, expected: _CatalogIdentity
+) -> bool:
+    """Compare an object across rename operations, which may update ctime."""
+    return actual is not None and actual[:4] == expected[:4]
+
+
+def _copy_catalog_database_to_stage(
+    parent_fd: int,
+    database_name: str,
+    expected_identity: _CatalogIdentity | None,
+    staging_name: str,
+) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0)
+    staging_fd = os.open(staging_name, flags, 0o600, dir_fd=parent_fd)
+    try:
+        os.fchmod(staging_fd, 0o600)
+        if expected_identity is None:
+            os.fsync(staging_fd)
+            return
+        source_flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        source_fd = os.open(database_name, source_flags, dir_fd=parent_fd)
+        try:
+            source_details = os.fstat(source_fd)
+            if (
+                not stat.S_ISREG(source_details.st_mode)
+                or _catalog_database_identity(parent_fd, database_name)
+                != expected_identity
+                or (
+                    source_details.st_dev,
+                    source_details.st_ino,
+                    source_details.st_size,
+                    source_details.st_mtime_ns,
+                    source_details.st_ctime_ns,
+                )
+                != expected_identity
+            ):
+                raise CatalogError("catalog database changed while staging")
+            offset = 0
+            while True:
+                chunk = os.pread(source_fd, 1024 * 1024, offset)
+                if not chunk:
+                    break
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(staging_fd, view)
+                    if written <= 0:
+                        raise OSError("catalog staging write failed")
+                    view = view[written:]
+                offset += len(chunk)
+            final_details = os.fstat(source_fd)
+            if (
+                (
+                    final_details.st_dev,
+                    final_details.st_ino,
+                    final_details.st_size,
+                    final_details.st_mtime_ns,
+                    final_details.st_ctime_ns,
+                )
+                != expected_identity
+                or _catalog_database_identity(parent_fd, database_name)
+                != expected_identity
+            ):
+                raise CatalogError("catalog database changed while staging")
+        finally:
+            os.close(source_fd)
+        os.fsync(staging_fd)
+    finally:
+        os.close(staging_fd)
+
+
+def _require_catalog_parent_identity(parent_fd: int, parent: Path) -> None:
+    """Fail closed when the requested parent path no longer names the held directory."""
+    try:
+        named = parent.lstat()
+        held = os.fstat(parent_fd)
+    except OSError as exc:
+        raise CatalogError("catalog parent path changed") from exc
+    if (
+        not stat.S_ISDIR(named.st_mode)
+        or stat.S_ISLNK(named.st_mode)
+        or (named.st_dev, named.st_ino) != (held.st_dev, held.st_ino)
+    ):
+        raise CatalogError("catalog parent path changed")
+
+
+def _remove_catalog_stage(parent_fd: int, staging_name: str | None) -> None:
+    if staging_name is None:
+        return
+    for name in (
+        staging_name,
+        f"{staging_name}-journal",
+        f"{staging_name}-wal",
+        f"{staging_name}-shm",
+    ):
+        try:
+            os.unlink(name, dir_fd=parent_fd)
+        except FileNotFoundError:
+            pass
+
+
+def _cleanup_stale_catalog_stages(parent_fd: int, database_name: str) -> None:
+    """Remove private stages left by a writer that died while holding the lock."""
+    prefix = f".{database_name}.stage-"
+    removed = False
+    for name in os.listdir(parent_fd):
+        if not name.startswith(prefix):
+            continue
+        remainder = name.removeprefix(prefix)
+        for suffix in ("-journal", "-wal", "-shm"):
+            if remainder.endswith(suffix):
+                remainder = remainder.removesuffix(suffix)
+                break
+        if _STAGE_TOKEN.fullmatch(remainder) is None:
+            continue
+        try:
+            os.unlink(name, dir_fd=parent_fd)
+            removed = True
+        except FileNotFoundError:
+            pass
+    if removed:
+        os.fsync(parent_fd)
+
+
+def _renameat_with_flags(
+    parent_fd: int, source: str, destination: str, *, exchange: bool
+) -> None:
+    """Use the host's conditional rename primitive without reopening the parent."""
+    library = ctypes.CDLL(None, use_errno=True)
+    source_bytes = os.fsencode(source)
+    destination_bytes = os.fsencode(destination)
+    if hasattr(library, "renameatx_np"):
+        operation = library.renameatx_np
+        flag = 0x00000002 if exchange else 0x00000004
+    elif hasattr(library, "renameat2"):
+        operation = library.renameat2
+        flag = 0x00000002 if exchange else 0x00000001
+    elif not exchange:
+        os.link(
+            source,
+            destination,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        os.unlink(source, dir_fd=parent_fd)
+        return
+    else:
+        raise CatalogError(
+            "atomic catalog replacement is unavailable on this platform"
+        )
+    operation.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
+    operation.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    if operation(
+        parent_fd,
+        source_bytes,
+        parent_fd,
+        destination_bytes,
+        flag,
+    ) != 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number))
+
+
+def _exchange_catalog_names(parent_fd: int, first: str, second: str) -> None:
+    _renameat_with_flags(parent_fd, first, second, exchange=True)
+
+
+def _publish_new_catalog_name(parent_fd: int, source: str, destination: str) -> None:
+    _renameat_with_flags(parent_fd, source, destination, exchange=False)
 
 
 def _catalog_lock_name(database_name: str) -> str:
@@ -184,6 +412,7 @@ class VideoSearchResult:
     sources: tuple[str, ...]
     sources_truncated: bool
     watch_url: str
+    highlight: str
     rank: float
 
 
@@ -297,7 +526,6 @@ def _safe_artifacts(
     root_fd: int,
     directory_parts: tuple[str, ...],
     suffix: str,
-    corpus_root: Path,
 ) -> list[_ArtifactSnapshot]:
     """Read stable snapshots through no-follow descriptors rooted in corpus."""
     try:
@@ -308,13 +536,14 @@ def _safe_artifacts(
             snapshots: list[_ArtifactSnapshot] = []
             for name in names:
                 try:
+                    stored_path = Path(*directory_parts, name).as_posix()
                     snapshots.append(
                         _ArtifactSnapshot(
-                            path=corpus_root.joinpath(*directory_parts, name),
-                            raw_bytes=_read_regular_at(directory_fd, name),
+                            path=Path(stored_path),
+                            raw_bytes=_read_portable_artifact_at(root_fd, stored_path),
                         )
                     )
-                except (OSError, ValueError):
+                except (CatalogError, OSError, ValueError):
                     continue
             return snapshots
     except (OSError, ValueError):
@@ -323,9 +552,13 @@ def _safe_artifacts(
 
 def _inventory_corpus(
     corpus_root: Path,
+    expected_root_identity: tuple[int, int],
 ) -> list[tuple[str, str, _ArtifactSnapshot]]:
     inventory: list[tuple[str, str, _ArtifactSnapshot]] = []
     with _confined_directory(corpus_root, corpus_root, create=False) as root_fd:
+        opened_root = os.fstat(root_fd)
+        if (opened_root.st_dev, opened_root.st_ino) != expected_root_identity:
+            raise ValueError("corpus root changed while opening")
         layouts: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
             ("inbox", ("insights",), ("transcripts",))
         ]
@@ -349,7 +582,7 @@ def _inventory_corpus(
 
         for source_slug, insights_parts, transcripts_parts in layouts:
             insight_snapshots = _safe_artifacts(
-                root_fd, insights_parts, ".json", corpus_root
+                root_fd, insights_parts, ".json"
             )
             for snapshot in insight_snapshots:
                 if not snapshot.path.name.startswith("AGGREGATE_REPORT"):
@@ -364,7 +597,7 @@ def _inventory_corpus(
                             pass
                     inventory.append((artifact_slug, "insight", snapshot))
             transcript_snapshots = _safe_artifacts(
-                root_fd, transcripts_parts, ".vtt", corpus_root
+                root_fd, transcripts_parts, ".vtt"
             )
             for snapshot in transcript_snapshots:
                 artifact_slug = source_slug
@@ -384,71 +617,266 @@ class Catalog:
     """Own the catalog connection, schema, and idempotent domain operations."""
 
     def __init__(self, db_path: Path) -> None:
-        self.db_path = Path(db_path)
+        requested_path = Path(db_path).expanduser()
+        self.db_path = (
+            requested_path
+            if requested_path.is_absolute()
+            else (Path.cwd() / requested_path).absolute()
+        )
+        self._connection: sqlite3.Connection | None = None
+        self._database_identity: _CatalogIdentity | None = None
+        self._staging_name: str | None = None
+        self._preserve_staging_on_error = False
         self._directory_context = _held_catalog_parent(self.db_path.parent)
         self._parent_fd = self._directory_context.__enter__()
-        self._lock_context = catalog_writer_lock(self._parent_fd, self.db_path.name)
-        try:
-            self._lock_context.__enter__()
-        except BaseException:
-            self._directory_context.__exit__(None, None, None)
-            self._directory_context = None
-            raise
-        self._connection: sqlite3.Connection | None = None
+        self._lock_context = None
         try:
             database_identity = _catalog_database_identity(
                 self._parent_fd, self.db_path.name
             )
-            self._connection = sqlite3.connect(self.db_path)
+            if database_identity is not None:
+                with ReadOnlyCatalog(self.db_path):
+                    pass
+            self._lock_context = catalog_writer_lock(self._parent_fd, self.db_path.name)
+            self._lock_context.__enter__()
+            locked_identity = _catalog_database_identity(
+                self._parent_fd, self.db_path.name
+            )
+            if locked_identity != database_identity:
+                raise CatalogError("catalog database path changed while opening")
+            _require_catalog_parent_identity(self._parent_fd, self.db_path.parent)
+            _cleanup_stale_catalog_stages(self._parent_fd, self.db_path.name)
+            self._database_identity = database_identity
+            self._staging_name = (
+                f".{self.db_path.name}.stage-{secrets.token_hex(16)}"
+            )
+            _copy_catalog_database_to_stage(
+                self._parent_fd,
+                self.db_path.name,
+                database_identity,
+                self._staging_name,
+            )
+            _require_catalog_parent_identity(self._parent_fd, self.db_path.parent)
+            staging_path = self.db_path.parent / self._staging_name
+            self._connection = sqlite3.connect(
+                f"{staging_path.as_uri()}?mode=rw",
+                uri=True,
+            )
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys = ON")
             self._connection.execute("PRAGMA busy_timeout = 60000")
-            self._connection.execute("PRAGMA journal_mode = WAL")
-            self._create_schema()
-            initialized_identity = _catalog_database_identity(
-                self._parent_fd, self.db_path.name
-            )
-            if initialized_identity is None or (
-                database_identity is not None
-                and initialized_identity != database_identity
-            ):
-                raise CatalogError("catalog database path is unsafe")
+            self._create_schema(existing=database_identity is not None)
+            journal_mode = self._connection.execute(
+                "PRAGMA journal_mode = DELETE"
+            ).fetchone()
+            if journal_mode is None or str(journal_mode[0]).lower() != "delete":
+                raise RuntimeError("catalog could not enter private journal mode")
         except BaseException:
-            self.close()
+            self.close(publish=False)
             raise
 
     def __enter__(self) -> "Catalog":
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
-        self.close()
+        try:
+            self.close(publish=exc_type is None)
+        except BaseException as close_error:
+            if isinstance(exc, BaseException):
+                exc.add_note(
+                    "catalog close also failed: "
+                    f"{type(close_error).__name__}: {close_error}"
+                )
+                return
+            raise
 
     @staticmethod
     def open_read_only(db_path: Path) -> "ReadOnlyCatalog":
         """Open catalog discovery queries without locks, journals, or writes."""
         return ReadOnlyCatalog(db_path)
 
-    def close(self) -> None:
+    def close(self, *, publish: bool = True) -> None:
         connection = self._connection
         self._connection = None
+        publish_error: BaseException | None = None
         try:
             if connection is not None:
-                connection.close()
+                try:
+                    if publish:
+                        connection.commit()
+                        journal_mode = connection.execute(
+                            "PRAGMA journal_mode = DELETE"
+                        ).fetchone()
+                        if (
+                            journal_mode is None
+                            or str(journal_mode[0]).lower() != "delete"
+                        ):
+                            raise RuntimeError(
+                                "catalog could not leave WAL mode before publication"
+                            )
+                except BaseException as exc:
+                    publish_error = exc
+                finally:
+                    connection.close()
+            if publish and publish_error is None and self._staging_name is not None:
+                try:
+                    self._publish_staged_database()
+                except BaseException as exc:
+                    publish_error = exc
         finally:
-            lock_context = getattr(self, "_lock_context", None)
-            self._lock_context = None
             try:
-                if lock_context is not None:
-                    lock_context.__exit__(None, None, None)
+                parent_fd = getattr(self, "_parent_fd", None)
+                if parent_fd is not None and not self._preserve_staging_on_error:
+                    try:
+                        _remove_catalog_stage(parent_fd, self._staging_name)
+                    except BaseException as cleanup_error:
+                        if publish_error is None:
+                            publish_error = cleanup_error
+                        else:
+                            publish_error.add_note(
+                                "catalog stage cleanup also failed: "
+                                f"{type(cleanup_error).__name__}: {cleanup_error}"
+                            )
+                self._staging_name = None
             finally:
-                directory_context = getattr(self, "_directory_context", None)
-                self._directory_context = None
-                if directory_context is not None:
-                    directory_context.__exit__(None, None, None)
+                lock_context = getattr(self, "_lock_context", None)
+                self._lock_context = None
+                try:
+                    if lock_context is not None:
+                        lock_context.__exit__(None, None, None)
+                finally:
+                    directory_context = getattr(self, "_directory_context", None)
+                    self._directory_context = None
+                    if directory_context is not None:
+                        directory_context.__exit__(None, None, None)
+        if publish_error is not None:
+            raise publish_error
+
+    def _rollback_catalog_exchange(self, primary_error: BaseException) -> None:
+        """Restore the old live inode, retrying below the injectable wrapper."""
+        if self._staging_name is None:
+            return
+        try:
+            _exchange_catalog_names(
+                self._parent_fd, self._staging_name, self.db_path.name
+            )
+            return
+        except BaseException as first_rollback_error:
+            primary_error.add_note(
+                "first catalog rollback attempt failed: "
+                f"{type(first_rollback_error).__name__}: {first_rollback_error}"
+            )
+        try:
+            _renameat_with_flags(
+                self._parent_fd,
+                self._staging_name,
+                self.db_path.name,
+                exchange=True,
+            )
+        except BaseException as final_rollback_error:
+            self._preserve_staging_on_error = True
+            primary_error.add_note(
+                "final catalog rollback attempt failed; the old database is "
+                f"preserved at {self._staging_name}: "
+                f"{type(final_rollback_error).__name__}: {final_rollback_error}"
+            )
+            raise primary_error
+
+    def _publish_staged_database(self) -> None:
+        if self._staging_name is None:
+            return
+        _require_catalog_parent_identity(self._parent_fd, self.db_path.parent)
+        if (
+            _catalog_database_identity(self._parent_fd, self.db_path.name)
+            != self._database_identity
+        ):
+            raise CatalogError("catalog database changed before publication")
+        staging_path = self.db_path.parent / self._staging_name
+        self.validate_database(staging_path)
+        _require_catalog_parent_identity(self._parent_fd, self.db_path.parent)
+        if (
+            _catalog_database_identity(self._parent_fd, self.db_path.name)
+            != self._database_identity
+        ):
+            raise CatalogError("catalog database changed before publication")
+        staged_identity = _catalog_database_identity(
+            self._parent_fd, self._staging_name
+        )
+        if staged_identity is None:
+            raise CatalogError("staged catalog disappeared before publication")
+        if self._database_identity is None:
+            published = False
+            try:
+                _publish_new_catalog_name(
+                    self._parent_fd, self._staging_name, self.db_path.name
+                )
+                published = True
+                _require_catalog_parent_identity(
+                    self._parent_fd, self.db_path.parent
+                )
+                if (
+                    not _same_catalog_object(
+                        _catalog_database_identity(
+                            self._parent_fd, self.db_path.name
+                        ),
+                        staged_identity,
+                    )
+                ):
+                    raise CatalogError("published catalog identity changed")
+                os.fsync(self._parent_fd)
+            except BaseException:
+                if published:
+                    os.rename(
+                        self.db_path.name,
+                        self._staging_name,
+                        src_dir_fd=self._parent_fd,
+                        dst_dir_fd=self._parent_fd,
+                    )
+                raise
+            self._staging_name = None
+            return
+
+        exchanged = False
+        try:
+            _exchange_catalog_names(
+                self._parent_fd, self._staging_name, self.db_path.name
+            )
+            exchanged = True
+            if (
+                not _same_catalog_object(
+                    _catalog_database_identity(
+                        self._parent_fd, self._staging_name
+                    ),
+                    self._database_identity,
+                )
+            ):
+                raise CatalogError("catalog database changed during publication")
+            if (
+                not _same_catalog_object(
+                    _catalog_database_identity(
+                        self._parent_fd, self.db_path.name
+                    ),
+                    staged_identity,
+                )
+            ):
+                raise CatalogError("published catalog identity changed")
+            _require_catalog_parent_identity(self._parent_fd, self.db_path.parent)
+            os.fsync(self._parent_fd)
+        except BaseException as publish_error:
+            if exchanged:
+                self._rollback_catalog_exchange(publish_error)
+            raise publish_error
+        _remove_catalog_stage(self._parent_fd, self._staging_name)
+        self._staging_name = None
 
     def checkpoint(self) -> None:
-        """Move every committed WAL frame into the private main database."""
+        """Commit the private working copy and drain WAL if one is present."""
         self._connection.commit()
+        journal_mode = self._connection.execute("PRAGMA journal_mode").fetchone()
+        if journal_mode is None:
+            raise RuntimeError("catalog journal mode is unavailable")
+        if str(journal_mode[0]).lower() != "wal":
+            return
         busy, remaining, checkpointed = self._connection.execute(
             "PRAGMA wal_checkpoint(TRUNCATE)"
         ).fetchone()
@@ -480,15 +908,22 @@ class Catalog:
             result = connection.execute("PRAGMA quick_check").fetchone()
             if result != ("ok",):
                 raise RuntimeError("staged catalog failed SQLite quick_check")
-            row = connection.execute(
-                "SELECT version FROM schema_meta LIMIT 1"
-            ).fetchone()
-            if row != (_SCHEMA_VERSION,):
-                raise RuntimeError("staged catalog schema is invalid")
+            try:
+                _validate_schema_metadata(connection)
+            except (CatalogError, sqlite3.Error) as exc:
+                raise RuntimeError("staged catalog schema is invalid") from exc
         finally:
             connection.close()
 
-    def _create_schema(self) -> None:
+    def _create_schema(self, *, existing: bool) -> None:
+        if self._connection is None:
+            raise CatalogError("catalog database is closed")
+        if existing:
+            quick_check = self._connection.execute("PRAGMA quick_check").fetchone()
+            if quick_check is None or quick_check[0] != "ok":
+                raise CatalogError("catalog database is unavailable or invalid")
+            _validate_schema_metadata(self._connection)
+            return
         self._connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS schema_meta (
@@ -560,15 +995,10 @@ class Catalog:
             );
             """
         )
-        row = self._connection.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
-        if row is None:
-            self._connection.execute(
-                "INSERT INTO schema_meta(version) VALUES (?)", (_SCHEMA_VERSION,)
-            )
-        elif row["version"] != _SCHEMA_VERSION:
-            raise RuntimeError(
-                f"Unsupported catalog schema {row['version']}; expected {_SCHEMA_VERSION}"
-            )
+        self._connection.execute(
+            "INSERT INTO schema_meta(version) VALUES (?)", (_SCHEMA_VERSION,)
+        )
+        _validate_schema_metadata(self._connection)
         self._connection.commit()
 
     def import_corpus(self, root: Path) -> RunSummary:
@@ -580,9 +1010,12 @@ class Catalog:
         if not stat.S_ISDIR(raw_details.st_mode) or stat.S_ISLNK(raw_details.st_mode):
             raise ValueError(f"Corpus directory is not safe: {raw_root}")
         corpus_root = Path(os.path.realpath(raw_root.parent)) / raw_root.name
+        expected_root_identity = (raw_details.st_dev, raw_details.st_ino)
         try:
-            with _confined_directory(corpus_root, corpus_root, create=False):
-                pass
+            with _confined_directory(corpus_root, corpus_root, create=False) as root_fd:
+                opened_root = os.fstat(root_fd)
+                if (opened_root.st_dev, opened_root.st_ino) != expected_root_identity:
+                    raise ValueError("corpus root changed while opening")
         except OSError as exc:
             raise ValueError(f"Corpus directory is not safe: {raw_root}") from exc
         started_at = _utc_now()
@@ -604,7 +1037,9 @@ class Catalog:
                 items_written,
                 error_count,
                 touched_video_ids,
-            ) = self._import_corpus_items(corpus_root, run_id)
+            ) = self._import_corpus_items(
+                corpus_root, expected_root_identity, run_id
+            )
             for video_id in sorted(touched_video_ids):
                 self._reindex_video(video_id)
         except BaseException as exc:
@@ -652,6 +1087,7 @@ class Catalog:
     def _import_corpus_items(
         self,
         corpus_root: Path,
+        expected_root_identity: tuple[int, int],
         run_id: int,
     ) -> tuple[int, int, int, set[str]]:
         items_seen = 0
@@ -659,7 +1095,7 @@ class Catalog:
         error_count = 0
         touched_video_ids: set[str] = set()
 
-        artifacts = _inventory_corpus(corpus_root)
+        artifacts = _inventory_corpus(corpus_root, expected_root_identity)
         for source_slug, kind, snapshot in artifacts:
             items_seen += 1
             path = snapshot.path
@@ -696,7 +1132,7 @@ class Catalog:
                             run_id=run_id,
                             stage="corpus_validation",
                             source=artifact_source_slug,
-                            item_ref=str(path.absolute()),
+                            item_ref=path.as_posix(),
                             message="; ".join(validation_issues),
                         )
                     searchable_text = (
@@ -729,7 +1165,7 @@ class Catalog:
                             artifact_source_slug,
                             kind,
                             name.language,
-                            str(path.absolute()),
+                            _validate_artifact_relative_path(path.as_posix()),
                             digest,
                             searchable_text,
                             now,
@@ -751,7 +1187,7 @@ class Catalog:
                     run_id=run_id,
                     stage="corpus_import",
                     source=artifact_source_slug,
-                    item_ref=str(path.absolute()),
+                    item_ref=path.as_posix(),
                     message=f"{type(exc).__name__}: {exc}",
                 )
 
@@ -1067,9 +1503,6 @@ class Catalog:
         )
 
 
-_CatalogIdentity = tuple[int, int, int, int, int]
-
-
 class ReadOnlyCatalog:
     """Validated immutable catalog view used by read-only integrations."""
 
@@ -1251,11 +1684,10 @@ class ReadOnlyCatalog:
         quick_check = connection.execute("PRAGMA quick_check").fetchone()
         if quick_check is None or quick_check[0] != "ok":
             raise CatalogError("catalog database is unavailable or invalid")
-        row = connection.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
-        if row is None or int(row["version"]) != _SCHEMA_VERSION:
-            raise CatalogError("catalog database is unavailable or invalid")
         required = {
             "artifacts",
+            "collection_errors",
+            "ingestion_runs",
             "schema_meta",
             "video_search",
             "video_sources",
@@ -1269,6 +1701,21 @@ class ReadOnlyCatalog:
         }
         if not required.issubset(present):
             raise CatalogError("catalog database is unavailable or invalid")
+        _validate_schema_metadata(connection)
+        for artifact in connection.execute("SELECT path, kind, language FROM artifacts"):
+            stored_path = _validate_artifact_relative_path(artifact["path"])
+            try:
+                artifact_name = _parse_artifact_name(Path(stored_path))
+            except ValueError as exc:
+                raise CatalogError("catalog artifact path is invalid") from exc
+            if (
+                artifact["kind"] not in {"insight", "transcript"}
+                or not isinstance(artifact["language"], str)
+                or artifact_name.language != artifact["language"]
+                or Path(stored_path).suffix
+                != (".json" if artifact["kind"] == "insight" else ".vtt")
+            ):
+                raise CatalogError("catalog artifact path is invalid")
 
     @staticmethod
     def _validate_source_slug(value: object) -> str:
@@ -1364,6 +1811,85 @@ class ReadOnlyCatalog:
         except (sqlite3.Error, TypeError, ValueError) as exc:
             raise CatalogError("catalog query failed") from exc
 
+    def stats(self) -> CatalogStats:
+        self._require_database_identity()
+        connection = self._connection_or_raise()
+        try:
+            def count(table: str) -> int:
+                row = connection.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
+                return self._validate_nonnegative_count(row["n"])
+
+            result = CatalogStats(
+                videos=count("videos"),
+                sources=count("video_sources"),
+                artifacts=count("artifacts"),
+                runs=count("ingestion_runs"),
+                errors=count("collection_errors"),
+            )
+            self._require_database_identity()
+            return result
+        except CatalogError:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            raise CatalogError("catalog query failed") from exc
+
+    def list_errors(self, *, run_id: int | None = None) -> tuple[CollectionError, ...]:
+        if run_id is not None and (
+            isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1
+        ):
+            raise ValueError("run_id must be a positive integer")
+        self._require_database_identity()
+        connection = self._connection_or_raise()
+        sql = "SELECT * FROM collection_errors"
+        parameters: tuple[object, ...] = ()
+        if run_id is not None:
+            sql += " WHERE run_id = ?"
+            parameters = (run_id,)
+        sql += " ORDER BY id"
+        try:
+            rows = connection.execute(sql, parameters).fetchall()
+            result = tuple(
+                CollectionError(
+                    id=self._validate_positive_id(row["id"]),
+                    run_id=self._validate_positive_id(row["run_id"]),
+                    stage=self._validate_collection_text(row["stage"]),
+                    source=self._validate_collection_text(row["source"]),
+                    item_ref=self._validate_collection_text(row["item_ref"], allow_empty=True),
+                    message=self._validate_collection_text(row["message"]),
+                    created_at=self._validate_collection_text(row["created_at"]),
+                )
+                for row in rows
+            )
+            self._require_database_identity()
+            return result
+        except CatalogError:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            raise CatalogError("catalog query failed") from exc
+
+    @staticmethod
+    def _validate_positive_id(value: object) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise CatalogError("catalog row is invalid")
+        return value
+
+    @staticmethod
+    def _validate_collection_text(value: object, *, allow_empty: bool = False) -> str:
+        if (
+            not isinstance(value, str)
+            or (not allow_empty and not value)
+            or len(value) > 10000
+            or "\x00" in value
+        ):
+            raise CatalogError("catalog row is invalid")
+        return value
+
+    @staticmethod
+    def _validate_highlight(value: object) -> str:
+        if not isinstance(value, str) or len(value) > 2000 or "\x00" in value:
+            raise CatalogError("catalog row is invalid")
+        return value
+
     @staticmethod
     def _validate_nonnegative_count(value: object) -> int:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
@@ -1377,7 +1903,7 @@ class ReadOnlyCatalog:
         source: str | None = None,
         limit: int = 10,
     ) -> tuple[VideoSearchResult, ...]:
-        self._require_limit(limit, maximum=20)
+        self._require_limit(limit, maximum=100)
         if not isinstance(query, str):
             raise ValueError("query must be text")
         tokens = re.findall(r"\w+", query, flags=re.UNICODE)
@@ -1396,6 +1922,7 @@ class ReadOnlyCatalog:
                 videos.title,
                 videos.published_at,
                 videos.watch_url,
+                snippet(video_search, 4, '[', ']', ' … ', 18) AS highlight,
                 bm25(video_search) AS rank
             FROM video_search
             JOIN videos ON videos.video_id = video_search.video_id
@@ -1445,6 +1972,7 @@ class ReadOnlyCatalog:
                         sources=sources,
                         sources_truncated=len(source_rows) > 10,
                         watch_url=watch_url,
+                        highlight=self._validate_highlight(row["highlight"]),
                         rank=rank,
                     )
                 )

@@ -4,8 +4,10 @@ import json
 import fcntl
 import os
 import sqlite3
+import stat
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -298,7 +300,10 @@ class CatalogImportTests(unittest.TestCase):
             self.assertEqual(stats.errors, 1)
             self.assertEqual(len(errors), 1)
             self.assertEqual(errors[0].stage, "corpus_import")
-            self.assertEqual(errors[0].item_ref, str(broken_path.resolve()))
+            self.assertEqual(
+                errors[0].item_ref,
+                "broken-channel/insights/20260819 - Broken metadata [bad123DEF45].en.json",
+            )
             self.assertIn("JSON", errors[0].message)
 
     def test_import_keeps_type_invalid_insight_and_records_validation_error(self) -> None:
@@ -407,7 +412,7 @@ class CatalogSearchTests(unittest.TestCase):
                 [item.video_id for item in videos],
                 sorted(item.video_id for item in videos),
             )
-            self.assertTrue(all(not hasattr(item, "highlight") for item in videos))
+            self.assertTrue(all(item.highlight for item in videos))
             self.assertEqual(database.read_bytes(), before_database)
             self.assertEqual(sorted(path.name for path in base.iterdir()), before_names)
 
@@ -420,8 +425,8 @@ class CatalogSearchTests(unittest.TestCase):
             with Catalog.open_read_only(database) as reader:
                 with self.assertRaisesRegex(ValueError, "between 1 and 100"):
                     reader.list_corpora(limit=101)
-                with self.assertRaisesRegex(ValueError, "between 1 and 20"):
-                    reader.search_videos("query", limit=21)
+                with self.assertRaisesRegex(ValueError, "between 1 and 100"):
+                    reader.search_videos("query", limit=101)
 
 
 class CatalogDiscoveryTests(unittest.TestCase):
@@ -672,3 +677,731 @@ def test_read_only_catalog_uses_anchored_snapshot_during_parent_swap(
 
     assert swapped is True
     assert [item.title for item in found] == ["Original needle"]
+
+
+def test_imported_artifact_paths_survive_relocation_and_reject_escape_symlinks(
+    tmp_path: Path,
+) -> None:
+    original_root = tmp_path / "original-corpus"
+    relocated_root = tmp_path / "relocated-corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        original_root,
+        channel="product-channel",
+        language="en",
+        transcript="Portable catalog artifact.",
+    )
+
+    with Catalog(database) as catalog:
+        catalog.import_corpus(original_root)
+        catalog.checkpoint()
+    with sqlite3.connect(database) as connection:
+        stored_paths = [
+            row[0] for row in connection.execute("SELECT path FROM artifacts ORDER BY path")
+        ]
+
+    assert stored_paths == [
+        f"product-channel/insights/20260820 - Agentic product discovery [{VIDEO_ID}].en.json",
+        f"product-channel/transcripts/20260820 - Agentic product discovery [{VIDEO_ID}].en.vtt",
+    ]
+    original_root.rename(relocated_root)
+    with Catalog(database) as catalog:
+        summary = catalog.import_corpus(relocated_root)
+        stats = catalog.stats()
+
+    assert summary.items_seen == 2
+    assert summary.items_written == 0
+    assert stats.artifacts == 2
+
+
+def test_import_rejects_corpus_root_replaced_after_identity_check(tmp_path: Path) -> None:
+    import yt_insights.catalog as catalog_module
+
+    corpus = tmp_path / "corpus"
+    original = tmp_path / "original-corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        corpus,
+        channel="product-channel",
+        language="en",
+        transcript="Original corpus bytes.",
+    )
+    original_confined_directory = catalog_module._confined_directory
+    swapped = False
+
+    @contextmanager
+    def replace_root_before_open(*args: object, **kwargs: object):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            corpus.rename(original)
+            _write_video_artifacts(
+                corpus,
+                channel="hostile-channel",
+                language="en",
+                transcript="Replacement corpus bytes.",
+                video_id="hostile1234",
+            )
+        with original_confined_directory(*args, **kwargs) as descriptor:
+            yield descriptor
+
+    with patch.object(catalog_module, "_confined_directory", replace_root_before_open):
+        with Catalog(database) as catalog:
+            with pytest.raises(ValueError, match="corpus root changed"):
+                catalog.import_corpus(corpus)
+            stats = catalog.stats()
+
+    assert stats.videos == 0
+    assert stats.artifacts == 0
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    [
+        "../escape.vtt",
+        "/absolute.vtt",
+        "//double-slash.vtt",
+        "product-channel//transcripts/file.vtt",
+        "product-channel/./transcripts/file.vtt",
+        "C:drive-relative.vtt",
+        r"C:\\escape.vtt",
+        "product-channel/transcripts",
+    ],
+)
+def test_read_only_catalog_rejects_unsafe_stored_artifact_paths(
+    tmp_path: Path, unsafe_path: str
+) -> None:
+    corpus = tmp_path / "corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        corpus,
+        channel="product-channel",
+        language="en",
+        transcript="Catalog path validation.",
+    )
+    with Catalog(database) as catalog:
+        catalog.import_corpus(corpus)
+        catalog.checkpoint()
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE artifacts SET path = ?", (unsafe_path,))
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    with pytest.raises(CatalogError):
+        Catalog.open_read_only(database)
+
+
+def test_read_only_catalog_rejects_pre_portability_schema(tmp_path: Path) -> None:
+    corpus = tmp_path / "corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        corpus,
+        channel="product-channel",
+        language="en",
+        transcript="Old schemas must fail closed.",
+    )
+    with Catalog(database) as catalog:
+        catalog.import_corpus(corpus)
+        catalog.checkpoint()
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE schema_meta SET version = 1")
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    with pytest.raises(CatalogError):
+        Catalog.open_read_only(database)
+
+
+@pytest.mark.parametrize(
+    "sql, parameters",
+    [
+        ("INSERT INTO schema_meta(version) VALUES (?)", (2,)),
+        ("UPDATE schema_meta SET version = ?", ("2.5",)),
+    ],
+)
+def test_read_only_catalog_requires_one_integer_portability_schema_row(
+    tmp_path: Path, sql: str, parameters: tuple[object, ...]
+) -> None:
+    corpus = tmp_path / "corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        corpus,
+        channel="product-channel",
+        language="en",
+        transcript="Schema metadata must be exact.",
+    )
+    with Catalog(database) as catalog:
+        catalog.import_corpus(corpus)
+        catalog.checkpoint()
+    with sqlite3.connect(database) as connection:
+        connection.execute(sql, parameters)
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    with pytest.raises(CatalogError):
+        Catalog.open_read_only(database)
+
+
+def test_read_only_catalog_rejects_foreign_key_violations(tmp_path: Path) -> None:
+    corpus = tmp_path / "corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        corpus,
+        channel="product-channel",
+        language="en",
+        transcript="Foreign key validation.",
+    )
+    with Catalog(database) as catalog:
+        catalog.import_corpus(corpus)
+        catalog.checkpoint()
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO artifacts(
+                video_id, source_slug, kind, language, path, sha256,
+                searchable_text, imported_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "missing0000",
+                "product-channel",
+                "insight",
+                "en",
+                f"product-channel/insights/20260820 - Missing [{VIDEO_ID}].en.json",
+                "0" * 64,
+                "",
+                "2026-08-28T00:00:00+00:00",
+            ),
+        )
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    with pytest.raises(CatalogError):
+        Catalog.open_read_only(database)
+
+
+@pytest.mark.parametrize("corruption", ["duplicate_schema_meta", "foreign_keys"])
+def test_writer_rejects_invalid_existing_catalog_without_creating_sidecars(
+    tmp_path: Path, corruption: str
+) -> None:
+    corpus = tmp_path / "corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        corpus,
+        channel="product-channel",
+        language="en",
+        transcript="Writer preflight validation.",
+    )
+    with Catalog(database) as catalog:
+        catalog.import_corpus(corpus)
+        catalog.checkpoint()
+    with sqlite3.connect(database) as connection:
+        if corruption == "duplicate_schema_meta":
+            connection.execute("INSERT INTO schema_meta(version) VALUES (1)")
+        else:
+            for index in range(3):
+                connection.execute(
+                    """
+                    INSERT INTO artifacts(
+                        video_id, source_slug, kind, language, path, sha256,
+                        searchable_text, imported_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"missing000{index}",
+                        "product-channel",
+                        "insight",
+                        "en",
+                        f"product-channel/insights/20260820 - Missing {index} [{VIDEO_ID}].en.json",
+                        str(index) * 64,
+                        "",
+                        "2026-08-28T00:00:00+00:00",
+                    ),
+                )
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    before_names = sorted(path.name for path in tmp_path.iterdir())
+    before_database = database.read_bytes()
+    candidate: Catalog | None = None
+    try:
+        with pytest.raises(CatalogError):
+            candidate = Catalog(database)
+    finally:
+        if candidate is not None:
+            candidate.close()
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == before_names
+    assert database.read_bytes() == before_database
+
+
+def test_writer_parent_swap_after_lock_never_mutates_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.catalog as catalog_module
+
+    live_parent = tmp_path / "live"
+    replacement_parent = tmp_path / "replacement"
+    moved_parent = tmp_path / "moved"
+    live_database = live_parent / "catalog.sqlite3"
+    replacement_database = replacement_parent / "catalog.sqlite3"
+    for database, title in (
+        (live_database, "Original title"),
+        (replacement_database, "Replacement title"),
+    ):
+        with Catalog(database) as catalog:
+            catalog.ingest_discovery(
+                "https://www.youtube.com/@source/videos",
+                VideoListResult(
+                    videos=[VideoInfo(VIDEO_ID, title, "20260828")],
+                    errors=[],
+                    returncode=0,
+                ),
+            )
+            catalog.checkpoint()
+    replacement_before = replacement_database.read_bytes()
+    original_lock = catalog_module.catalog_writer_lock
+    swapped = False
+
+    @contextmanager
+    def lock_then_swap(*args: object, **kwargs: object):
+        nonlocal swapped
+        with original_lock(*args, **kwargs):
+            if not swapped:
+                swapped = True
+                live_parent.rename(moved_parent)
+                replacement_parent.rename(live_parent)
+            yield
+
+    monkeypatch.setattr(catalog_module, "catalog_writer_lock", lock_then_swap)
+
+    with pytest.raises(CatalogError):
+        with Catalog(live_database) as catalog:
+            catalog.ingest_discovery(
+                "https://www.youtube.com/@source/videos",
+                VideoListResult(
+                    videos=[VideoInfo("fresh123ABC", "Mutating title", "20260828")],
+                    errors=[],
+                    returncode=0,
+                ),
+            )
+
+    assert swapped is True
+    assert (live_parent / "catalog.sqlite3").read_bytes() == replacement_before
+    assert not (live_parent / "catalog.sqlite3-wal").exists()
+    assert not (live_parent / "catalog.sqlite3-shm").exists()
+
+
+def test_writer_database_swap_after_lock_never_opens_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.catalog as catalog_module
+
+    parent = tmp_path / "catalog"
+    database = parent / "catalog.sqlite3"
+    replacement = tmp_path / "replacement.sqlite3"
+    moved_database = parent / "original.sqlite3"
+    for path, title in ((database, "Original title"), (replacement, "Replacement title")):
+        with Catalog(path) as catalog:
+            catalog.ingest_discovery(
+                "https://www.youtube.com/@source/videos",
+                VideoListResult(
+                    videos=[VideoInfo(VIDEO_ID, title, "20260828")],
+                    errors=[],
+                    returncode=0,
+                ),
+            )
+            catalog.checkpoint()
+    replacement_before = replacement.read_bytes()
+    original_lock = catalog_module.catalog_writer_lock
+    swapped = False
+
+    @contextmanager
+    def lock_then_swap(*args: object, **kwargs: object):
+        nonlocal swapped
+        with original_lock(*args, **kwargs):
+            if not swapped:
+                swapped = True
+                database.rename(moved_database)
+                replacement.rename(database)
+            yield
+
+    monkeypatch.setattr(catalog_module, "catalog_writer_lock", lock_then_swap)
+
+    with pytest.raises(CatalogError):
+        with Catalog(database):
+            pass
+
+    assert swapped is True
+    assert database.read_bytes() == replacement_before
+    assert not database.with_name(database.name + "-wal").exists()
+    assert not database.with_name(database.name + "-shm").exists()
+
+
+def test_writer_discards_staging_when_context_is_interrupted(tmp_path: Path) -> None:
+    database = tmp_path / "catalog.sqlite3"
+    with Catalog(database) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo(VIDEO_ID, "Original title", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
+        catalog.checkpoint()
+    before_database = database.read_bytes()
+
+    with pytest.raises(RuntimeError, match="interrupt"):
+        with Catalog(database) as catalog:
+            catalog.ingest_discovery(
+                "https://www.youtube.com/@source/videos",
+                VideoListResult(
+                    videos=[VideoInfo("fresh123ABC", "Unpublished title", "20260828")],
+                    errors=[],
+                    returncode=0,
+                ),
+            )
+            raise RuntimeError("interrupt before publish")
+
+    assert database.read_bytes() == before_database
+    assert not database.with_name(database.name + "-wal").exists()
+    assert not database.with_name(database.name + "-shm").exists()
+
+
+def test_writer_publishes_new_catalog_private_without_sidecars(tmp_path: Path) -> None:
+    database = tmp_path / "catalog.sqlite3"
+
+    with Catalog(database) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo(VIDEO_ID, "Private catalog", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
+
+    assert stat.S_IMODE(database.stat().st_mode) == 0o600
+    assert not database.with_name(database.name + "-wal").exists()
+    assert not database.with_name(database.name + "-shm").exists()
+
+
+def test_writer_atomic_exchange_restores_concurrent_file_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.catalog as catalog_module
+
+    database = tmp_path / "catalog.sqlite3"
+    replacement = tmp_path / "replacement.sqlite3"
+    moved = tmp_path / "original.sqlite3"
+    for path, title in ((database, "Original title"), (replacement, "Replacement title")):
+        with Catalog(path) as catalog:
+            catalog.ingest_discovery(
+                "https://www.youtube.com/@source/videos",
+                VideoListResult(
+                    videos=[VideoInfo(VIDEO_ID, title, "20260828")],
+                    errors=[],
+                    returncode=0,
+                ),
+            )
+    replacement_before = replacement.read_bytes()
+    original_exchange = catalog_module._exchange_catalog_names
+    swapped = False
+
+    def swap_then_exchange(parent_fd: int, first: str, second: str) -> None:
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            database.rename(moved)
+            replacement.rename(database)
+        original_exchange(parent_fd, first, second)
+
+    monkeypatch.setattr(
+        catalog_module, "_exchange_catalog_names", swap_then_exchange
+    )
+
+    with pytest.raises(CatalogError, match="changed during publication"):
+        with Catalog(database) as catalog:
+            catalog.ingest_discovery(
+                "https://www.youtube.com/@source/videos",
+                VideoListResult(
+                    videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
+                    errors=[],
+                    returncode=0,
+                ),
+            )
+
+    assert swapped is True
+    assert database.read_bytes() == replacement_before
+
+
+def test_writer_atomic_exchange_rolls_back_when_parent_is_replaced_at_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.catalog as catalog_module
+
+    live_parent = tmp_path / "live"
+    replacement_parent = tmp_path / "replacement"
+    moved_parent = tmp_path / "moved"
+    database = live_parent / "catalog.sqlite3"
+    replacement_database = replacement_parent / "catalog.sqlite3"
+    for path, title in (
+        (database, "Original title"),
+        (replacement_database, "Replacement title"),
+    ):
+        with Catalog(path) as catalog:
+            catalog.ingest_discovery(
+                "https://www.youtube.com/@source/videos",
+                VideoListResult(
+                    videos=[VideoInfo(VIDEO_ID, title, "20260828")],
+                    errors=[],
+                    returncode=0,
+                ),
+            )
+    replacement_before = replacement_database.read_bytes()
+    original_exchange = catalog_module._exchange_catalog_names
+    swapped = False
+
+    def swap_then_exchange(parent_fd: int, first: str, second: str) -> None:
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            live_parent.rename(moved_parent)
+            replacement_parent.rename(live_parent)
+        original_exchange(parent_fd, first, second)
+
+    monkeypatch.setattr(
+        catalog_module, "_exchange_catalog_names", swap_then_exchange
+    )
+
+    with pytest.raises(CatalogError, match="parent path changed"):
+        with Catalog(database) as catalog:
+            catalog.ingest_discovery(
+                "https://www.youtube.com/@source/videos",
+                VideoListResult(
+                    videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
+                    errors=[],
+                    returncode=0,
+                ),
+            )
+
+    assert swapped is True
+    assert (live_parent / database.name).read_bytes() == replacement_before
+
+
+def test_writer_rolls_back_when_parent_fsync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.catalog as catalog_module
+
+    database = tmp_path / "catalog.sqlite3"
+    with Catalog(database) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo(VIDEO_ID, "Original title", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
+    before = database.read_bytes()
+    original_fsync = catalog_module.os.fsync
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError("directory fsync witness")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(catalog_module.os, "fsync", fail_directory_fsync)
+
+    with pytest.raises(OSError, match="directory fsync witness"):
+        with Catalog(database) as catalog:
+            catalog.ingest_discovery(
+                "https://www.youtube.com/@source/videos",
+                VideoListResult(
+                    videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
+                    errors=[],
+                    returncode=0,
+                ),
+            )
+
+    assert database.read_bytes() == before
+
+
+def test_writer_recovers_stale_private_stage_after_crash(tmp_path: Path) -> None:
+    database = tmp_path / "catalog.sqlite3"
+    token = "a" * 32
+    stale = tmp_path / f".{database.name}.stage-{token}"
+    stale_journal = stale.with_name(stale.name + "-journal")
+    stale.write_bytes(b"stale")
+    stale_journal.write_bytes(b"journal")
+
+    with Catalog(database):
+        pass
+
+    assert not stale.exists()
+    assert not stale_journal.exists()
+
+
+def test_writer_preserves_publish_error_when_stage_cleanup_also_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.catalog as catalog_module
+
+    database = tmp_path / "catalog.sqlite3"
+    with Catalog(database):
+        pass
+
+    def fail_publish(*args: object, **kwargs: object) -> None:
+        raise CatalogError("primary publication failure")
+
+    def fail_cleanup(*args: object, **kwargs: object) -> None:
+        raise OSError("secondary cleanup failure")
+
+    monkeypatch.setattr(catalog_module, "_exchange_catalog_names", fail_publish)
+    monkeypatch.setattr(catalog_module, "_remove_catalog_stage", fail_cleanup)
+
+    with pytest.raises(CatalogError, match="primary publication failure") as raised:
+        with Catalog(database):
+            pass
+
+    assert any("secondary cleanup failure" in note for note in raised.value.__notes__)
+
+
+def test_writer_retries_rollback_below_wrapper_and_preserves_primary_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.catalog as catalog_module
+
+    database = tmp_path / "catalog.sqlite3"
+    with Catalog(database) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo(VIDEO_ID, "Original title", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
+    before = database.read_bytes()
+    original_exchange = catalog_module._exchange_catalog_names
+    original_fsync = catalog_module.os.fsync
+    exchanges = 0
+
+    def fail_wrapper_rollback(parent_fd: int, first: str, second: str) -> None:
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 2:
+            raise OSError("rollback wrapper witness")
+        original_exchange(parent_fd, first, second)
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError("primary fsync witness")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(
+        catalog_module, "_exchange_catalog_names", fail_wrapper_rollback
+    )
+    monkeypatch.setattr(catalog_module.os, "fsync", fail_directory_fsync)
+
+    with pytest.raises(OSError, match="primary fsync witness") as raised:
+        with Catalog(database) as catalog:
+            catalog.ingest_discovery(
+                "https://www.youtube.com/@source/videos",
+                VideoListResult(
+                    videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
+                    errors=[],
+                    returncode=0,
+                ),
+            )
+
+    assert exchanges == 2
+    assert database.read_bytes() == before
+    assert any("rollback wrapper witness" in note for note in raised.value.__notes__)
+
+
+def test_writer_body_error_survives_stage_cleanup_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.catalog as catalog_module
+
+    database = tmp_path / "catalog.sqlite3"
+
+    def fail_cleanup(*args: object, **kwargs: object) -> None:
+        raise OSError("cleanup witness")
+
+    monkeypatch.setattr(catalog_module, "_remove_catalog_stage", fail_cleanup)
+
+    with pytest.raises(RuntimeError, match="business failure") as raised:
+        with Catalog(database):
+            raise RuntimeError("business failure")
+
+    assert any("cleanup witness" in note for note in raised.value.__notes__)
+
+
+def test_writer_preserves_old_stage_when_both_rollback_attempts_fail(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.catalog as catalog_module
+
+    database = tmp_path / "catalog.sqlite3"
+    with Catalog(database) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo(VIDEO_ID, "Original title", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
+    original_exchange = catalog_module._exchange_catalog_names
+    original_fsync = catalog_module.os.fsync
+    exchanges = 0
+
+    def exchange_then_break_rollback(
+        parent_fd: int, first: str, second: str
+    ) -> None:
+        nonlocal exchanges
+        exchanges += 1
+        if exchanges == 1:
+            original_exchange(parent_fd, first, second)
+
+            def fail_direct_rollback(*args: object, **kwargs: object) -> None:
+                raise OSError("direct rollback witness")
+
+            monkeypatch.setattr(
+                catalog_module, "_renameat_with_flags", fail_direct_rollback
+            )
+            return
+        raise OSError("wrapper rollback witness")
+
+    def fail_directory_fsync(descriptor: int) -> None:
+        if stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError("primary fsync witness")
+        original_fsync(descriptor)
+
+    monkeypatch.setattr(
+        catalog_module, "_exchange_catalog_names", exchange_then_break_rollback
+    )
+    monkeypatch.setattr(catalog_module.os, "fsync", fail_directory_fsync)
+
+    with pytest.raises(OSError, match="primary fsync witness") as raised:
+        with Catalog(database) as catalog:
+            catalog.ingest_discovery(
+                "https://www.youtube.com/@source/videos",
+                VideoListResult(
+                    videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
+                    errors=[],
+                    returncode=0,
+                ),
+            )
+
+    preserved = list(tmp_path.glob(f".{database.name}.stage-*"))
+    assert len(preserved) == 1
+    with sqlite3.connect(preserved[0]) as connection:
+        assert connection.execute(
+            "SELECT title FROM videos WHERE video_id = ?", (VIDEO_ID,)
+        ).fetchone() == ("Original title",)
+    assert any("final catalog rollback attempt failed" in note for note in raised.value.__notes__)

@@ -681,8 +681,8 @@ def catalog_search(
     if not query.strip():
         raise click.UsageError("Search query cannot be empty")
     try:
-        with Catalog(db_path) as catalog:
-            results = catalog.search(query, source=source, limit=limit)
+        with Catalog.open_read_only(db_path.expanduser().absolute()) as catalog:
+            results = catalog.search_videos(query, source=source, limit=limit)
     except (OSError, RuntimeError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -711,7 +711,7 @@ def catalog_stats(db_path: Path) -> None:
     from .catalog import Catalog
 
     try:
-        with Catalog(db_path) as catalog:
+        with Catalog.open_read_only(db_path.expanduser().absolute()) as catalog:
             stats = catalog.stats()
     except (OSError, RuntimeError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -735,7 +735,7 @@ def catalog_errors(run_id: int | None, db_path: Path) -> None:
     from .catalog import Catalog
 
     try:
-        with Catalog(db_path) as catalog:
+        with Catalog.open_read_only(db_path.expanduser().absolute()) as catalog:
             errors = catalog.list_errors(run_id=run_id)
     except (OSError, RuntimeError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
