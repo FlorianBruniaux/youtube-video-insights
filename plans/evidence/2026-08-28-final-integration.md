@@ -68,18 +68,53 @@ au moins un gate. Aucun commit expérimental n'est promu.
 
 ## Candidat global inerte
 
-Le correctif `44aee7d` traite le cas où la racine de skills Claude est absente
-et conserve une cible créée en concurrence. Il passe 112 tests, dont 19 tests
-installateur. Le rendu inerte `73f4393aaa907a2b85638dc032646f5661ea8feb0124210ef95a81e4f32bd11f`
-retourne `issues: []`.
+Le candidat global comprend deux commits inertes, `1f79d23` et `62aa9ca`. Ils
+durcissent les remplacements de symlinks, vérifient les snapshots avant
+restauration et rendent le rollback reprenable après interruption. La suite
+complète passe avec 144 tests sur 144, dont 24 tests installateur. La revue
+adverse finale ne remonte aucun blocker.
 
-La source globale live reste à `4d8a5a4`. Son installation nécessite encore un
-diff exact, un digest lié aux préimages live et une approbation explicite.
+Le rendu a été répété dix fois à partir du vrai commit complet
+`62aa9ca053c9bc7c03564ffb08864d5d02f8f8b6`. Les dix exécutions produisent la
+même release
+`60cbcac1db3728e861560cd945e614bca0b8b0e8404acadddc8d57e1b46be1eb`,
+et `scripts/check.mjs` retourne `issues: []`.
+
+La source globale live reste à
+`e760a8116310c793ebef40318072a5eab777b3ba`. Le bundle Git exact, son hash et le
+manifeste d'approbation sont conservés dans
+[`global-candidate-62aa9ca`](global-candidate-62aa9ca/approval-source-candidate.json).
+Le digest utilise une sérialisation JSON récursive avec clés triées, puis
+SHA-256. L'application prévue vérifie le bundle, récupère sa ref et exige un
+fast-forward exact vers `62aa9ca`.
+L'approbation d'intégration attendue est:
+
+```text
+GO APPLY YT GLOBAL CANDIDATE 3e6146fb1740d63593d64c65b317248d4638e14de0735d0afe6b09fc4d68d6eb
+```
+
+La transaction partagée a aussi été préparée sans mutation globale à partir
+des préimages live et d'un index privé de 287 projets. Elle couvre huit
+opérations. Les fichiers `CLAUDE.md` et `AGENTS.md` restent byte-identiques.
+L'approbation d'activation attendue, distincte de l'intégration du code, est:
+
+```text
+GO INSTALL SHARED cbd58f0a09d95e9ba676b1f9271f9fec9c2966ac2ef8dc9223d45167ef52f296
+```
+
+Ces deux approbations sont sensibles au drift. Une modification du HEAD global,
+du bundle ou d'une préimage live impose de reconstruire les digests.
+
+Deux limites restent documentées. Un déplacement de snapshot entre volumes
+peut échouer avec `EXDEV`, sans mutation destructive. Les anciens journaux de
+schéma 1 dépourvus de `rollbackPostimage` et `restored` ne sont pas compatibles
+avec la reprise renforcée.
 
 ## Gates encore ouvertes
 
 1. Donner un verdict humain `PASS` ou `FAIL` aux requêtes P2 sur un article réel.
 2. Exécuter un canari court avec un modèle Ollama installé.
 3. Exécuter un canari court avec un modèle MLX installé.
-4. Approuver ou refuser le candidat global après revue de son diff et de son digest.
-5. N'ouvrir le chantier hébergé ou extension que lorsqu'un déclencheur d'usage du plan H est observé.
+4. Approuver ou refuser l'intégration du candidat global avec son digest exact.
+5. Après intégration et nouvelle vérification, approuver ou refuser la transaction partagée avec son digest distinct.
+6. N'ouvrir le chantier hébergé ou extension que lorsqu'un déclencheur d'usage du plan H est observé.

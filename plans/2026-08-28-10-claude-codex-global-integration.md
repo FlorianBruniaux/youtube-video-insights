@@ -4,7 +4,7 @@
 
 **Goal:** Install one reviewed yt-insights workflow globally so Claude Code and Codex can search, acquire and export YouTube material from any project.
 
-**Architecture:** Three portable skills call the packaged CLI or the read-only MCP. Claude Code and Codex receive native agent adapters, while the existing global skill router handles implicit discovery. The current immutable global configuration repository builds the candidate, binds global preimages to approval digests and provides rollback.
+**Architecture:** Three portable skills call the packaged CLI or the read-only MCP. Claude Code and Codex receive native agent adapters. Explicit skill or agent invocation is the supported contract for this release because the global BM25 router candidate failed its promotion gate. The current immutable global configuration repository builds the candidate, binds global preimages to approval digests and provides rollback.
 
 **Tech Stack:** Agent Skills, Claude Code Markdown agents, Codex TOML agents, MCP stdio, Node.js 22 global-config builder, JSON/TOML host configuration, pytest and Node test runner
 
@@ -39,7 +39,7 @@
 
 **Interfaces:**
 - Consumes: `yt-insights doctor`, `acquire`, `export` and MCP tools from Plan 09
-- Produces: three Agent Skills with implicit invocation enabled
+- Produces: three portable Agent Skills; explicit invocation is the supported contract
 
 - [x] **Step 1: Write failing structural tests**
 
@@ -110,7 +110,7 @@ The body checks availability through the MCP or `catalog search`, asks for a lan
 
 - [x] **Step 6: Add OpenAI UI metadata and MCP dependency**
 
-Each `agents/openai.yaml` contains a distinct display name and prompt. `youtube-research` declares the `yt-insights` MCP dependency. Keep `allow_implicit_invocation` at its default `true`.
+Each `agents/openai.yaml` contains a distinct display name and prompt. `youtube-research` declares the `yt-insights` MCP dependency. Host metadata may keep `allow_implicit_invocation` at its default `true`, but this release does not rely on or claim validated implicit routing.
 
 - [x] **Step 7: Validate with the bundled skill validator**
 
@@ -514,20 +514,20 @@ rtk git commit -m "test: calibrate yt-insights skill routing"
 Aucun commit de calibration n'a été promu. Les commits expérimentaux restent
 dans les clones inertes et sont explicitement non promouvables.
 
-### Task 7.5: Retire the local Claude hook after routing passes
+### Task 7.5: Keep the local Claude hook because routing failed
 
 **Repository:** `/Users/florianbruniaux/Sites/perso/yt-insights`
 
 **Files:**
-- Modify: `.claude/settings.json`
-- Modify: `tests/test_agent_assets.py`
+- Preserve unchanged: `.claude/settings.json`
+- Preserve unchanged: `tests/test_agent_assets.py`
 - Preserve unchanged: `.claude/hooks/yt-channel-router.sh`
 
-- [ ] Record hashes of `.claude/settings.json` and the hook script before editing.
-- [ ] Add a failing test proving the project no longer registers the local YouTube router.
-- [ ] Start only after Task 7 passes 27/30 positives, 0/15 negatives and the existing router has zero forbidden hits.
-- [ ] Remove only the local hook registration. Keep the script as a rollback artifact until fresh-session validation passes.
-- [ ] Run the 45-prompt corpus again in a new Claude Code project session.
+- [x] Record the decision as `NOT APPLICABLE` for this release because Task 7 failed.
+- [x] Preserve `.claude/settings.json` and `.claude/hooks/yt-channel-router.sh` unchanged.
+- [x] Keep explicit skill and agent invocation as the supported path.
+- [ ] Reopen hook retirement only if a future disjoint holdout passes 27/30 positives, 0/15 negatives and the existing router has zero forbidden hits.
+- [ ] If reopened, hash both files before editing and validate the 45-prompt corpus in a fresh Claude Code project session.
 - [ ] Commit only the settings file and focused test. If routing regresses, restore the exact preimage and stop.
 
 ### Task 8: Build candidates and stop at the approval gate
@@ -566,9 +566,14 @@ Record hashes for the resolved uv tool tree and two bin entrypoints,
 `~/.codex/AGENTS.md`, `~/.codex/config.toml`, `~/.codex/hooks.json` and
 `~/.codex/agents/youtube-corpus-researcher.toml` if present.
 
-- [ ] **Step 3: Render and check the immutable release ten times**
+- [x] **Step 3: Render and check the immutable release ten times**
 
 All ten release IDs must match. `npm test` and `scripts/check.mjs` must pass.
+
+Résultat du 29 août 2026: 144 tests sur 144 passent. Dix rendus produits à
+partir de `62aa9ca053c9bc7c03564ffb08864d5d02f8f8b6` convergent vers la release
+`60cbcac1db3728e861560cd945e614bca0b8b0e8404acadddc8d57e1b46be1eb`.
+Le check de release retourne `issues: []`.
 
 - [x] **Step 4: Prepare the runtime approval**
 
@@ -580,12 +585,16 @@ Artefact préparé dans `/private/tmp`, digest
 `a788c8b72b97959512d512afc536a00c91592261e44ac44d58516679731f5eb4`.
 Il ne doit pas être installé tant que le corpus réel ne passe pas le diagnostic.
 
-- [ ] **Step 5: Prepare the shared release approval**
+- [x] **Step 5: Prepare the shared release approval**
 
 Use the existing `shared` transaction to update instructions, project index and skill projections. Present its redacted diff and exact `GO INSTALL SHARED <digest>` string.
 
-Blocage observé : la préimage `~/.claude/skills` est absente, alors que la
-transaction n'accepte actuellement qu'un dossier ou un symlink existant.
+Le candidat `62aa9ca` traite la préimage absente et les courses concurrentes
+sans suppression récursive de la cible live. Le digest partagé préparé sur les
+préimages du 29 août 2026 est
+`cbd58f0a09d95e9ba676b1f9271f9fec9c2966ac2ef8dc9223d45167ef52f296`.
+Il ne doit pas être installé avant l'intégration approuvée du candidat source,
+puis une nouvelle vérification des préimages.
 
 - [ ] **Step 6: Prepare the yt integration approval**
 
@@ -675,9 +684,10 @@ rollback trigger, not a documentation-only warning.
 - Both clients connect to the same absolute catalog and search databases.
 - The global CLI resolves the same absolute corpus from two unrelated current directories.
 - Five parity queries return the same ordered passage IDs.
-- The 45-prompt routing evaluation passes 27/30 positives and 0/15 negatives.
+- The failed 45-prompt routing evaluation is recorded, and no BM25 calibration candidate is promoted.
+- Explicit invocation of each named skill and researcher agent works in fresh sessions.
 - No second global YouTube hook is installed.
-- The local Claude YouTube hook is no longer registered after the routing gate passes.
+- The local Claude YouTube hook remains unchanged while the replacement routing gate is failed.
 - Channel acquisition requires explicit confirmation.
 - Global configuration diffs contain no secret values.
 - Wrong or stale digests fail closed.

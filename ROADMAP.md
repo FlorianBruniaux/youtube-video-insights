@@ -116,8 +116,8 @@ preview obligatoire pour channel/playlist
 | B1 | `TERMINÉ` | MCP étendu de deux à quatre outils read-only | Smoke réel sur les quatre outils, aucun outil de mutation |
 | B2 | `TERMINÉ` | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | Trois validateurs officiels et tests de portabilité au vert |
 | B3 | `REJETÉ` | Skills et agents natifs terminés; candidat disjoint à 30/30 positifs et 0 confusion, mais 5/15 activations interdites | Conserver l'invocation explicite; rouvrir seulement avec un mécanisme différent et un besoin observé |
-| C1 | `CANDIDAT INERTE VALIDÉ` | Correctif absent-target `44aee7d`, 112/112 tests, release inerte `73f4393…`, `issues: []` | Présenter le diff exact et son digest avant toute intégration globale |
-| C2 | `NON INSTALLÉ` | Runtime, config, skills, agents et MCP globaux | Finaliser le candidat corpus, puis obtenir l'approbation liée aux préimages live |
+| C1 | `EN ATTENTE D'APPROBATION` | Deux commits inertes `1f79d23` et `62aa9ca`, 144/144 tests, 10 rendus identiques de la release `60cbcac…`, `issues: []` | Intégrer uniquement après `GO APPLY YT GLOBAL CANDIDATE 3e6146fb…` |
+| C2 | `NON INSTALLÉ` | Transaction partagée de huit opérations préparée, instructions byte-identiques, skills et index privé candidats | Après C1 et revalidation des préimages, exiger `GO INSTALL SHARED cbd58f0a…`; runtime et intégrations gardent leurs approbations séparées |
 | D1 | `TERMINÉ` | Choix explicite Ollama, MLX, cc-bridge, Anthropic ou endpoint compatible | Canari MLX et Ollama réels séparés des tests sans réseau |
 
 Les détails exécutables sont dans le [plan runtime](plans/2026-08-28-09-agent-ready-runtime.md), le [plan d'intégration globale](plans/2026-08-28-10-claude-codex-global-integration.md) et le [suivi parallèle](plans/PARALLEL-SESSIONS.md).

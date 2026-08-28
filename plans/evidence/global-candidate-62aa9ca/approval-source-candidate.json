@@ -1,0 +1,19 @@
+{
+  "payload": {
+    "schemaVersion": 1,
+    "kind": "yt-global-source-candidate",
+    "digestAlgorithm": "sha256-canonical-json-v1",
+    "applyMode": "git-fetch-bundle-fast-forward",
+    "repository": "/Users/florianbruniaux/.config/ai-agents",
+    "expectedBaseHead": "e760a8116310c793ebef40318072a5eab777b3ba",
+    "expectedTrackedWorktreeSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "candidateHead": "62aa9ca053c9bc7c03564ffb08864d5d02f8f8b6",
+    "bundle": {
+      "path": "plans/evidence/global-candidate-62aa9ca/ai-agents-62aa9ca.bundle",
+      "sha256": "a1624c723ed33948608f2f52ad570c71d2c41aa0d40f05f2543d8134d6b24746",
+      "ref": "refs/heads/codex/shared-agent-config"
+    }
+  },
+  "digest": "3e6146fb1740d63593d64c65b317248d4638e14de0735d0afe6b09fc4d68d6eb",
+  "confirmation": "GO APPLY YT GLOBAL CANDIDATE 3e6146fb1740d63593d64c65b317248d4638e14de0735d0afe6b09fc4d68d6eb"
+}

@@ -31,7 +31,7 @@ répertoire par Claude Code et Codex, sans dupliquer la logique métier :
 |---|---|---|
 | A | Runtime indépendant du répertoire courant, `doctor`, acquisition avec preview, export, backends explicites et MCP quatre outils | `TERMINÉ`, intégration à 508 tests plus 10 sous-tests avant mise à jour documentaire |
 | B | Trois skills communs, deux agents natifs et corpus de routage | `PARTIEL`: assets terminés; routage implicite rejeté après holdout disjoint, invocation explicite retenue |
-| C | Candidats globaux immuables, diffs, digests, rollback et tests en sessions neuves | `EN ATTENTE D'APPROBATION`: correctif absent-target à 112 tests; aucun live modifié |
+| C | Candidats globaux immuables, diffs, digests, rollback et tests en sessions neuves | `EN ATTENTE D'APPROBATION`: 144 tests, 10 rendus identiques, bundle Git et deux digests distincts; aucun live modifié |
 | H | API hébergée, worker, extension et MCP distant | `CONDITIONNEL` aux déclencheurs d'usage |
 
 Aucune modification de `~/.claude`, `~/.codex` ou `~/.config/ai-agents` ne fait
