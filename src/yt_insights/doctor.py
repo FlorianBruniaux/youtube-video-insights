@@ -122,7 +122,10 @@ def _cloud_credential_check(config: Config) -> CheckResult:
 
 def _probe_local_backend(name: str, url: str) -> CheckResult:
     try:
-        with httpx.Client(timeout=_LOCAL_PROBE_TIMEOUT_SECONDS) as client:
+        with httpx.Client(
+            timeout=_LOCAL_PROBE_TIMEOUT_SECONDS,
+            trust_env=False,
+        ) as client:
             response = client.get(url)
     except (httpx.RequestError, OSError):
         return CheckResult(name, "warn", "unreachable")

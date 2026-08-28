@@ -117,8 +117,9 @@ def test_backend_probe_uses_only_local_get_requests_and_reports_unreachable(
     requested: list[str] = []
 
     class FailingClient:
-        def __init__(self, *, timeout: float) -> None:
+        def __init__(self, *, timeout: float, trust_env: bool) -> None:
             assert 0 < timeout <= 2
+            assert trust_env is False
 
         def __enter__(self):
             return self
@@ -158,8 +159,8 @@ def test_backend_probe_accepts_only_successful_local_health_responses(
             self.status_code = status_code
 
     class Client:
-        def __init__(self, *, timeout: float) -> None:
-            pass
+        def __init__(self, *, timeout: float, trust_env: bool) -> None:
+            assert trust_env is False
 
         def __enter__(self):
             return self
@@ -184,3 +185,35 @@ def test_backend_probe_accepts_only_successful_local_health_responses(
         "warn",
         "HTTP 503",
     )
+
+
+def test_backend_probe_never_inherits_environment_proxy_configuration(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from yt_insights import doctor
+
+    client_options: list[tuple[float, bool]] = []
+
+    class Response:
+        status_code = 200
+
+    class Client:
+        def __init__(self, *, timeout: float, trust_env: bool) -> None:
+            client_options.append((timeout, trust_env))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str) -> Response:
+            return Response()
+
+    monkeypatch.setattr(doctor.httpx, "Client", Client)
+    monkeypatch.setattr(doctor.shutil, "which", lambda name: "/usr/bin/tool")
+    monkeypatch.setenv("ALL_PROXY", "http://proxy.example.test:8080")
+
+    doctor.inspect_runtime(Config(data_root=tmp_path), probe_backends=True)
+
+    assert client_options == [(1.0, False), (1.0, False)]
