@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import fcntl
 import json
+import math
 import os
 import re
 import sqlite3
@@ -12,8 +13,8 @@ import stat
 import tempfile
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
-from pathlib import Path
+from datetime import UTC, date, datetime
+from pathlib import Path, PureWindowsPath
 from typing import Any, Iterator
 from urllib.parse import urlparse
 
@@ -35,6 +36,8 @@ _ARTIFACT_NAME = re.compile(
     r"(?P<language>[A-Za-z0-9-]+)$"
 )
 _INSIGHT_KEYS = {"subject", "key_points", "tools", "advice", "quotes"}
+_VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+_SOURCE_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
 
 
 class CatalogError(RuntimeError):
@@ -1070,12 +1073,54 @@ class ReadOnlyCatalog:
         self.db_path = Path(db_path)
         if not self.db_path.is_absolute():
             raise CatalogError("catalog database path must be absolute")
-        self._identity = self._database_identity()
-        self._reject_uncheckpointed_wal()
+        if self.db_path.name in {"", ".", ".."} or "\x00" in self.db_path.name:
+            raise CatalogError("catalog database is unavailable or invalid")
         self._connection: sqlite3.Connection | None = None
+        self._parent_fd: int | None = None
+        self._source_fd: int | None = None
+        self._snapshot_context: tempfile.TemporaryDirectory[str] | None = None
+        self._identity: _CatalogIdentity | None = None
         try:
+            parent_details = self.db_path.parent.lstat()
+            if not stat.S_ISDIR(parent_details.st_mode) or stat.S_ISLNK(
+                parent_details.st_mode
+            ):
+                raise CatalogError("catalog database is unavailable or invalid")
+            self._parent_fd = os.open(self.db_path.parent, _DIRECTORY_FLAGS)
+            opened_parent = os.fstat(self._parent_fd)
+            if (opened_parent.st_dev, opened_parent.st_ino) != (
+                parent_details.st_dev,
+                parent_details.st_ino,
+            ):
+                raise CatalogError("catalog database is unavailable or invalid")
+            source_flags = (
+                os.O_RDONLY
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0)
+            )
+            self._source_fd = os.open(
+                self.db_path.name, source_flags, dir_fd=self._parent_fd
+            )
+            source_details = os.fstat(self._source_fd)
+            if not stat.S_ISREG(source_details.st_mode):
+                raise CatalogError("catalog database is unavailable or invalid")
+            named_details = os.stat(
+                self.db_path.name,
+                dir_fd=self._parent_fd,
+                follow_symlinks=False,
+            )
+            self._identity = self._identity_from_stat(source_details)
+            if self._identity_from_stat(named_details) != self._identity:
+                raise CatalogError("catalog database is unavailable or invalid")
+            self._require_database_identity()
+            self._snapshot_context = tempfile.TemporaryDirectory(
+                prefix="yt-insights-catalog-reader-"
+            )
+            snapshot_path = Path(self._snapshot_context.name) / "catalog.sqlite3"
+            self._copy_source_to_snapshot(snapshot_path)
+            self._require_database_identity()
             self._connection = sqlite3.connect(
-                f"{self.db_path.as_uri()}?mode=ro&immutable=1",
+                f"{snapshot_path.as_uri()}?mode=ro&immutable=1",
                 uri=True,
             )
             self._connection.row_factory = sqlite3.Row
@@ -1098,16 +1143,29 @@ class ReadOnlyCatalog:
     def close(self) -> None:
         connection = self._connection
         self._connection = None
-        if connection is not None:
-            connection.close()
-
-    def _database_identity(self) -> _CatalogIdentity:
         try:
-            details = self.db_path.lstat()
-        except (FileNotFoundError, OSError) as exc:
-            raise CatalogError("catalog database is unavailable or invalid") from exc
-        if not stat.S_ISREG(details.st_mode):
-            raise CatalogError("catalog database is unavailable or invalid")
+            if connection is not None:
+                connection.close()
+        finally:
+            snapshot_context = self._snapshot_context
+            self._snapshot_context = None
+            try:
+                if snapshot_context is not None:
+                    snapshot_context.cleanup()
+            finally:
+                source_fd = self._source_fd
+                self._source_fd = None
+                try:
+                    if source_fd is not None:
+                        os.close(source_fd)
+                finally:
+                    parent_fd = self._parent_fd
+                    self._parent_fd = None
+                    if parent_fd is not None:
+                        os.close(parent_fd)
+
+    @staticmethod
+    def _identity_from_stat(details: os.stat_result) -> _CatalogIdentity:
         return (
             details.st_dev,
             details.st_ino,
@@ -1118,19 +1176,66 @@ class ReadOnlyCatalog:
 
     def _require_database_identity(self) -> None:
         self._reject_uncheckpointed_wal()
-        if self._database_identity() != self._identity:
+        if self._parent_fd is None or self._source_fd is None or self._identity is None:
+            raise CatalogError("catalog database is closed")
+        try:
+            opened_details = os.fstat(self._source_fd)
+            named_details = os.stat(
+                self.db_path.name,
+                dir_fd=self._parent_fd,
+                follow_symlinks=False,
+            )
+        except OSError as exc:
+            raise CatalogError("catalog database changed during access") from exc
+        if (
+            self._identity_from_stat(opened_details) != self._identity
+            or self._identity_from_stat(named_details) != self._identity
+        ):
             raise CatalogError("catalog database changed during access")
 
     def _reject_uncheckpointed_wal(self) -> None:
-        wal_path = self.db_path.with_name(self.db_path.name + "-wal")
+        if self._parent_fd is None:
+            raise CatalogError("catalog database is closed")
+        wal_name = self.db_path.name + "-wal"
         try:
-            details = wal_path.lstat()
+            details = os.stat(
+                wal_name,
+                dir_fd=self._parent_fd,
+                follow_symlinks=False,
+            )
         except FileNotFoundError:
             return
         except OSError as exc:
             raise CatalogError("catalog database is unavailable or invalid") from exc
         if not stat.S_ISREG(details.st_mode) or details.st_size:
             raise CatalogError("catalog database has uncheckpointed changes")
+
+    def _copy_source_to_snapshot(self, snapshot_path: Path) -> None:
+        if self._source_fd is None:
+            raise CatalogError("catalog database is closed")
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | getattr(os, "O_CLOEXEC", 0)
+        )
+        snapshot_fd = os.open(snapshot_path, flags, 0o600)
+        try:
+            offset = 0
+            while True:
+                chunk = os.pread(self._source_fd, 1024 * 1024, offset)
+                if not chunk:
+                    break
+                view = memoryview(chunk)
+                while view:
+                    written = os.write(snapshot_fd, view)
+                    if written <= 0:
+                        raise OSError("catalog snapshot write failed")
+                    view = view[written:]
+                offset += len(chunk)
+            os.fsync(snapshot_fd)
+        finally:
+            os.close(snapshot_fd)
 
     def _connection_or_raise(self) -> sqlite3.Connection:
         if self._connection is None:
@@ -1160,6 +1265,53 @@ class ReadOnlyCatalog:
         }
         if not required.issubset(present):
             raise CatalogError("catalog database is unavailable or invalid")
+
+    @staticmethod
+    def _validate_source_slug(value: object) -> str:
+        if (
+            not isinstance(value, str)
+            or _SOURCE_SLUG.fullmatch(value) is None
+            or Path(value).is_absolute()
+            or PureWindowsPath(value).is_absolute()
+        ):
+            raise CatalogError("catalog row is invalid")
+        return value
+
+    @staticmethod
+    def _validate_metadata_text(value: object, *, maximum: int) -> str:
+        if (
+            not isinstance(value, str)
+            or not value.strip()
+            or len(value) > maximum
+            or "\x00" in value
+            or Path(value).is_absolute()
+            or PureWindowsPath(value).is_absolute()
+        ):
+            raise CatalogError("catalog row is invalid")
+        return value
+
+    @staticmethod
+    def _validate_video_identity(video_id: object, watch_url: object) -> tuple[str, str]:
+        if not isinstance(video_id, str) or _VIDEO_ID.fullmatch(video_id) is None:
+            raise CatalogError("catalog row is invalid")
+        expected_url = f"https://www.youtube.com/watch?v={video_id}"
+        if watch_url != expected_url:
+            raise CatalogError("catalog row is invalid")
+        return video_id, expected_url
+
+    @staticmethod
+    def _validate_published_at(value: object) -> str | None:
+        if value is None:
+            return None
+        if not isinstance(value, str) or len(value) != 10:
+            raise CatalogError("catalog row is invalid")
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as exc:
+            raise CatalogError("catalog row is invalid") from exc
+        if parsed.isoformat() != value:
+            raise CatalogError("catalog row is invalid")
+        return value
 
     @staticmethod
     def _require_limit(limit: int, *, maximum: int) -> None:
@@ -1193,9 +1345,11 @@ class ReadOnlyCatalog:
             ).fetchall()
             result = tuple(
                 CorpusSummary(
-                    source=str(row["source"]),
-                    video_count=int(row["video_count"]),
-                    artifact_count=int(row["artifact_count"]),
+                    source=self._validate_source_slug(row["source"]),
+                    video_count=self._validate_nonnegative_count(row["video_count"]),
+                    artifact_count=self._validate_nonnegative_count(
+                        row["artifact_count"]
+                    ),
                 )
                 for row in rows
             )
@@ -1205,6 +1359,12 @@ class ReadOnlyCatalog:
             raise
         except (sqlite3.Error, TypeError, ValueError) as exc:
             raise CatalogError("catalog query failed") from exc
+
+    @staticmethod
+    def _validate_nonnegative_count(value: object) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise CatalogError("catalog row is invalid")
+        return value
 
     def search_videos(
         self,
@@ -1262,22 +1422,26 @@ class ReadOnlyCatalog:
                     (row["video_id"],),
                 ).fetchall()
                 sources = tuple(
-                    str(source_row["source_slug"])
+                    self._validate_source_slug(source_row["source_slug"])
                     for source_row in source_rows[:10]
                 )
+                video_id, watch_url = self._validate_video_identity(
+                    row["video_id"], row["watch_url"]
+                )
+                title = self._validate_metadata_text(row["title"], maximum=1000)
+                published_at = self._validate_published_at(row["published_at"])
+                rank = float(row["rank"])
+                if not math.isfinite(rank):
+                    raise CatalogError("catalog row is invalid")
                 results.append(
                     VideoSearchResult(
-                        video_id=str(row["video_id"]),
-                        title=str(row["title"]),
-                        published_at=(
-                            str(row["published_at"])
-                            if row["published_at"] is not None
-                            else None
-                        ),
+                        video_id=video_id,
+                        title=title,
+                        published_at=published_at,
                         sources=sources,
                         sources_truncated=len(source_rows) > 10,
-                        watch_url=str(row["watch_url"]),
-                        rank=float(row["rank"]),
+                        watch_url=watch_url,
+                        rank=rank,
                     )
                 )
             self._require_database_identity()

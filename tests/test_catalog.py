@@ -510,3 +510,54 @@ def test_catalog_constructor_rejects_database_symlink_before_sqlite_open(
     assert raised.value.__class__.__name__ == "CatalogError"
     assert str(raised.value) == "catalog database path is unsafe"
     assert not outside.exists()
+
+
+def test_read_only_catalog_uses_anchored_snapshot_during_parent_swap(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.catalog as catalog_module
+
+    live_parent = tmp_path / "live"
+    replacement_parent = tmp_path / "replacement"
+    moved_parent = tmp_path / "moved"
+    live_database = live_parent / "catalog.sqlite3"
+    replacement_database = replacement_parent / "catalog.sqlite3"
+    with Catalog(live_database) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@original/videos",
+            VideoListResult(
+                videos=[VideoInfo(VIDEO_ID, "Original needle", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
+        catalog.checkpoint()
+    with Catalog(replacement_database) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@replacement/videos",
+            VideoListResult(
+                videos=[VideoInfo(VIDEO_ID, "Replacement needle", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
+        catalog.checkpoint()
+
+    original_connect = catalog_module.sqlite3.connect
+    swapped = False
+
+    def swapping_connect(database: object, *args: object, **kwargs: object):
+        nonlocal swapped
+        if not swapped and "immutable=1" in str(database):
+            swapped = True
+            live_parent.rename(moved_parent)
+            replacement_parent.rename(live_parent)
+        return original_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(catalog_module.sqlite3, "connect", swapping_connect)
+
+    with Catalog.open_read_only(live_database) as reader:
+        found = reader.search_videos("original needle")
+
+    assert swapped is True
+    assert [item.title for item in found] == ["Original needle"]

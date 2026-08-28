@@ -355,17 +355,25 @@ def main(
     catalog_database: str | Path | None = None,
 ) -> None:
     """Run the local MCP server over stdio."""
-    config = load_config({})
     configured_search = search_database
     if configured_search is None:
         configured_search = os.environ.get(DATABASE_ENVIRONMENT_VARIABLE)
-    if configured_search is None:
-        configured_search = config.data_paths.search_database
     configured_catalog = catalog_database
     if configured_catalog is None:
         configured_catalog = os.environ.get(CATALOG_DATABASE_ENVIRONMENT_VARIABLE)
-    if configured_catalog is None:
-        configured_catalog = config.data_paths.catalog_database
+    if configured_search is None or configured_catalog is None:
+        try:
+            config = load_config({})
+            if configured_search is None:
+                configured_search = config.data_paths.search_database
+            if configured_catalog is None:
+                configured_catalog = config.data_paths.catalog_database
+        except Exception:
+            raise RuntimeError(
+                "yt-insights configuration is unavailable or invalid. "
+                "Set both YT_INSIGHTS_SEARCH_DATABASE and "
+                "YT_INSIGHTS_CATALOG_DATABASE to absolute database paths."
+            ) from None
     create_server(Path(configured_search), Path(configured_catalog)).run("stdio")
 
 
