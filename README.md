@@ -4,17 +4,24 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Point it at a YouTube channel. Get a structured JSON + Markdown insight file per video, and an aggregate report synthesising patterns across the full channel.
+Turn YouTube channels into a local, searchable research corpus: transcripts,
+structured insights, SQLite/FTS5 search, reports, and Shorts.
+
+![yt-insights workflow: YouTube channels, playlists, and videos become transcripts, structured insights, a deduplicated SQLite/FTS5 index, search results, reports, and Short suggestions.](docs/assets/yt-insights-workflow.jpg)
 
 ---
 
-## TLDR
+## Start here
 
-- One command: `yt-insights run https://www.youtube.com/@ChannelName` → per-video insights + aggregate report
-- 5-key insight schema per video: subject, key points, tools mentioned, actionable advice, notable quotes
-- LLM backend auto-detected at runtime: cc-bridge (port 4141) → Ollama → Anthropic API → MLX
-- JSON is the source of truth, Markdown is rendered from it. Atomic writes, no corrupt files on Ctrl-C
-- Idempotent: already-analyzed videos are cached, `--force` re-processes everything
+| Goal | Command | Result |
+|---|---|---|
+| Analyze a channel | `yt-insights run https://www.youtube.com/@ChannelName` | Transcripts, structured insights, and an aggregate report |
+| Index an existing corpus | `yt-insights catalog import-corpus ./output` | One deduplicated SQLite catalog with durable import errors |
+| Search locally | `yt-insights catalog search "AI product discovery"` | Ranked matches across titles, insights, and cleaned transcripts |
+
+Analysis uses a local or cloud LLM. Catalog import and full-text search do not.
+Both pipelines are safe to rerun: cached analyses are reused, and unchanged
+catalog artifacts are not duplicated.
 
 ---
 
@@ -24,7 +31,9 @@ Point it at any YouTube channel and get two things back. First, a structured ins
 
 The second pipeline is about Shorts. The same transcripts go through a scorer that finds the top 3 moments per video, 30-90 seconds each, with verbatim text and precise timestamps. Pick the one you want, run one more command, and yt-dlp downloads just that segment rather than the full video.
 
-Practically speaking: you can audit a competitor channel in 10 minutes and know their full editorial strategy. Run it across several channels on the same topic and you'll find the angles nobody is covering yet. The exported JSON and VTT files are also ready for RAG pipelines, fine-tuning datasets, or anything else that needs clean text from video.
+Use it for content research, competitive monitoring, editorial analysis, or
+building a searchable source library across several channels. The exported JSON
+and VTT files can also feed downstream RAG or dataset workflows.
 
 ---
 
@@ -179,6 +188,48 @@ Generating aggregate report ...
   Report written to yt_insights/AGGREGATE_REPORT.md
 Done.
 ```
+
+## Local watch catalog (SQLite)
+
+The catalog commands turn existing outputs or newly discovered video lists into
+one local, searchable database. They do not require an LLM.
+
+```bash
+# Import an existing multi-channel corpus without modifying its files
+yt-insights catalog import-corpus \
+  ./output
+
+# Discover the current videos exposed by a channel/playlist through yt-dlp
+yt-insights catalog discover \
+  https://www.youtube.com/@PragmaticEngineer/videos
+
+# Search title, source, insight text, and cleaned transcripts
+yt-insights catalog search "AI product discovery"
+yt-insights catalog search "Martin Fowler" --source pragmaticengineer --limit 5
+
+# Inspect stable counts and every persisted collection/import error
+yt-insights catalog stats
+yt-insights catalog errors
+yt-insights catalog errors --run-id 3
+```
+
+The default database is `output/catalog.sqlite3` (gitignored). Override it on
+any catalog command with `--db PATH`. Canonical videos are unique by YouTube
+video ID. Source membership and French/English artifacts remain separate, while
+identical artifacts collapse by SHA-256. Every command is safe to rerun: a
+second corpus import creates a new audit run but no duplicate video or artifact.
+
+An import continues after malformed files and reports `status=partial`; use
+`catalog errors` to see the exact paths and diagnostics. JSON files with the
+expected keys but invalid value types are retained for search and explicitly
+logged as validation errors.
+
+`catalog discover` currently reuses the repository's unofficial `yt-dlp`
+collector. Treat this as a local experimental adapter, not a compliance claim.
+For a public or commercial service, review YouTube's Terms and prefer the
+official YouTube Data API for search and metadata. The detailed source trade-offs
+and phased architecture are in
+[`docs/superpowers/specs/2026-08-26-youtube-newsletter-watch-design.md`](docs/superpowers/specs/2026-08-26-youtube-newsletter-watch-design.md).
 
 ---
 
@@ -432,22 +483,17 @@ All keys are optional. CLI flags and `YT_INSIGHTS_*` env vars take precedence ov
 | Shorts suggestions | Top 3 moments per talk (30-90s), scored 1-5 by LLM, cross-talk INDEX.md |
 | Timestamped VTT | First-occurrence dedup with timestamps preserved for Shorts pipeline |
 | Clip download | `yt-dlp --download-sections`, segment only, no full-video fetch |
+| Local catalog | SQLite storage for canonical videos, sources, transcripts, insights, runs, and errors |
+| Full-text search | FTS5 across titles, sources, insight text, and cleaned transcripts |
 
 ---
 
 ## For AI coding assistants
 
-`docs/machine-readable/` contains five structured reference files designed to be loaded into an AI agent's context:
-
-| File | What it covers |
-|------|---------------|
-| `llms.txt` | Full quick reference: module map, constraints, env vars, decision tree |
-| `code-map.yaml` | Every module, its exports, dedup strategies, data directories |
-| `adr-index.yaml` | 10 Architecture Decision Records with rationale |
-| `constraints.yaml` | Forbidden patterns, required patterns, open tensions |
-| `tech-decisions.yaml` | Technology stack choices per concern (VTT parsing, storage, concurrency) |
-
-Load `llms.txt` for a full context snapshot. Load individual YAML files when working on a specific area.
+Load [`llms.txt`](llms.txt) for the tracked, machine-readable project snapshot:
+commands, modules, storage model, invariants, generated data, and current gaps.
+The architecture rationale and implementation sequence live under
+[`docs/superpowers/`](docs/superpowers/).
 
 ---
 
@@ -469,7 +515,7 @@ The skill table below and the example session are the full reference.
 | `/yt-get-insights` | Runs insight analysis on an existing VTT, reads from cache when already processed |
 | `/yt-get-shorts` | Suggests the top 3 Short moments, presents them for your choice, downloads the chosen clip |
 | `/yt-run-pipeline` | Runs transcript, insights and Shorts selection in sequence for a single video |
-| `/yt-add-channel` | Processes an entire YouTube channel into `output/<slug>/`, then rebuilds the global catalog |
+| `/yt-add-channel` | Processes a channel into `output/<slug>/`, rebuilds the Markdown/YAML indexes, then refreshes the SQLite catalog |
 
 ### How it works
 

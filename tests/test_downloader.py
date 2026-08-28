@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
 from yt_insights import downloader
-from yt_insights.downloader import VideoInfo, download_subtitles, list_videos, vtt_to_video_info
+from yt_insights.downloader import (
+    VideoInfo,
+    download_subtitles,
+    fetch_video_list,
+    list_videos,
+    vtt_to_video_info,
+)
 
 
 def test_list_videos_parses_metadata_and_uses_argument_vector(monkeypatch) -> None:
@@ -128,3 +136,41 @@ def test_vtt_to_video_info_parses_date_title_and_video_id() -> None:
         title="Build reliable agents",
         upload_date="20260223",
     )
+
+
+def test_fetch_video_list_preserves_videos_and_external_errors() -> None:
+    completed = SimpleNamespace(
+        stdout="20260820|Agentic Systems|abc123DEF45\nmalformed\n",
+        stderr="WARNING: transient warning\nERROR: one item is unavailable\n",
+        returncode=0,
+    )
+
+    with patch("yt_insights.downloader.subprocess.run", return_value=completed) as run:
+        result = fetch_video_list("https://www.youtube.com/@example/videos")
+        compatibility_videos = list_videos(
+            "https://www.youtube.com/@example/videos"
+        )
+
+    assert run.call_count == 2
+    assert result.returncode == 0
+    assert result.errors == ["ERROR: one item is unavailable"]
+    assert len(result.videos) == 1
+    assert result.videos[0].video_id == "abc123DEF45"
+    assert result.videos[0].title == "Agentic Systems"
+    assert result.videos[0].upload_date == "20260820"
+    assert compatibility_videos == result.videos
+
+
+def test_fetch_video_list_exposes_nonzero_exit_without_error_line() -> None:
+    completed = SimpleNamespace(
+        stdout="",
+        stderr="connection refused\n",
+        returncode=2,
+    )
+
+    with patch("yt_insights.downloader.subprocess.run", return_value=completed):
+        result = fetch_video_list("https://www.youtube.com/@example/videos")
+
+    assert result.videos == []
+    assert result.returncode == 2
+    assert result.errors == ["yt-dlp exited with status 2: connection refused"]

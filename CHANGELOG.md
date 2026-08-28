@@ -10,6 +10,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Local SQLite watch catalog with five new commands: `catalog import-corpus`,
+  `catalog discover`, `catalog search`, `catalog stats`, and `catalog errors`.
+  The catalog stores canonical videos, source membership, transcript/insight
+  artifacts, ingestion runs, and collection errors without requiring an LLM.
+- Idempotent corpus ingestion: videos are unique by YouTube ID, language
+  variants remain distinct artifacts, and identical content collapses by
+  SHA-256. Unchanged imports skip VTT cleaning and FTS reindexing.
+- SQLite FTS5 search across titles, sources, insight text, and cleaned
+  transcripts, with optional source filtering and highlighted matches.
+- Durable `yt-dlp` discovery diagnostics. Partial discoveries persist the
+  videos that succeeded alongside the exact collector errors.
+- Automated catalog regression suite covering import rollback, malformed
+  inputs, validation errors, idempotence, discovery, CLI behavior, and FTS5.
+- Tracked `llms.txt` quick reference plus the MVP architecture and phased
+  implementation plan under `docs/superpowers/`.
 - `INSTALL.md`: full backend setup guide for machines without a local LLM, covering Anthropic API key, Ollama, cc-bridge, and any other OpenAI-compatible provider (Gemini example included), plus a copy-paste prompt to delegate the whole setup to a Claude Code session.
 - Skill `/yt-add-channel` (`.claude/skills/`): processes an entire YouTube channel into `output/<slug>/`, then rebuilds the global catalog via `scripts/build_index.py`. Documented in README's skill table (previously missing).
 
@@ -22,6 +37,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Documented
 
+- README, Claude Code instructions, `/yt-add-channel`, and the channel-routing
+  hook now include the local SQLite catalog workflow.
 - README's Backends table now flags that `MLXBackend` (`backends/mlx.py`) is not wired into `resolve_backend()` despite being documented as available via `--base-url mlx`. Not fixed yet, only surfaced so it isn't relied upon by mistake.
 
 ---

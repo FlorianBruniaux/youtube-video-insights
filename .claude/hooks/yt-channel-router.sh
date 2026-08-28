@@ -47,7 +47,7 @@ cat << 'EOF'
 {
   "hookSpecificOutput": {
     "hookEventName": "UserPromptSubmit",
-    "additionalContext": "[yt-insights routing] This looks like a channel-level request, not a single video. Use the /yt-add-channel skill and runbook/run-channel.sh — never call `yt-insights run` on a channel URL without an explicit --output-dir output/<slug>/. Omitting it writes into the shared output/transcripts/ and output/insights/ dirs, which is how ~800 orphan Bloomberg videos ended up unrouted before. After the run, refresh output/CATALOG.yaml and output/INDEX.md via scripts/build_index.py (run-channel.sh already does this). See runbook/README.md for the cookie, truncation, and language-dedup pitfalls."
+    "additionalContext": "[yt-insights routing] This looks like a channel-level request, not a single video. Use the /yt-add-channel skill and runbook/run-channel.sh — never call `yt-insights run` on a channel URL without an explicit --output-dir output/<slug>/. Omitting it writes into the shared output/transcripts/ and output/insights/ dirs, which is how ~800 orphan Bloomberg videos ended up unrouted before. After the run, refresh output/CATALOG.yaml and output/INDEX.md via scripts/build_index.py (run-channel.sh already does this), then run `yt-insights catalog import-corpus output` to refresh the SQLite catalog. See runbook/README.md for the cookie, truncation, and language-dedup pitfalls."
   }
 }
 EOF
