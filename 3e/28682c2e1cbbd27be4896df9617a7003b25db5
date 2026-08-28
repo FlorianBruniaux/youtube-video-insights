@@ -1,0 +1,53 @@
+src/yt_insights/downloader.py
+  s_0a442347250965::t_2101bf38bd267a 5-6,8,57-58,62-63,76,78-80,92,94-98,100-108,125-142,188,190,215
+  s_0a442347250965::t_76c0dd7bad7da4 73,93,99,109
+  s_0a442347250965::t_cef3e2bebc40d8 64
+  s_0a442347250965::t_22473a26f30593 81-91
+tests/test_cli_acquire.py
+  s_0a442347250965::t_5b5c4c2e647ceb 113-138
+src/yt_insights/cli_acquire.py
+  s_0a442347250965::t_57f86851591e5a 10-16,62,68-83,92-94
+tests/test_downloader.py
+  s_0a442347250965::t_285714ae2854c9 30-36,47,55-56,200-206,222,257-273
+  s_0a442347250965::t_cef3e2bebc40d8 57
+tests/test_acquisition.py
+  s_0a442347250965::t_f174ee42bb7a86 205-225
+  s_0a442347250965::t_6a8cdca91b7673 75,200-201
+  s_0a442347250965::t_5b5c4c2e647ceb 307-345
+  s_0a442347250965::t_5f1b1a92305a4b 4-5,14,45-74,76-78,135-157,246-269
+  s_1154b4eaec1074::t_a518b01b7aef6f 270-271
+src/yt_insights/catalog.py
+  s_0a442347250965::t_3f3030aa00dec3 164-186,293-300,380-394,399,404
+tests/test_catalog.py
+  s_0a442347250965::t_285714ae2854c9 51-74
+src/yt_insights/acquisition.py
+  s_0a442347250965::t_fd2649fdbdc73c 7,22-23,142-210,240-244,253-268,291,299-301,338-345,348-351,360,370-373,377-384,391-401,419-425,437-443,446-450,503,529
+  s_0a442347250965::t_c3d468e11df4f5 269-280,346-347
+  s_0a442347250965::t_f174ee42bb7a86 245-249,252,456-466,497-502,504-508
+  s_0a442347250965::t_cef3e2bebc40d8 250-251,468-472,520-525
+  s_1154b4eaec1074::t_413632e0d83b2b 467
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "3e28682c2e1cbbd27be4896df9617a7003b25db5",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_1154b4eaec1074": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04239-d1b3-78a3-94c6-57a972d138fc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
