@@ -119,7 +119,13 @@ def test_records_have_exact_slotted_immutable_public_fields() -> None:
         "youtube_url",
     )
     assert tuple(field.name for field in fields(SearchQuery)) == ("text", "channel", "language", "limit")
-    assert tuple(field.name for field in fields(SearchHit)) == ("document", "passage", "rank", "score")
+    assert tuple(field.name for field in fields(SearchHit)) == (
+        "document",
+        "passage",
+        "rank",
+        "score",
+        "excerpt",
+    )
     assert tuple(field.name for field in fields(BuildReport)) == (
         "sources_discovered",
         "sources_selected",
@@ -266,7 +272,12 @@ def test_search_query_defaults_and_rejects_invalid_inputs() -> None:
 def test_search_hit_requires_matching_document_rank_and_finite_score() -> None:
     document = make_document()
     passage = make_passage()
-    assert SearchHit(document=document, passage=passage, rank=1, score=0.8).rank == 1
+    hit = SearchHit(document=document, passage=passage, rank=1, score=0.8)
+    assert hit.rank == 1
+    assert hit.excerpt == passage.text
+
+    with pytest.raises(ValueError, match="excerpt"):
+        SearchHit(document=document, passage=passage, rank=1, score=0.8, excerpt="  ")
 
     with pytest.raises(ValueError, match="document_id"):
         SearchHit(document=document, passage=make_passage(document_id="c" * 64), rank=1, score=0.8)

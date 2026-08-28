@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
@@ -107,6 +108,8 @@ def test_download_subtitles_returns_logged_vtt_and_preserves_argument_vector(
                 "--sub-format",
                 "vtt",
                 "--skip-download",
+                "--write-info-json",
+                "--no-write-playlist-metafiles",
                 "--ignore-errors",
                 "--output",
                 str(output_dir / "%(upload_date)s - %(title)s [%(id)s].%(ext)s"),
@@ -123,6 +126,53 @@ def test_download_subtitles_returns_logged_vtt_and_preserves_argument_vector(
             {"capture_output": True, "text": True},
         )
     ]
+
+
+def test_downloaded_flat_layout_indexes_channel_identity_from_info_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The default output/transcripts layout must not become channel_id=output."""
+    from yt_insights.search.corpus import scan_corpus
+
+    root = tmp_path / "output"
+    output_dir = root / "transcripts"
+    vtt_path = output_dir / "20260223 - Build reliable agents [nfupYzLjFGc].fr.vtt"
+    info_path = output_dir / "20260223 - Build reliable agents [nfupYzLjFGc].info.json"
+
+    def fake_run(args: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        assert "--write-info-json" in args
+        assert "--no-write-playlist-metafiles" in args
+        output_dir.mkdir(parents=True, exist_ok=True)
+        vtt_path.write_text(
+            "WEBVTT\n\n00:00:00.000 --> 00:00:05.000\nlocal identity\n",
+            encoding="utf-8",
+        )
+        info_path.write_text(
+            json.dumps(
+                {
+                    "id": "nfupYzLjFGc",
+                    "channel_id": "UCStableChannel1234567890",
+                    "channel": "Stable Channel",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=0,
+            stdout=f"[info] Writing video subtitles to: {vtt_path}\n",
+            stderr="",
+        )
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    result = download_subtitles("https://youtu.be/nfupYzLjFGc", output_dir)
+    manifest = scan_corpus(root)
+
+    assert result.vtt_files == [vtt_path]
+    assert len(manifest.documents) == 1
+    assert manifest.documents[0].channel_id == "UCStableChannel1234567890"
+    assert manifest.documents[0].channel_title == "Stable Channel"
 
 
 def test_vtt_to_video_info_parses_date_title_and_video_id() -> None:

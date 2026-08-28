@@ -141,6 +141,8 @@ def download_subtitles(
         "--sub-langs", sub_langs,
         "--sub-format", "vtt",
         "--skip-download",
+        "--write-info-json",
+        "--no-write-playlist-metafiles",
         "--ignore-errors",
         "--output", str(output_dir / "%(upload_date)s - %(title)s [%(id)s].%(ext)s"),
         # Retry up to 5 times on extractor errors (e.g. 429), with exponential

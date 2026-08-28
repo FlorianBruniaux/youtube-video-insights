@@ -28,10 +28,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .backends import LLMBackend, backend_type
+from .analyzer import TranscriptUsageCallback, prepare_transcript_input
 from .cleaner import parse_title
 from .config import Config, effective_concurrency
 from .vtt_parser import (
-    format_timestamped_transcript,
     parse_vtt_timestamped,
     seconds_to_hms,
     ts_to_seconds,
@@ -207,6 +207,7 @@ def suggest_shorts(
     config: Config,
     *,
     force: bool = False,
+    on_transcript_usage: TranscriptUsageCallback | None = None,
 ) -> ShortsResult | None:
     """Suggest Shorts for a single talk. Returns None if transcript is too short."""
     title = _parse_short_title(vtt_path)
@@ -227,7 +228,14 @@ def suggest_shorts(
     if len(segments) < 20:
         return None
 
-    transcript_text = format_timestamped_transcript(segments, max_chars=config.max_transcript_chars or 18_000)
+    normalized_transcript = "\n".join(
+        f"[{seconds_to_hms(segment['start'])}] {segment['text']}" for segment in segments
+    )
+    prepared = prepare_transcript_input(
+        normalized_transcript,
+        max_chars=config.max_transcript_chars or 18_000,
+    )
+    transcript_text = prepared.text
 
     insight_md = ""
     insight_md_path = insights_dir / f"{vtt_path.stem}.md"
@@ -235,6 +243,8 @@ def suggest_shorts(
         insight_md = insight_md_path.read_text(encoding="utf-8")
 
     prompt = _build_prompt(title, transcript_text, insight_md)
+    if on_transcript_usage is not None:
+        on_transcript_usage(vtt_path, prepared.usage)
     text, stop_reason = backend.generate(prompt, max_tokens=config.max_tokens, timeout=config.timeout)
 
     if stop_reason == "max_tokens":
@@ -248,6 +258,8 @@ def suggest_shorts(
 
     if raw_list is None:
         simple_prompt = f'{prompt[:1500]}\n\nJSON uniquement: [{{"start":"...","end":"...","score":4,"hook":"...","verbatim":"...","rationale":"..."}}]'
+        if on_transcript_usage is not None:
+            on_transcript_usage(vtt_path, prepared.usage)
         text2, stop_reason2 = backend.generate(simple_prompt, max_tokens=config.max_tokens, timeout=config.timeout)
         if stop_reason2 != "max_tokens":
             raw_list = _parse_json_list(text2)
@@ -285,13 +297,23 @@ def suggest_all(
     config: Config,
     *,
     force: bool = False,
+    on_transcript_usage: TranscriptUsageCallback | None = None,
 ) -> list[ShortsResult]:
     """Process all VTT files concurrently. Returns list of successful results."""
     workers = effective_concurrency(config, backend_type(backend))
 
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {
-            ex.submit(suggest_shorts, f, insights_dir, shorts_dir, backend, config, force=force): f
+            ex.submit(
+                suggest_shorts,
+                f,
+                insights_dir,
+                shorts_dir,
+                backend,
+                config,
+                force=force,
+                on_transcript_usage=on_transcript_usage,
+            ): f
             for f in vtt_files
         }
         results: list[ShortsResult] = []

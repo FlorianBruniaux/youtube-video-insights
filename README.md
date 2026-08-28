@@ -1,6 +1,5 @@
 # yt-insights
 
-[![PyPI](https://img.shields.io/pypi/v/yt-insights)](https://pypi.org/project/yt-insights/)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -56,8 +55,8 @@ YouTube URL / channel
         │                       and HTML tags from VTT format
         ▼
    analyzer.py ─────────────►  LLM backend
-   ThreadPoolExecutor           cc-bridge │ Ollama │ Anthropic API │ MLX
-   (3× remote, 1× local)        auto-detected at first call
+   ThreadPoolExecutor           cc-bridge │ Ollama │ Anthropic API
+   (3× remote, 1× Ollama)       OpenAI-compatible endpoint supported
         │
         ├──► yt_insights/<video>.json   ← source of truth (atomic write)
         └──► yt_insights/<video>.md     ← rendered from JSON
@@ -111,6 +110,7 @@ yt_transcripts/*.vtt
 
 - yt-dlp runs as a subprocess, never imported as a library (subprocess is the stable contract)
 - `stop_reason == "max_tokens"` gates writes: truncated responses are never cached, retried on next run
+- Insight and Shorts generation send at most 10,000 transcript characters per LLM call. The CLI reports `USED/TOTAL` before each real call and marks truncation without printing transcript content. Cache hits do not call the model or print this line. The full timestamped VTT remains available to the FTS index; long-form LLM analysis is not chunked yet.
 - `ThreadPoolExecutor` over asyncio: `httpx.Client` is thread-safe, no event loop needed
 - YouTube VTT rolling captions repeat each phrase 2-3x as it scrolls; `vtt_parser.py` tracks first occurrence per unique text fragment, giving clean timestamped segments
 
@@ -128,23 +128,24 @@ yt_transcripts/*.vtt
 
 ## Installation
 
-```bash
-pipx install yt-insights
-```
-
-With Apple Silicon MLX support:
-
-```bash
-pipx install "yt-insights[mlx]"
-```
-
-For development:
+The project is not published on PyPI. Install the checked-out source with
+[uv](https://docs.astral.sh/uv/):
 
 ```bash
 git clone https://github.com/FlorianBruniaux/youtube-video-insights
 cd youtube-video-insights
-pip install -e .
+uv sync --extra dev
+uv run yt-insights --help
 ```
+
+Add the optional MCP server when a local LLM client needs to query the index:
+
+```bash
+uv sync --extra mcp --extra dev
+```
+
+The versioned `uv.lock` fixes the complete application environment. See
+[INSTALL.md](INSTALL.md) for a standard `venv` and editable-install alternative.
 
 For a machine with no local LLM (no Ollama, no GPU), see [INSTALL.md](INSTALL.md): it covers every backend option step by step (Anthropic API key, Ollama, cc-bridge, any other OpenAI-compatible provider).
 
@@ -175,17 +176,21 @@ yt-insights suggest-shorts --index-only
 yt-insights generate-short VIDEO_ID --start 00:05:10 --end 00:05:55 --title "hook-context-engineering"
 ```
 
-Expected output:
+Expected output, with paths shortened to keep the example readable:
 
 ```
+Resolved backend: backend=ollama endpoint=http://127.0.0.1:11434/v1 model=qwen3:8b
 Downloading subtitles from https://www.youtube.com/@DevWithAIYoutube ...
   47 subtitle file(s) downloaded.
 
-Analyzing 47 video(s) with model 'claude-haiku-4-5' ...
-  47 insight(s) ready in yt_insights/
+Analyzing 47 video(s) with model 'qwen3:8b' ...
+  47 insight(s) generated:
+    yt_insights/<video>.md
 
 Generating aggregate report ...
-  Report written to yt_insights/AGGREGATE_REPORT.md
+Resolved backend: backend=ollama endpoint=http://127.0.0.1:11434/v1 model=qwen3:8b
+  Aggregate  → yt_insights/AGGREGATE_REPORT.md
+  Full       → yt_insights/FULL_REPORT.md
 Done.
 ```
 
@@ -233,9 +238,11 @@ and phased architecture are in
 
 ---
 
-## Local transcript search (phase 1A)
+## Local transcript search
 
-The local search slice indexes at most **50 VTT files**. That ceiling is deliberate for phase 1A; it is not a full-corpus index.
+The default command indexes a deterministic 50-file slice for quick validation.
+Use `--all` to build the full local corpus index. Neither mode sends transcripts
+to an LLM or a remote service.
 
 ```bash
 # Inspect the first deterministic 50-file slice without creating a database
@@ -243,6 +250,12 @@ yt-insights index --dry-run
 
 # Build the derived local FTS index (default: output/.search/search-v1.sqlite3)
 yt-insights index
+
+# Build the complete corpus index after a disk-space preflight
+yt-insights index --all
+
+# Build a more diverse 50-file evaluation slice
+yt-insights index --selection representative
 
 # Validate the existing index without scanning transcripts
 yt-insights index --status
@@ -254,7 +267,39 @@ yt-insights search "reliable agents" --channel my-channel --lang en
 yt-insights search "reliable agents" --json
 ```
 
-Use `--corpus-root`, `--database`, and `--limit` to point at a local corpus or a derived index. `index --limit` accepts only 1 through 50; `search --limit` accepts 1 through 20. The VTT corpus remains read-only and the SQLite database can be rebuilt at any time.
+Use `--corpus-root`, `--database`, and `--limit` to point at a local corpus or a
+derived index. `index --limit` accepts only 1 through 50 in slice mode;
+`search --limit` accepts 1 through 20. The VTT corpus remains read-only and the
+SQLite database can be rebuilt at any time.
+
+### MCP access for local LLM clients
+
+Install the `mcp` extra, build an index, then configure the stdio command in the
+LLM client:
+
+```bash
+uv sync --extra mcp --extra dev
+uv run yt-insights index --all
+```
+
+```json
+{
+  "mcpServers": {
+    "yt-insights": {
+      "command": "uv",
+      "args": ["run", "yt-insights-mcp"],
+      "cwd": "/absolute/path/to/youtube-video-insights",
+      "env": {
+        "YT_INSIGHTS_SEARCH_DATABASE": "/absolute/path/to/youtube-video-insights/output/.search/search-v1.sqlite3"
+      }
+    }
+  }
+}
+```
+
+The server exposes two read-only tools: `search_passages` and `get_passage`.
+It reads the database selected by `YT_INSIGHTS_SEARCH_DATABASE`, or
+`output/.search/search-v1.sqlite3` by default.
 
 ---
 
@@ -273,15 +318,20 @@ Any URL accepted by yt-dlp works as SOURCE.
 
 ## Backends
 
-yt-insights auto-detects the first available backend at runtime. Detection order:
+An explicit `--base-url` or `YT_INSIGHTS_BASE_URL` has Priority 0 and
+short-circuits every automatic probe. This includes the explicit Ollama endpoint.
+
+| Priority | Backend | How to activate | Model format |
+|---|---|---|---|
+| 0 | Explicit endpoint | Set `--base-url` or `YT_INSIGHTS_BASE_URL` | provider-specific |
+
+Automatic detection order when no endpoint was configured:
 
 | Priority | Backend | How to activate | Model format |
 |---|---|---|---|
 | 1 | cc-bridge | Start cc-bridge on port 4141 | `anthropic/github_copilot/gpt-5-mini` |
-| 2 | Ollama | `ollama serve` | `llama3.2:latest` (first llama/qwen model found) |
+| 2 | Ollama | `ollama serve` | exact requested model, or automatic local selection |
 | 3 | Anthropic API | `export ANTHROPIC_API_KEY=sk-...` | `claude-haiku-4-5` |
-| 4 | Any OpenAI-compatible | `--base-url http://localhost:8000/v1` | provider-specific |
-| 5 | MLX (Apple Silicon) | `pip install yt-insights[mlx]` + `--base-url mlx` | model path |
 
 Override model and endpoint via flags:
 
@@ -289,9 +339,16 @@ Override model and endpoint via flags:
 yt-insights run <url> --model claude-sonnet-4-6 --base-url https://api.anthropic.com/v1
 ```
 
-**cc-bridge model ID gotcha**: use the gateway format `anthropic/{provider}/{model}` (e.g. `anthropic/github_copilot/gpt-5-mini`) to route directly to the named provider via cc-bridge's stored credentials. A plain model ID (e.g. `claude-haiku-4-5`) uses cc-bridge's `active_route` and may return 401 if active_route is set to Anthropic in OAuth passthrough mode.
+After Ollama has been selected, an explicit `--model` or `YT_INSIGHTS_MODEL`
+must match an installed model exactly. If it is missing, the CLI lists the
+available names and the corresponding `ollama pull` command. Automatic local
+selection happens only when no model was requested. Use both
+`--base-url http://127.0.0.1:11434/v1` and `--model` to force Ollama. `--model`
+alone keeps the normal detection order, including cc-bridge before Ollama.
 
-**MLX status**: `MLXBackend` (`backends/mlx.py`) is not currently wired into the auto-detection logic in `backends/__init__.py`. `--base-url mlx` does not select it. Treat the MLX row above as not functional until this is fixed.
+**cc-bridge model ID gotcha**: use the gateway format `anthropic/{provider}/{model}` (e.g. `anthropic/github_copilot/gpt-5-mini`) to route directly to the named provider via cc-bridge's stored credentials. A plain model ID (e.g. `claude-haiku-4-5`) uses cc-bridge's `active_route`. The probe requires `/health` to return 200 and the minimal completion to return 2xx or 3xx. A 4xx, 429, or 5xx response falls back to Ollama, then Anthropic when its API key is available.
+
+**MLX status**: `MLXBackend` (`backends/mlx.py`) is not currently wired into the auto-detection logic in `backends/__init__.py`. `--base-url mlx` does not select it. Installing the `mlx` extra does not change that limitation.
 
 ---
 
@@ -309,7 +366,7 @@ yt-insights run SOURCE [OPTIONS]
   --force                   Re-analyze even if insight cache exists
   --model TEXT              Override LLM model
   --base-url TEXT           Override LLM API base URL
-  --concurrency INTEGER     Max parallel LLM calls (0 = auto: 3 for API, 1 for Ollama/MLX)
+  --concurrency INTEGER     Max parallel LLM calls (0 = auto: 3 for API, 1 for Ollama)
   --output-dir PATH         Base directory for yt_transcripts/ and yt_insights/
   --sleep-requests INTEGER  Seconds to wait between yt-dlp requests (rate limiting)
 
@@ -474,8 +531,8 @@ All keys are optional. CLI flags and `YT_INSIGHTS_*` env vars take precedence ov
 | Atomic writes | `.tmp.json` → `os.replace()`, no corrupt files on Ctrl-C |
 | Truncation guard | `stop_reason == "max_tokens"` → skip cache, retry next run |
 | Caching | Cache hit = zero LLM calls, `--force` to override |
-| Concurrency | 3 threads for remote APIs, 1 for Ollama/MLX (auto-tuned) |
-| Backends | cc-bridge, Ollama, Anthropic API, any OpenAI-compat, MLX |
+| Concurrency | 3 threads for remote APIs, 1 for Ollama (auto-tuned) |
+| Backends | cc-bridge, Ollama, Anthropic API, any OpenAI-compatible endpoint |
 | Auto-detection | Backend probed at first LLM call, no config needed |
 | Aggregate report | `Counter` top tools (no LLM) + one narrative LLM call |
 | Config file | 4-layer merge: defaults → TOML → env vars → CLI flags |
@@ -575,7 +632,8 @@ Run the pipeline on any video, skip any step you have already done. The agent ne
 
 ## Contributing
 
-Open a PR. No CLA, no build pipeline, just `pip install -e .` and go.
+Open a PR. No CLA is required. Run `uv sync --extra mcp --extra dev`, then the
+test suite before submitting a change.
 
 ---
 

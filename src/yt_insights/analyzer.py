@@ -26,6 +26,7 @@ import json
 import os
 import re
 import warnings
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,6 +36,51 @@ from .cleaner import clean_vtt, parse_title
 from .config import Config, effective_concurrency
 
 _INSIGHT_KEYS = {"subject", "key_points", "tools", "advice", "quotes"}
+
+
+@dataclass(frozen=True)
+class TranscriptUsage:
+    """Character budget used for one transcript sent to an LLM."""
+
+    total_chars: int
+    used_chars: int
+    max_chars: int
+    truncated: bool
+
+    def format_message(self) -> str:
+        suffix = " (truncated)" if self.truncated else ""
+        return f"Transcript input: {self.used_chars}/{self.total_chars} characters{suffix}"
+
+
+@dataclass(frozen=True)
+class PreparedTranscript:
+    """Bounded transcript text plus non-sensitive usage metadata."""
+
+    text: str
+    usage: TranscriptUsage
+
+
+TranscriptUsageCallback = Callable[[Path, TranscriptUsage], None]
+
+
+def prepare_transcript_input(transcript: str, *, max_chars: int) -> PreparedTranscript:
+    """Bound normalized transcript text and expose the exact source-char usage."""
+    limit = max(0, max_chars)
+    total_chars = len(transcript)
+    used_chars = min(total_chars, limit)
+    truncated = total_chars > limit
+    text = transcript[:limit]
+    if truncated:
+        text += "\n[... transcript truncated ...]"
+    return PreparedTranscript(
+        text=text,
+        usage=TranscriptUsage(
+            total_chars=total_chars,
+            used_chars=used_chars,
+            max_chars=limit,
+            truncated=truncated,
+        ),
+    )
 
 
 @dataclass
@@ -108,6 +154,7 @@ def analyze_video(
     config: Config,
     *,
     force: bool = False,
+    on_transcript_usage: TranscriptUsageCallback | None = None,
 ) -> VideoInsight | None:
     title = parse_title(vtt_path)
     insight_path = insights_dir / f"{vtt_path.stem}.json"
@@ -126,13 +173,14 @@ def analyze_video(
         return None
 
     # Build prompt
-    excerpt = transcript[: config.max_transcript_chars]
-    if len(transcript) > config.max_transcript_chars:
-        excerpt += "\n[... transcript truncated ...]"
+    prepared = prepare_transcript_input(transcript, max_chars=config.max_transcript_chars)
+    excerpt = prepared.text
 
     prompt = _build_prompt(title, excerpt)
 
     # First attempt
+    if on_transcript_usage is not None:
+        on_transcript_usage(vtt_path, prepared.usage)
     text, stop_reason = backend.generate(
         prompt, max_tokens=config.max_tokens, timeout=config.timeout
     )
@@ -149,6 +197,8 @@ def analyze_video(
     # One retry with simplified prompt if parse failed
     if data is None:
         simple_prompt = _build_prompt_simple(title, excerpt)
+        if on_transcript_usage is not None:
+            on_transcript_usage(vtt_path, prepared.usage)
         text2, stop_reason2 = backend.generate(
             simple_prompt, max_tokens=config.max_tokens, timeout=config.timeout
         )
@@ -186,13 +236,22 @@ def analyze_all(
     config: Config,
     *,
     force: bool = False,
+    on_transcript_usage: TranscriptUsageCallback | None = None,
 ) -> list[VideoInsight]:
     workers = effective_concurrency(config, backend_type(backend))
 
     # httpx.Client is thread-safe for concurrent requests
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = {
-            ex.submit(analyze_video, f, insights_dir, backend, config, force=force): f
+            ex.submit(
+                analyze_video,
+                f,
+                insights_dir,
+                backend,
+                config,
+                force=force,
+                on_transcript_usage=on_transcript_usage,
+            ): f
             for f in vtt_files
         }
         results: list[VideoInsight] = []

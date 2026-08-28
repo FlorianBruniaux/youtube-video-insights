@@ -9,6 +9,12 @@ import click
 
 from .search.corpus import CorpusManifest, scan_corpus
 from .search.models import BuildReport, SearchHit, SearchQuery
+from .search.preflight import (
+    IndexSpacePreflightError,
+    IndexSpacePreflightReport,
+    InsufficientIndexSpace,
+    preflight_index_space,
+)
 from .search.service import SearchService
 from .search.sqlite_fts import SearchIndexError, SearchIndexNotFound, SQLiteFtsIndex
 
@@ -37,6 +43,19 @@ def _echo_report(report: BuildReport) -> None:
     click.echo(f"Passages: {report.passages_indexed}")
 
 
+def _echo_preflight(report: IndexSpacePreflightReport) -> None:
+    click.echo(f"Preflight candidates discovered: {report.sources_discovered}")
+    click.echo(f"Preflight regular files sized: {report.source_files}")
+    click.echo(f"Preflight candidates excluded: {report.sources_excluded}")
+    click.echo(f"Preflight source bytes: {report.source_bytes}")
+    click.echo(f"Preflight required bytes: {report.required_bytes}")
+    click.echo(f"Preflight available bytes: {report.available_bytes}")
+
+
+def _parameter_is_explicit(context: click.Context, name: str) -> bool:
+    return context.get_parameter_source(name) is click.core.ParameterSource.COMMANDLINE
+
+
 def _format_timestamp(seconds: float) -> str:
     total_seconds = int(seconds)
     hours, remainder = divmod(total_seconds, 3600)
@@ -50,7 +69,7 @@ def _hit_payload(hit: SearchHit) -> dict[str, int | str]:
         "channel": hit.document.channel_title,
         "title": hit.document.video_title,
         "language": hit.document.language,
-        "excerpt": hit.passage.text,
+        "excerpt": hit.excerpt,
         "timestamp": _format_timestamp(hit.passage.start_seconds),
         "url": hit.passage.youtube_url,
         "source": hit.document.source_relpath,
@@ -85,18 +104,46 @@ def _raise_index_error(error: SearchIndexError) -> None:
     show_default=True,
     help="Maximum transcript files to index in phase 1A.",
 )
+@click.option(
+    "--selection",
+    type=click.Choice(("ordered", "representative"), case_sensitive=True),
+    default="ordered",
+    show_default=True,
+    help="Selection strategy for a limited transcript slice.",
+)
+@click.option(
+    "--all",
+    "all_sources",
+    is_flag=True,
+    help="Index every transcript source instead of the default 50-file slice.",
+)
 @click.option("--dry-run", is_flag=True, help="Scan and report counts without writing an index.")
 @click.option("--status", is_flag=True, help="Validate and report the existing index without scanning.")
 def index_command(
     corpus_root: Path,
     database: Path,
     limit: int,
+    selection: str,
+    all_sources: bool,
     dry_run: bool,
     status: bool,
 ) -> None:
-    """Build or inspect the deterministic phase-1A search index."""
+    """Build or inspect the deterministic local transcript search index."""
+    context = click.get_current_context()
+    explicit_all = _parameter_is_explicit(context, "all_sources")
+    explicit_limit = _parameter_is_explicit(context, "limit")
+    explicit_selection = _parameter_is_explicit(context, "selection")
+
     if dry_run and status:
         raise click.UsageError("--status and --dry-run cannot be used together.")
+    if all_sources and explicit_limit:
+        raise click.UsageError("--all cannot be used with an explicit --limit.")
+    if all_sources and explicit_selection:
+        raise click.UsageError("--all cannot be used with an explicit --selection.")
+    if status and (explicit_all or explicit_limit or explicit_selection):
+        raise click.UsageError(
+            "--status cannot be used with --all, an explicit --limit, or an explicit --selection."
+        )
 
     index = SQLiteFtsIndex(database)
     if status:
@@ -106,8 +153,25 @@ def index_command(
             _raise_index_error(error)
         return
 
+    scan_limit = None if all_sources else limit
+    scan_selection = "ordered" if all_sources else selection
+    preflight_report: IndexSpacePreflightReport | None = None
+    if all_sources and not dry_run:
+        try:
+            preflight_report = preflight_index_space(corpus_root, database)
+        except InsufficientIndexSpace as error:
+            raise click.ClickException(
+                f"Insufficient free space; keep the existing index and free disk space before retrying. {error}"
+            ) from error
+        except (IndexSpacePreflightError, OSError) as error:
+            raise click.ClickException(
+                "Cannot verify index capacity. Check corpus and database permissions, then retry."
+            ) from error
+        except ValueError as error:
+            raise click.ClickException(f"Cannot scan corpus: {error}") from error
+
     try:
-        manifest = scan_corpus(corpus_root, limit=limit)
+        manifest = scan_corpus(corpus_root, limit=scan_limit, selection=scan_selection)
     except ValueError as error:
         raise click.ClickException(f"Cannot scan corpus: {error}") from error
 
@@ -115,6 +179,8 @@ def index_command(
         _echo_report(_report_from_manifest(manifest))
         return
 
+    if all_sources and preflight_report is not None:
+        _echo_preflight(preflight_report)
     try:
         _echo_report(index.rebuild(manifest))
     except SearchIndexError as error:
@@ -152,11 +218,11 @@ def search_command(
     try:
         request = SearchQuery(query, channel=channel, language=language, limit=limit)
         hits = SearchService(SQLiteFtsIndex(database)).search(request)
-    except SearchIndexNotFound:
-        raise click.ClickException("Search index does not exist. Run 'yt-insights index' first.") from None
-    except (SearchIndexError, ValueError):
+    except SearchIndexError as error:
+        _raise_index_error(error)
+    except ValueError:
         # Query strings are untrusted input: never echo them in error output.
-        raise click.ClickException("Search request is invalid or the index cannot be searched.") from None
+        raise click.ClickException("Search request is invalid.") from None
 
     payloads = [_hit_payload(hit) for hit in hits]
     if as_json:

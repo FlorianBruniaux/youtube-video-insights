@@ -8,13 +8,23 @@ from typing import Literal
 
 import click
 
-from .backends import resolve_backend
+from .backends import (
+    ResolvedBackend,
+    format_backend_identity,
+    resolve_backend,
+    sanitize_endpoint,
+)
 from .backends.base import BackendNotFoundError, BackendUnavailableError
 from .config import CONFIG_TOML_TEMPLATE, load_config
 
 SortKey = Literal["date-desc", "date-asc", "title"]
 
 SORT_CHOICES = click.Choice(["date-desc", "date-asc", "title"])
+
+
+def _echo_resolved_backend(backend: ResolvedBackend) -> None:
+    """Display the identity returned by a runtime backend resolution."""
+    click.echo(f"Resolved backend: {format_backend_identity(backend.identity)}")
 
 
 def _sort_videos(videos: list, sort: SortKey) -> list:
@@ -44,7 +54,7 @@ def cli() -> None:
     \b
     Discovery:
       yt-insights list SOURCE         List videos without downloading anything
-      yt-insights config show         Print the resolved configuration (active values)
+      yt-insights config show         Print effective configuration (no runtime backend probe)
       yt-insights config init         Create ~/.config/yt-insights/config.toml
     """
 
@@ -161,6 +171,7 @@ def run(
     except BackendNotFoundError as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
+    _echo_resolved_backend(backend)
 
     # Pick mode: fuzzy interactive video selection
     vtt_files: list[Path] = []
@@ -279,9 +290,19 @@ def run(
         sys.exit(1)
 
     # Analyze
-    click.echo(f"\nAnalyzing {len(vtt_files)} video(s) with model '{config.model}' ...")
+    click.echo(
+        f"\nAnalyzing {len(vtt_files)} video(s) with model "
+        f"'{backend.identity.model}' ..."
+    )
     try:
-        insights = analyze_all(vtt_files, config.insights_dir, backend, config, force=force)
+        insights = analyze_all(
+            vtt_files,
+            config.insights_dir,
+            backend,
+            config,
+            force=force,
+            on_transcript_usage=lambda _path, usage: click.echo(usage.format_message()),
+        )
     except BackendUnavailableError as exc:
         click.echo(f"Error: backend unavailable — {exc}", err=True)
         sys.exit(1)
@@ -301,13 +322,17 @@ def run(
     # Report
     report_path = config.insights_dir / "AGGREGATE_REPORT.md"
     click.echo("\nGenerating aggregate report ...")
+    report_backend: ResolvedBackend | None = None
     try:
-        backend = resolve_backend(config)
-        generate_report(insights, backend, config, report_path=report_path)
-        backend.close()
+        report_backend = resolve_backend(config)
+        _echo_resolved_backend(report_backend)
+        generate_report(insights, report_backend, config, report_path=report_path)
     except (BackendNotFoundError, BackendUnavailableError) as exc:
         click.echo(f"Warning: could not generate report — {exc}", err=True)
         return
+    finally:
+        if report_backend is not None:
+            report_backend.close()
 
     click.echo(f"  Aggregate  → {report_path}")
     full_report_path = report_path.parent / "FULL_REPORT.md"
@@ -347,6 +372,7 @@ def report(output: str | None, model: str | None, base_url: str | None) -> None:
     except BackendNotFoundError as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
+    _echo_resolved_backend(backend)
 
     try:
         generate_report(insights, backend, config, report_path=report_path)
@@ -408,6 +434,7 @@ def suggest_shorts_cmd(
     except BackendNotFoundError as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
+    _echo_resolved_backend(backend)
 
     if vtt_path:
         vtt_files = [Path(vtt_path)]
@@ -426,7 +453,7 @@ def suggest_shorts_cmd(
     click.echo(
         f"\n{len(vtt_files)} VTT file(s) found — "
         f"{cached} cached, {to_process} to process — "
-        f"model '{config.model}'"
+        f"model '{backend.identity.model}'"
     )
 
     try:
@@ -437,6 +464,7 @@ def suggest_shorts_cmd(
             backend,
             config,
             force=force,
+            on_transcript_usage=lambda _path, usage: click.echo(usage.format_message()),
         )
     except BackendUnavailableError as exc:
         click.echo(f"Error: backend unavailable — {exc}", err=True)
@@ -720,7 +748,7 @@ def config_init() -> None:
 @click.option("--model", default=None, help="Simulate --model override.")
 @click.option("--base-url", default=None, help="Simulate --base-url override.")
 def config_show(model: str | None, base_url: str | None) -> None:
-    """Print the resolved configuration with active values and their sources.
+    """Print effective configuration values and their sources without probing.
 
     Merges defaults → config.toml → env vars → CLI flags so you can verify
     what yt-insights will actually use when you run a command.
@@ -739,12 +767,12 @@ def config_show(model: str | None, base_url: str | None) -> None:
             return "config.toml (or default)"
         return "default"
 
-    click.echo(f"\nyt-insights resolved configuration")
+    click.echo("\nyt-insights effective configuration (no runtime backend probe)")
     click.echo(f"Config file : {config_path} ({'exists' if config_path.exists() else 'not found, using defaults'})")
     click.echo()
 
     rows = [
-        ("base_url",             config.base_url,             "YT_INSIGHTS_BASE_URL",             base_url),
+        ("base_url",             sanitize_endpoint(config.base_url), "YT_INSIGHTS_BASE_URL",      base_url),
         ("model",                config.model,                "YT_INSIGHTS_MODEL",                model),
         ("api_key",              "***" if config.api_key else "(not set)", "YT_INSIGHTS_API_KEY", None),
         ("max_transcript_chars", config.max_transcript_chars, "YT_INSIGHTS_MAX_TRANSCRIPT_CHARS",  None),

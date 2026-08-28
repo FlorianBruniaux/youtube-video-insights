@@ -197,7 +197,7 @@ def _needs_shorts_params(action: str) -> bool:
 
 def _run_insights(source: str, config):
     from .analyzer import analyze_all
-    from .backends import resolve_backend
+    from .backends import format_backend_identity, resolve_backend
     from .backends.base import BackendNotFoundError, BackendUnavailableError
     from .downloader import download_subtitles
 
@@ -217,9 +217,16 @@ def _run_insights(source: str, config):
         print(f"Erreur backend : {exc}", file=sys.stderr)
         return []
 
-    print(f"Analyse de {len(vtt_files)} vidéo(s) avec '{config.model}' ...")
+    print(f"Backend resolved: {format_backend_identity(backend.identity)}")
+    print(f"Analyse de {len(vtt_files)} vidéo(s) avec '{backend.identity.model}' ...")
     try:
-        insights = analyze_all(vtt_files, config.insights_dir, backend, config)
+        insights = analyze_all(
+            vtt_files,
+            config.insights_dir,
+            backend,
+            config,
+            on_transcript_usage=lambda _path, usage: print(usage.format_message()),
+        )
     except BackendUnavailableError as exc:
         print(f"Erreur backend : {exc}", file=sys.stderr)
         return []
@@ -231,7 +238,7 @@ def _run_insights(source: str, config):
 
 
 def _run_suggest_shorts(vtt_files: list[Path], config, min_s: int, max_s: int, platform_max: int):
-    from .backends import resolve_backend
+    from .backends import format_backend_identity, resolve_backend
     from .backends.base import BackendNotFoundError, BackendUnavailableError
     from .shorts import generate_index, suggest_all
 
@@ -247,10 +254,18 @@ def _run_suggest_shorts(vtt_files: list[Path], config, min_s: int, max_s: int, p
         print(f"Erreur backend : {exc}", file=sys.stderr)
         return []
 
+    print(f"Backend resolved: {format_backend_identity(backend.identity)}")
     config.shorts_dir.mkdir(parents=True, exist_ok=True)
     print(f"Recherche de Shorts dans {len(vtt_files)} vidéo(s) ...")
     try:
-        results = suggest_all(vtt_files, config.insights_dir, config.shorts_dir, backend, config)
+        results = suggest_all(
+            vtt_files,
+            config.insights_dir,
+            config.shorts_dir,
+            backend,
+            config,
+            on_transcript_usage=lambda _path, usage: print(usage.format_message()),
+        )
     except BackendUnavailableError as exc:
         print(f"Erreur backend : {exc}", file=sys.stderr)
         return []

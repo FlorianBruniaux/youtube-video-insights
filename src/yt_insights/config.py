@@ -13,12 +13,28 @@ _CONFIG_PATH = Path.home() / ".config" / "yt-insights" / "config.toml"
 _INIT_TEMPLATE = Path.home() / ".config" / "yt-insights"
 
 
+class _DefaultModel(str):
+    """Private marker used only when Config.model is omitted."""
+
+
+def _default_model() -> str:
+    return _DefaultModel(DEFAULT_MODEL)
+
+
 @dataclass
 class Config:
+    """Effective settings plus the source of model and endpoint intent.
+
+    Any directly supplied model is a firm caller request, including the default
+    model value.
+    """
     base_url: str = DEFAULT_BASE_URL
     api_key: str = ""
     anthropic_version: str = "2023-06-01"
-    model: str = DEFAULT_MODEL
+    model: str = field(default_factory=_default_model)
+    model_source: str = "default"
+    base_url_source: str = "default"
+    _model_was_omitted: bool = field(default=False, repr=False)
     sub_langs: str = "fr,en"
     max_transcript_chars: int = 10_000
     max_tokens: int = 2048
@@ -29,14 +45,36 @@ class Config:
     shorts_dir: Path = field(default_factory=lambda: Path("output/shorts"))
     shorts_clips_dir: Path = field(default_factory=lambda: Path("output/clips"))
 
+    def __post_init__(self) -> None:
+        if isinstance(self.model, _DefaultModel):
+            self._model_was_omitted = True
+        self.model = str(self.model)
+        if self.model_source == "default" and not self._model_was_omitted:
+            self.model_source = "direct"
+        if self.base_url_source == "default" and self.base_url != DEFAULT_BASE_URL:
+            self.base_url_source = "direct"
+
     def with_url(
-        self, url: str, *, model: str | None = None, api_key: str | None = None
+        self,
+        url: str,
+        *,
+        model: str | None = None,
+        api_key: str | None = None,
+        model_source: str | None = None,
+        base_url_source: str | None = None,
     ) -> "Config":
         kwargs: dict = {"base_url": url}
         if model is not None:
             kwargs["model"] = model
+            kwargs["_model_was_omitted"] = False
+            if model_source is None:
+                kwargs["model_source"] = "direct"
         if api_key is not None:
             kwargs["api_key"] = api_key
+        if model_source is not None:
+            kwargs["model_source"] = model_source
+        if base_url_source is not None:
+            kwargs["base_url_source"] = base_url_source
         return replace(self, **kwargs)
 
 
@@ -48,7 +86,7 @@ def load_config(overrides: dict) -> Config:
     if _CONFIG_PATH.exists():
         with open(_CONFIG_PATH, "rb") as f:
             data = tomllib.load(f)
-        cfg = _apply_dict(cfg, data)
+        cfg = _apply_dict(cfg, data, "toml")
 
     # Layer 2: environment variables
     env_map = {
@@ -71,11 +109,11 @@ def load_config(overrides: dict) -> Config:
         val = os.getenv(env_key)
         if val is not None:
             env_data[field_name] = val
-    cfg = _apply_dict(cfg, env_data)
+    cfg = _apply_dict(cfg, env_data, "env")
 
     # Layer 3: CLI overrides (None values are ignored)
     clean = {k: v for k, v in overrides.items() if v is not None}
-    cfg = _apply_dict(cfg, clean)
+    cfg = _apply_dict(cfg, clean, "cli")
 
     return cfg
 
@@ -89,7 +127,7 @@ def effective_concurrency(config: Config, backend_type: str) -> int:
     return 3
 
 
-def _apply_dict(cfg: Config, data: dict) -> Config:
+def _apply_dict(cfg: Config, data: dict, source: str) -> Config:
     """Apply a flat dict of field values to a Config, coercing types."""
     int_fields = {"max_transcript_chars", "max_tokens", "timeout", "concurrency"}
     path_fields = {"transcripts_dir", "insights_dir", "shorts_dir", "shorts_clips_dir"}
@@ -103,6 +141,10 @@ def _apply_dict(cfg: Config, data: dict) -> Config:
             updates[key] = Path(val)
         else:
             updates[key] = val
+        if key == "model":
+            updates["model_source"] = source
+        elif key == "base_url":
+            updates["base_url_source"] = source
     return replace(cfg, **updates) if updates else cfg
 
 

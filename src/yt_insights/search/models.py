@@ -177,6 +177,7 @@ class SearchHit:
     passage: Passage
     rank: int
     score: float
+    excerpt: str | None = None
 
     def __post_init__(self) -> None:
         if self.passage.document_id != self.document.document_id:
@@ -192,6 +193,10 @@ class SearchHit:
             or not isfinite(self.score)
         ):
             raise ValueError("score must be finite")
+        if self.excerpt is None:
+            object.__setattr__(self, "excerpt", self.passage.text)
+        else:
+            _require_nonblank("excerpt", self.excerpt)
 
 
 @dataclass(frozen=True, slots=True)
