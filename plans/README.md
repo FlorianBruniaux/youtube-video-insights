@@ -31,7 +31,7 @@ répertoire par Claude Code et Codex, sans dupliquer la logique métier :
 |---|---|---|
 | A | Runtime indépendant du répertoire courant, `doctor`, acquisition avec preview, export et MCP quatre outils | `TERMINÉ`, 428 tests plus 10 sous-tests et smoke wheel offline |
 | B | Trois skills communs, deux agents natifs et corpus de routage | `FAIL`: benchmark réel à 20/30 positifs, sous le gate de 27/30; 0/15 activations interdites |
-| C | Trois candidats globaux immuables pour runtime, skills et intégrations, avec diffs expurgés, digests, rollback et tests en sessions neuves | `PARTIEL`: source globale intégrée et 108/108 tests; digests live, activation et sessions neuves non réalisés |
+| C | Trois candidats globaux immuables pour runtime, skills et intégrations, avec diffs expurgés, digests, rollback et tests en sessions neuves | `BLOQUÉ`: source globale intégrée et runtime préparé; migration Claude impossible avec un dossier skills absent, index réel invalide |
 | H | API hébergée, worker, extension et MCP distant | `CONDITIONNEL` aux déclencheurs d'usage |
 
 Aucune modification de `~/.claude`, `~/.codex` ou `~/.config/ai-agents` ne fait

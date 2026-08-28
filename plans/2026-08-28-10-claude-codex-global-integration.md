@@ -527,7 +527,7 @@ rtk git commit -m "test: calibrate yt-insights skill routing"
 - Consumes: committed runtime wheel, committed global config candidate and current live hashes
 - Produces: three approval artifacts and their exact confirmation strings
 
-- [ ] **Step 1: Install the wheel into an isolated uv tool directory**
+- [x] **Step 1: Install the wheel into an isolated uv tool directory**
 
 ```bash
 UV_TOOL_DIR=/private/tmp/yt-insights-tools UV_TOOL_BIN_DIR=/private/tmp/yt-insights-bin \
@@ -537,7 +537,14 @@ UV_TOOL_DIR=/private/tmp/yt-insights-tools UV_TOOL_BIN_DIR=/private/tmp/yt-insig
 
 This proves the package before any user-level tool replacement.
 
-- [ ] **Step 2: Re-inventory live global preimages**
+Résultat du 2026-08-28 : wheel SHA-256
+`3c69f3379951ee226d8d514b24cd9229183a1cf914dcb6a4427cfb5e99bc73ee`,
+37 dépendances et deux exécutables installés sous `/private/tmp`. Le diagnostic
+sur un corpus temporaire vide retourne seulement les avertissements attendus.
+Le corpus réel reste bloqué car son reçu d'index est invalide et son catalogue
+n'est pas construit.
+
+- [x] **Step 2: Re-inventory live global preimages**
 
 Record hashes for the resolved uv tool tree and two bin entrypoints,
 `~/.config/yt-insights/config.toml`, `~/.claude/CLAUDE.md`,
@@ -550,19 +557,29 @@ Record hashes for the resolved uv tool tree and two bin entrypoints,
 
 All ten release IDs must match. `npm test` and `scripts/check.mjs` must pass.
 
-- [ ] **Step 4: Prepare the runtime approval**
+- [x] **Step 4: Prepare the runtime approval**
 
 Bind the exact wheel SHA-256, resolved tool paths, prior tree manifest, two
 entrypoints and candidate user TOML to `GO INSTALL YT RUNTIME <digest>`.
 The TOML contains one absolute `data_root` and no credential value.
 
+Artefact préparé dans `/private/tmp`, digest
+`a788c8b72b97959512d512afc536a00c91592261e44ac44d58516679731f5eb4`.
+Il ne doit pas être installé tant que le corpus réel ne passe pas le diagnostic.
+
 - [ ] **Step 5: Prepare the shared release approval**
 
 Use the existing `shared` transaction to update instructions, project index and skill projections. Present its redacted diff and exact `GO INSTALL SHARED <digest>` string.
 
+Blocage observé : la préimage `~/.claude/skills` est absente, alors que la
+transaction n'accepte actuellement qu'un dossier ou un symlink existant.
+
 - [ ] **Step 6: Prepare the yt integration approval**
 
 Use the new `yt-integrations` transaction to prepare the two agents and two MCP configs. Present its redacted diff and exact `GO INSTALL YT INTEGRATIONS <digest>` string.
+
+Blocage attendu : cette préparation exige l'exécutable live
+`yt-insights-mcp`, créé seulement après l'installation runtime approuvée.
 
 - [ ] **Step 7: Stop**
 

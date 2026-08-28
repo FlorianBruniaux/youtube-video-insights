@@ -71,7 +71,7 @@ directement des VTT et conserve les passages horodatés. Aucun des deux ne doit
 |---|---|---|
 | Revue humaine de la pertinence | La technique est validée, pas la qualité éditoriale des résultats | Juger les requêtes de l'artefact P2 et enregistrer `PASS` ou `FAIL` |
 | Routage global Claude Code/Codex | Le benchmark réel atteint 20/30 positifs et 0/15 activations interdites | Corriger les confusions inter-skills et atteindre 27/30 sans baisser le seuil global |
-| Installation globale | La source globale passe 108 tests, mais aucune release yt-insights n'est activée ni installée | Refaire l'inventaire après le drift Codex, générer les trois digests live puis attendre les approbations exactes |
+| Installation globale | La source globale passe 108 tests et le wheel fonctionne dans un uv isolé; aucune release n'est activée | Corriger le cas `~/.claude/skills` absent, choisir ou reconstruire un index réel valide, puis régénérer les trois approbations |
 | Découpage LLM des longs transcripts | Insights et Shorts utilisent actuellement les 10 000 premiers caractères | Mesurer les pertes sur des articles réels, puis définir chunking et fusion |
 | MLX direct | `MLXBackend` existe mais le résolveur ne le sélectionne pas | Ajouter une option explicite et des tests sur Apple Silicon |
 | UI locale | CLI et MCP couvrent déjà la recherche locale | Documenter une friction répétée lors de recherches réelles |

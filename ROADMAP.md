@@ -112,7 +112,7 @@ preview obligatoire pour channel/playlist
 | B2 | `TERMINÉ` | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | Trois validateurs officiels et tests de portabilité au vert |
 | B3 | `FAIL` | Agents natifs et fixture terminés; benchmark réel à 20/30 positifs, 0/15 interdits, p95 0,709 ms | Atteindre 27/30 sans baisser le seuil global ni ajouter un second hook |
 | C1 | `TERMINÉ` | Source globale à `4d8a5a4`, 108/108 tests, release inerte `b5b7e9de…`, `issues: []` | Générer trois digests liés aux nouvelles préimages live avant toute activation |
-| C2 | `BLOQUÉ PAR APPROBATION` | Runtime, config, skills, agents et MCP globaux | Même corpus depuis deux cwd, parité de cinq requêtes et restauration testée |
+| C2 | `BLOQUÉ TECHNIQUEMENT` | Runtime, config, skills, agents et MCP globaux | Corriger la migration quand `~/.claude/skills` est absent et reconstruire ou sélectionner un index réel valide avant les approbations d'activation |
 | D1 | `OPTIONNEL` | Choix explicite Ollama, MLX, cc-bridge ou remote | Backend réellement résolu, canari MLX séparé |
 
 Les détails exécutables sont dans le [plan runtime](plans/2026-08-28-09-agent-ready-runtime.md), le [plan d'intégration globale](plans/2026-08-28-10-claude-codex-global-integration.md) et le [suivi parallèle](plans/PARALLEL-SESSIONS.md).
