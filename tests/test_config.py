@@ -61,6 +61,20 @@ def test_replace_config_honors_a_new_explicit_legacy_directory_override(
     assert paths.insights == custom_root / "insights"
 
 
+def test_replace_config_treats_the_historic_path_as_an_explicit_override(
+    tmp_path: Path,
+) -> None:
+    custom_root = tmp_path / "custom-corpus"
+    transcript_override = Path("output/transcripts")
+
+    paths = replace(
+        Config(data_root=custom_root), transcripts_dir=transcript_override
+    ).data_paths
+
+    assert paths.transcripts == transcript_override
+    assert paths.insights == custom_root / "insights"
+
+
 def test_mutating_config_honors_a_new_explicit_legacy_directory_override(
     tmp_path: Path,
 ) -> None:

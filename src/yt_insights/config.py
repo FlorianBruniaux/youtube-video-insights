@@ -19,20 +19,10 @@ class _DefaultModel(str):
     """Private marker used only when Config.model is omitted."""
 
 
-class _UnsetPath:
-    """Private marker used only when a legacy directory is omitted."""
+class _OmittedLegacyPath(type(Path())):
+    """Path-compatible marker for an omitted legacy directory setting."""
 
 
-_UNSET_PATH = _UnsetPath()
-_LEGACY_PATH_FIELDS = frozenset(
-    (
-        "transcripts_dir",
-        "insights_dir",
-        "shorts_dir",
-        "shorts_clips_dir",
-        "exports_dir",
-    )
-)
 _HISTORIC_PATH_DEFAULTS = {
     "transcripts_dir": Path("output/transcripts"),
     "insights_dir": Path("output/insights"),
@@ -51,6 +41,10 @@ _DATA_PATH_ATTRIBUTES = {
 
 def _default_model() -> str:
     return _DefaultModel(DEFAULT_MODEL)
+
+
+def _omitted_legacy_path(field_name: str) -> Path:
+    return _OmittedLegacyPath(_HISTORIC_PATH_DEFAULTS[field_name])
 
 
 @dataclass
@@ -73,31 +67,23 @@ class Config:
     timeout: int = 120
     concurrency: int = 0
     data_root: Path = field(default_factory=lambda: Path("output"))
-    transcripts_dir: Path | None | _UnsetPath = _UNSET_PATH
-    insights_dir: Path | None | _UnsetPath = _UNSET_PATH
-    shorts_dir: Path | None | _UnsetPath = _UNSET_PATH
-    shorts_clips_dir: Path | None | _UnsetPath = _UNSET_PATH
-    exports_dir: Path | None | _UnsetPath = _UNSET_PATH
-    _omitted_legacy_paths: frozenset[str] = field(
-        default_factory=frozenset, repr=False, compare=False
+    transcripts_dir: Path | None = field(
+        default_factory=lambda: _omitted_legacy_path("transcripts_dir")
     )
-    _initialization_complete: bool = field(
-        default=False, init=False, repr=False, compare=False
+    insights_dir: Path | None = field(
+        default_factory=lambda: _omitted_legacy_path("insights_dir")
+    )
+    shorts_dir: Path | None = field(
+        default_factory=lambda: _omitted_legacy_path("shorts_dir")
+    )
+    shorts_clips_dir: Path | None = field(
+        default_factory=lambda: _omitted_legacy_path("shorts_clips_dir")
+    )
+    exports_dir: Path | None = field(
+        default_factory=lambda: _omitted_legacy_path("exports_dir")
     )
 
     def __post_init__(self) -> None:
-        omitted = set(self._omitted_legacy_paths)
-        defaults = DataPaths.from_root(self.data_root)
-        for field_name, default in _HISTORIC_PATH_DEFAULTS.items():
-            if getattr(self, field_name) is _UNSET_PATH:
-                setattr(self, field_name, default)
-                omitted.add(field_name)
-            elif field_name in omitted and getattr(self, field_name) not in {
-                default,
-                getattr(defaults, _DATA_PATH_ATTRIBUTES[field_name]),
-            }:
-                omitted.discard(field_name)
-        self._omitted_legacy_paths = frozenset(omitted)
         if isinstance(self.model, _DefaultModel):
             self._model_was_omitted = True
         self.model = str(self.model)
@@ -105,17 +91,6 @@ class Config:
             self.model_source = "direct"
         if self.base_url_source == "default" and self.base_url != DEFAULT_BASE_URL:
             self.base_url_source = "direct"
-        self._initialization_complete = True
-
-    def __setattr__(self, name: str, value: object) -> None:
-        """Treat a post-construction legacy directory assignment as explicit."""
-        if name in _LEGACY_PATH_FIELDS and getattr(self, "_initialization_complete", False):
-            object.__setattr__(
-                self,
-                "_omitted_legacy_paths",
-                self._omitted_legacy_paths - {name},
-            )
-        object.__setattr__(self, name, value)
 
     def with_url(
         self,
@@ -144,43 +119,22 @@ class Config:
     def data_paths(self) -> DataPaths:
         """Return paths derived after applying named legacy directory overrides."""
         defaults = DataPaths.from_root(self.data_root)
+        resolved: dict[str, Path] = {}
+        for field_name, attribute_name in _DATA_PATH_ATTRIBUTES.items():
+            value = getattr(self, field_name)
+            resolved[attribute_name] = (
+                getattr(defaults, attribute_name)
+                if value is None or isinstance(value, _OmittedLegacyPath)
+                else value
+            )
         return replace(
             defaults,
-            transcripts=(
-                defaults.transcripts
-                if "transcripts_dir" in self._omitted_legacy_paths
-                else self.transcripts_dir or defaults.transcripts
-            ),
-            insights=(
-                defaults.insights
-                if "insights_dir" in self._omitted_legacy_paths
-                else self.insights_dir or defaults.insights
-            ),
-            shorts=(
-                defaults.shorts
-                if "shorts_dir" in self._omitted_legacy_paths
-                else self.shorts_dir or defaults.shorts
-            ),
-            clips=(
-                defaults.clips
-                if "shorts_clips_dir" in self._omitted_legacy_paths
-                else self.shorts_clips_dir or defaults.clips
-            ),
-            exports=(
-                defaults.exports
-                if "exports_dir" in self._omitted_legacy_paths
-                else self.exports_dir or defaults.exports
-            ),
+            transcripts=resolved["transcripts"],
+            insights=resolved["insights"],
+            shorts=resolved["shorts"],
+            clips=resolved["clips"],
+            exports=resolved["exports"],
         )
-
-
-def _with_explicit_legacy_paths(cfg: Config, updates: dict) -> dict:
-    """Record named directory values as explicit across dataclass replacements."""
-    explicit_paths = _LEGACY_PATH_FIELDS.intersection(updates)
-    if not explicit_paths:
-        return updates
-    updates["_omitted_legacy_paths"] = cfg._omitted_legacy_paths - explicit_paths
-    return updates
 
 
 def load_config(overrides: dict) -> Config:
@@ -259,7 +213,7 @@ def _apply_dict(cfg: Config, data: dict, source: str) -> Config:
             updates["model_source"] = source
         elif key == "base_url":
             updates["base_url_source"] = source
-    return replace(cfg, **_with_explicit_legacy_paths(cfg, updates)) if updates else cfg
+    return replace(cfg, **updates) if updates else cfg
 
 
 def _derive_data_paths(cfg: Config) -> Config:
