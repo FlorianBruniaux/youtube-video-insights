@@ -4,17 +4,27 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import sqlite3
 import stat
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 from urllib.parse import urlparse
 
 from .cleaner import clean_vtt
-from .downloader import VideoInfo, VideoListResult
+from .downloader import (
+    VideoInfo,
+    VideoListResult,
+    _confined_directory,
+    _DIRECTORY_FLAGS,
+    _list_regular_names,
+    _read_regular_at,
+)
 
 
 _SCHEMA_VERSION = 1
@@ -140,18 +150,22 @@ def _source_slug(source: str) -> str:
     return slug or "unknown-source"
 
 
+@dataclass(frozen=True)
+class _ArtifactSnapshot:
+    path: Path
+    raw_bytes: bytes
+
+
 def _flat_artifact_source_slug(
-    corpus_root: Path, path: Path, name: _ArtifactName
+    root_fd: int, path: Path, name: _ArtifactName
 ) -> str:
     """Resolve a stable source for inbox artifacts from yt-dlp metadata."""
     info_name = path.name.removesuffix(f".{name.language}{path.suffix}") + ".info.json"
-    info_path = corpus_root / "transcripts" / info_name
     try:
-        details = info_path.lstat()
-        if not stat.S_ISREG(details.st_mode) or details.st_size > 1024 * 1024:
-            return "inbox"
-        payload = json.loads(info_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        with _relative_directory(root_fd, ("transcripts",)) as directory_fd:
+            raw_bytes = _read_regular_at(directory_fd, info_name, max_bytes=1024 * 1024)
+        payload = json.loads(raw_bytes.decode("utf-8"))
+    except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
         return "inbox"
     if not isinstance(payload, dict) or payload.get("id") != name.video_id:
         return "inbox"
@@ -161,27 +175,108 @@ def _flat_artifact_source_slug(
     return _source_slug(identity.strip())
 
 
-def _safe_artifacts(directory: Path, suffix: str, corpus_root: Path) -> list[Path]:
-    """List only regular, non-symlink artifacts confined to the corpus."""
+@contextmanager
+def _relative_directory(root_fd: int, parts: tuple[str, ...]) -> Iterator[int]:
+    descriptors: list[int] = []
+    current = root_fd
     try:
-        details = directory.lstat()
-    except FileNotFoundError:
-        return []
-    if not stat.S_ISDIR(details.st_mode) or stat.S_ISLNK(details.st_mode):
-        return []
+        for part in parts:
+            if Path(part).name != part or part in {"", ".", ".."}:
+                raise ValueError("unsafe corpus directory component")
+            child = os.open(part, _DIRECTORY_FLAGS, dir_fd=current)
+            descriptors.append(child)
+            current = child
+        yield current
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _safe_artifacts(
+    root_fd: int,
+    directory_parts: tuple[str, ...],
+    suffix: str,
+    corpus_root: Path,
+) -> list[_ArtifactSnapshot]:
+    """Read stable snapshots through no-follow descriptors rooted in corpus."""
     try:
-        directory.resolve().relative_to(corpus_root)
+        with _relative_directory(root_fd, directory_parts) as directory_fd:
+            names = _list_regular_names(
+                directory_fd, suffix=suffix, reject_unsafe=False
+            )
+            snapshots: list[_ArtifactSnapshot] = []
+            for name in names:
+                try:
+                    snapshots.append(
+                        _ArtifactSnapshot(
+                            path=corpus_root.joinpath(*directory_parts, name),
+                            raw_bytes=_read_regular_at(directory_fd, name),
+                        )
+                    )
+                except (OSError, ValueError):
+                    continue
+            return snapshots
     except (OSError, ValueError):
         return []
-    artifacts: list[Path] = []
-    for candidate in directory.iterdir():
-        try:
-            candidate_details = candidate.lstat()
-        except OSError:
-            continue
-        if stat.S_ISREG(candidate_details.st_mode) and candidate.suffix == suffix:
-            artifacts.append(candidate)
-    return sorted(artifacts)
+
+
+def _inventory_corpus(
+    corpus_root: Path,
+) -> list[tuple[str, str, _ArtifactSnapshot]]:
+    inventory: list[tuple[str, str, _ArtifactSnapshot]] = []
+    with _confined_directory(corpus_root, corpus_root, create=False) as root_fd:
+        layouts: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
+            ("inbox", ("insights",), ("transcripts",))
+        ]
+        for source_name in sorted(os.listdir(root_fd)):
+            if source_name in {
+                "transcripts", "insights", "exports", "shorts", "clips", ".search"
+            }:
+                continue
+            try:
+                details = os.stat(source_name, dir_fd=root_fd, follow_symlinks=False)
+            except OSError:
+                continue
+            if stat.S_ISDIR(details.st_mode):
+                layouts.append(
+                    (
+                        source_name,
+                        (source_name, "insights"),
+                        (source_name, "transcripts"),
+                    )
+                )
+
+        for source_slug, insights_parts, transcripts_parts in layouts:
+            insight_snapshots = _safe_artifacts(
+                root_fd, insights_parts, ".json", corpus_root
+            )
+            for snapshot in insight_snapshots:
+                if not snapshot.path.name.startswith("AGGREGATE_REPORT"):
+                    artifact_slug = source_slug
+                    if source_slug == "inbox":
+                        try:
+                            artifact_name = _parse_artifact_name(snapshot.path)
+                            artifact_slug = _flat_artifact_source_slug(
+                                root_fd, snapshot.path, artifact_name
+                            )
+                        except ValueError:
+                            pass
+                    inventory.append((artifact_slug, "insight", snapshot))
+            transcript_snapshots = _safe_artifacts(
+                root_fd, transcripts_parts, ".vtt", corpus_root
+            )
+            for snapshot in transcript_snapshots:
+                artifact_slug = source_slug
+                if source_slug == "inbox":
+                    try:
+                        artifact_name = _parse_artifact_name(snapshot.path)
+                        artifact_slug = _flat_artifact_source_slug(
+                            root_fd, snapshot.path, artifact_name
+                        )
+                    except ValueError:
+                        pass
+                inventory.append((artifact_slug, "transcript", snapshot))
+    return inventory
 
 
 class Catalog:
@@ -293,13 +388,16 @@ class Catalog:
         raw_root = Path(root).expanduser().absolute()
         try:
             raw_details = raw_root.lstat()
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Corpus directory does not exist: {raw_root}")
-        if stat.S_ISLNK(raw_details.st_mode) or not stat.S_ISDIR(raw_details.st_mode):
-            raise ValueError(f"Corpus directory must be a regular directory: {raw_root}")
-        corpus_root = raw_root.resolve()
-        if not corpus_root.is_dir():
-            raise FileNotFoundError(f"Corpus directory does not exist: {corpus_root}")
+        except OSError as exc:
+            raise ValueError(f"Corpus directory is not safe: {raw_root}") from exc
+        if not stat.S_ISDIR(raw_details.st_mode) or stat.S_ISLNK(raw_details.st_mode):
+            raise ValueError(f"Corpus directory is not safe: {raw_root}")
+        corpus_root = Path(os.path.realpath(raw_root.parent)) / raw_root.name
+        try:
+            with _confined_directory(corpus_root, corpus_root, create=False):
+                pass
+        except OSError as exc:
+            raise ValueError(f"Corpus directory is not safe: {raw_root}") from exc
         started_at = _utc_now()
         cursor = self._connection.execute(
             """
@@ -374,130 +472,101 @@ class Catalog:
         error_count = 0
         touched_video_ids: set[str] = set()
 
-        layouts: list[tuple[str, Path, Path]] = [
-            ("inbox", corpus_root / "insights", corpus_root / "transcripts")
-        ]
-        for source_dir in sorted(corpus_root.iterdir()):
+        artifacts = _inventory_corpus(corpus_root)
+        for source_slug, kind, snapshot in artifacts:
+            items_seen += 1
+            path = snapshot.path
+            artifact_source_slug = source_slug
             try:
-                details = source_dir.lstat()
-            except OSError:
-                continue
-            if (
-                not stat.S_ISDIR(details.st_mode)
-                or stat.S_ISLNK(details.st_mode)
-                or source_dir.name
-                in {"transcripts", "insights", "exports", "shorts", "clips", ".search"}
-            ):
-                continue
-            layouts.append(
-                (source_dir.name, source_dir / "insights", source_dir / "transcripts")
-            )
+                name = _parse_artifact_name(path)
+                raw_bytes = snapshot.raw_bytes
+                digest = hashlib.sha256(raw_bytes).hexdigest()
+                existing_artifact = self._connection.execute(
+                    """
+                    SELECT 1 FROM artifacts
+                    WHERE video_id = ? AND kind = ? AND language = ? AND sha256 = ?
+                    """,
+                    (name.video_id, kind, name.language, digest),
+                ).fetchone()
+                previous_video = self._connection.execute(
+                    "SELECT title, published_at FROM videos WHERE video_id = ?",
+                    (name.video_id,),
+                ).fetchone()
+                previous_source = self._connection.execute(
+                    """
+                    SELECT 1 FROM video_sources
+                    WHERE video_id = ? AND source_slug = ?
+                    """,
+                    (name.video_id, artifact_source_slug),
+                ).fetchone()
 
-        for source_slug, insights_dir, transcripts_dir in layouts:
-            artifacts = [
-                ("insight", path)
-                for path in _safe_artifacts(insights_dir, ".json", corpus_root)
-                if not path.name.startswith("AGGREGATE_REPORT")
-            ]
-            artifacts += [
-                ("transcript", path)
-                for path in _safe_artifacts(transcripts_dir, ".vtt", corpus_root)
-            ]
-            for kind, path in artifacts:
-                items_seen += 1
-                artifact_source_slug = source_slug
-                try:
-                    name = _parse_artifact_name(path)
-                    artifact_source_slug = (
-                        _flat_artifact_source_slug(corpus_root, path, name)
-                        if source_slug == "inbox"
-                        else source_slug
+                if kind == "insight":
+                    data = json.loads(raw_bytes.decode("utf-8"))
+                    validation_issues = _insight_validation_issues(data)
+                    if validation_issues:
+                        error_count += 1
+                        self._record_error(
+                            run_id=run_id,
+                            stage="corpus_validation",
+                            source=artifact_source_slug,
+                            item_ref=str(path.absolute()),
+                            message="; ".join(validation_issues),
+                        )
+                    searchable_text = (
+                        _flatten_text(data) if existing_artifact is None else ""
                     )
-                    raw_bytes = path.read_bytes()
-                    digest = hashlib.sha256(raw_bytes).hexdigest()
-                    existing_artifact = self._connection.execute(
-                        """
-                        SELECT 1 FROM artifacts
-                        WHERE video_id = ? AND kind = ? AND language = ? AND sha256 = ?
-                        """,
-                        (name.video_id, kind, name.language, digest),
-                    ).fetchone()
-                    previous_video = self._connection.execute(
-                        "SELECT title, published_at FROM videos WHERE video_id = ?",
-                        (name.video_id,),
-                    ).fetchone()
-                    previous_source = self._connection.execute(
-                        """
-                        SELECT 1 FROM video_sources
-                        WHERE video_id = ? AND source_slug = ?
-                        """,
-                        (name.video_id, artifact_source_slug),
-                    ).fetchone()
-
-                    if kind == "insight":
-                        data = json.loads(raw_bytes.decode("utf-8"))
-                        validation_issues = _insight_validation_issues(data)
-                        if validation_issues:
-                            error_count += 1
-                            self._record_error(
-                                run_id=run_id,
-                                stage="corpus_validation",
-                                source=artifact_source_slug,
-                                item_ref=str(path.resolve()),
-                                message="; ".join(validation_issues),
-                            )
-                        searchable_text = (
-                            _flatten_text(data) if existing_artifact is None else ""
-                        )
-                    else:
-                        searchable_text = (
-                            clean_vtt(path) if existing_artifact is None else ""
-                        )
-
-                    now = _utc_now()
-                    self._upsert_video(name, now)
-                    self._upsert_source(name.video_id, artifact_source_slug, now)
-                    inserted_count = 0
+                else:
+                    searchable_text = ""
                     if existing_artifact is None:
-                        inserted = self._connection.execute(
-                            """
-                            INSERT OR IGNORE INTO artifacts(
-                                video_id, source_slug, kind, language, path, sha256,
-                                searchable_text, imported_at
-                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            """,
-                            (
-                                name.video_id,
-                                artifact_source_slug,
-                                kind,
-                                name.language,
-                                str(path.resolve()),
-                                digest,
-                                searchable_text,
-                                now,
-                            ),
-                        )
-                        inserted_count = max(inserted.rowcount, 0)
-                    items_written += inserted_count
+                        with tempfile.TemporaryDirectory(
+                            prefix="yt-insights-catalog-"
+                        ) as staging_name:
+                            staged = Path(staging_name) / path.name
+                            staged.write_bytes(raw_bytes)
+                            searchable_text = clean_vtt(staged)
 
-                    video_changed = (
-                        previous_video is None
-                        or previous_video["title"] != name.title
-                        or previous_video["published_at"] != name.published_at
+                now = _utc_now()
+                self._upsert_video(name, now)
+                self._upsert_source(name.video_id, artifact_source_slug, now)
+                inserted_count = 0
+                if existing_artifact is None:
+                    inserted = self._connection.execute(
+                        """
+                        INSERT OR IGNORE INTO artifacts(
+                            video_id, source_slug, kind, language, path, sha256,
+                            searchable_text, imported_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            name.video_id,
+                            artifact_source_slug,
+                            kind,
+                            name.language,
+                            str(path.absolute()),
+                            digest,
+                            searchable_text,
+                            now,
+                        ),
                     )
-                    if inserted_count or video_changed or previous_source is None:
-                        touched_video_ids.add(name.video_id)
-                except (OSError, UnicodeError, ValueError) as exc:
-                    # Recover only from item/file defects. Database and programming
-                    # errors must escape to the run-level rollback above.
-                    error_count += 1
-                    self._record_error(
-                        run_id=run_id,
-                        stage="corpus_import",
-                        source=artifact_source_slug,
-                        item_ref=str(path.resolve()),
-                        message=f"{type(exc).__name__}: {exc}",
-                    )
+                    inserted_count = max(inserted.rowcount, 0)
+                items_written += inserted_count
+
+                video_changed = (
+                    previous_video is None
+                    or previous_video["title"] != name.title
+                    or previous_video["published_at"] != name.published_at
+                )
+                if inserted_count or video_changed or previous_source is None:
+                    touched_video_ids.add(name.video_id)
+            except (OSError, UnicodeError, ValueError) as exc:
+                error_count += 1
+                self._record_error(
+                    run_id=run_id,
+                    stage="corpus_import",
+                    source=artifact_source_slug,
+                    item_ref=str(path.absolute()),
+                    message=f"{type(exc).__name__}: {exc}",
+                )
 
         return items_seen, items_written, error_count, touched_video_ids
 

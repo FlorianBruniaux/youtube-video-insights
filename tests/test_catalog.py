@@ -72,6 +72,42 @@ class CatalogImportTests(unittest.TestCase):
             self.assertEqual(stats.videos, 0)
             self.assertEqual(stats.artifacts, 0)
 
+    def test_import_file_swap_between_inventory_and_open_never_indexes_external_bytes(
+        self,
+    ) -> None:
+        import yt_insights.catalog as catalog_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            corpus = base / "corpus"
+            transcripts = corpus / "channel" / "transcripts"
+            transcripts.mkdir(parents=True)
+            filename = f"20260820 - Original [{VIDEO_ID}].fr.vtt"
+            vtt = transcripts / filename
+            vtt.write_text("WEBVTT\noriginal\n", encoding="utf-8")
+            outside = base / "outside.vtt"
+            outside.write_text("WEBVTT\nexternal secret\n", encoding="utf-8")
+            original_list = catalog_module._list_regular_names
+            swapped = False
+
+            def swapping_list(*args: object, **kwargs: object) -> tuple[str, ...]:
+                nonlocal swapped
+                names = original_list(*args, **kwargs)
+                if not swapped and filename in names:
+                    swapped = True
+                    vtt.rename(vtt.with_suffix(".original"))
+                    vtt.symlink_to(outside)
+                return names
+
+            with patch.object(catalog_module, "_list_regular_names", swapping_list):
+                with Catalog(base / "catalog.sqlite3") as catalog:
+                    summary = catalog.import_corpus(corpus)
+                    stats = catalog.stats()
+
+            self.assertEqual(summary.items_seen, 0)
+            self.assertEqual(stats.videos, 0)
+            self.assertEqual(stats.artifacts, 0)
+
     def test_import_includes_flat_inbox_and_nested_corpus_without_double_counting(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

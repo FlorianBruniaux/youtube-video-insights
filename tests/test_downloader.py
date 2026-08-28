@@ -105,34 +105,35 @@ def test_download_subtitles_returns_logged_vtt_and_preserves_argument_vector(
     assert result.errors == []
     assert result.skipped_count == int("already exists" in log_template)
     assert result.returncode == 0
-    assert calls == [
-        (
-            [
-                "yt-dlp",
-                "--write-auto-subs",
-                "--sub-langs",
-                "fr,en",
-                "--sub-format",
-                "vtt",
-                "--skip-download",
-                "--write-info-json",
-                "--no-write-playlist-metafiles",
-                "--ignore-errors",
-                "--output",
-                str(output_dir / "%(upload_date)s - %(title)s [%(id)s].%(ext)s"),
-                "--extractor-retries",
-                "5",
-                "--retry-sleep",
-                "extractor:exp=1:30",
-                "--sleep-requests",
-                "2",
-                "--cookies-from-browser",
-                "safari",
-                "https://www.youtube.com/watch?v=nfupYzLjFGc",
-            ],
-            {"capture_output": True, "text": True},
-        )
+    assert len(calls) == 1
+    actual_args, actual_kwargs = calls[0]
+    staged_output = actual_args[actual_args.index("--output") + 1]
+    assert Path(staged_output).parent != output_dir
+    assert Path(staged_output).name == "%(upload_date)s - %(title)s [%(id)s].%(ext)s"
+    assert actual_args == [
+        "yt-dlp",
+        "--write-auto-subs",
+        "--sub-langs",
+        "fr,en",
+        "--sub-format",
+        "vtt",
+        "--skip-download",
+        "--write-info-json",
+        "--no-write-playlist-metafiles",
+        "--ignore-errors",
+        "--output",
+        staged_output,
+        "--extractor-retries",
+        "5",
+        "--retry-sleep",
+        "extractor:exp=1:30",
+        "--sleep-requests",
+        "2",
+        "--cookies-from-browser",
+        "safari",
+        "https://www.youtube.com/watch?v=nfupYzLjFGc",
     ]
+    assert actual_kwargs == {"capture_output": True, "text": True}
 
 
 def test_downloaded_flat_layout_indexes_channel_identity_from_info_sidecar(
@@ -271,3 +272,31 @@ def test_download_subtitles_rejects_symlink_output_before_subprocess(
 
     with pytest.raises(ValueError, match="symlink"):
         download_subtitles("https://youtu.be/nfupYzLjFGc", link)
+
+
+def test_download_promotes_through_held_dirfd_when_path_is_swapped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "corpus"
+    destination = root / "transcripts"
+    destination.mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original = root / "original-transcripts"
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        template = Path(args[args.index("--output") + 1])
+        staged = template.parent / "20260820 - Stable [nfupYzLjFGc].fr.vtt"
+        staged.write_text("WEBVTT\n", encoding="utf-8")
+        destination.rename(original)
+        destination.symlink_to(outside, target_is_directory=True)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    result = download_subtitles(
+        "https://youtu.be/nfupYzLjFGc", destination, data_root=root
+    )
+
+    assert result.errors == []
+    assert not any(outside.iterdir())
+    assert (original / "20260820 - Stable [nfupYzLjFGc].fr.vtt").is_file()

@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import stat
 import os
+import tempfile
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
@@ -12,7 +13,15 @@ from typing import Any, Callable, Iterable
 from urllib.parse import parse_qs, urlparse
 
 from .config import Config
-from .downloader import DownloadResult, VideoInfo, download_subtitles
+from .downloader import (
+    DownloadResult,
+    VideoInfo,
+    _confined_directory,
+    _list_regular_names,
+    _promote_regular_file,
+    _read_regular_at,
+    download_subtitles,
+)
 from .paths import DataPaths
 
 
@@ -367,36 +376,42 @@ def build_acquisition_plan(
     )
 
 
+@dataclass(frozen=True)
+class _VttSnapshot:
+    path: Path
+    content: bytes
+
+
 def _matching_vtts(
     directory: Path, video_id: str, language: str, root: Path
-) -> list[Path]:
-    _validate_confined_directory(directory, root)
-    if not directory.is_dir():
-        return []
+) -> list[_VttSnapshot]:
     suffix = f"[{video_id}].{language}.vtt"
-    matches: list[Path] = []
-    for path in directory.iterdir():
-        details = path.lstat()
-        if stat.S_ISLNK(details.st_mode):
-            raise ValueError(f"cache contains a symlink: {path.name}")
-        if stat.S_ISREG(details.st_mode) and path.name.endswith(suffix):
-            matches.append(path)
-    return sorted(matches)
+    try:
+        with _confined_directory(root, directory, create=False) as directory_fd:
+            names = _list_regular_names(directory_fd, suffix=suffix, reject_unsafe=True)
+            return [
+                _VttSnapshot(directory / name, _read_regular_at(directory_fd, name))
+                for name in names
+            ]
+    except FileNotFoundError:
+        return []
+    except OSError as exc:
+        raise ValueError("cache changed while being read") from exc
 
 
-def _matching_insight(vtt: Path, insights_dir: Path) -> Path:
-    return insights_dir / f"{vtt.stem}.json"
+def _matching_insight(vtt: _VttSnapshot, insights_dir: Path) -> Path:
+    return insights_dir / f"{vtt.path.stem}.json"
 
 
 def _safe_regular_file(path: Path, root: Path) -> bool:
-    _validate_confined_directory(path.parent, root)
     try:
-        details = path.lstat()
+        with _confined_directory(root, path.parent, create=False) as directory_fd:
+            _read_regular_at(directory_fd, path.name)
+            return True
     except FileNotFoundError:
         return False
-    if stat.S_ISLNK(details.st_mode):
-        raise ValueError(f"cache contains a symlink: {path.name}")
-    return stat.S_ISREG(details.st_mode)
+    except OSError as exc:
+        raise ValueError("cache changed while being read") from exc
 
 
 def execute_acquisition(
@@ -413,7 +428,7 @@ def execute_acquisition(
     if download is None:
         download = download_subtitles
     failures = [f"source ({plan.source}): {message}" for message in plan.discovery_errors]
-    ready_by_id: dict[str, list[Path]] = {}
+    ready_by_id: dict[str, list[_VttSnapshot]] = {}
 
     for video, url in zip(plan.selected_videos, plan.selected_urls):
         try:
@@ -423,7 +438,7 @@ def execute_acquisition(
         except ValueError as exc:
             failures.append(f"{video.video_id} ({video.title}): {exc}")
             continue
-        result = DownloadResult(vtt_files=cached)
+        result = DownloadResult(vtt_files=[snapshot.path for snapshot in cached])
         if not cached:
             try:
                 result = download(
@@ -431,6 +446,7 @@ def execute_acquisition(
                     plan.transcripts_dir,
                     cookies_from_browser=cookies_from_browser,
                     sub_langs=plan.language,
+                    data_root=plan.data_paths.root,
                 )
             except Exception as exc:
                 result = DownloadResult(errors=[f"{type(exc).__name__}: {exc}"], returncode=1)
@@ -442,7 +458,7 @@ def execute_acquisition(
             failures.append(f"{video.video_id} ({video.title}): {exc}")
             continue
         if ready:
-            ready_by_id[video.video_id] = sorted(set(ready))
+            ready_by_id[video.video_id] = ready
         diagnostics = list(result.errors)
         if result.returncode and not any("exited with status" in item for item in diagnostics):
             diagnostics.append(f"yt-dlp exited with status {result.returncode}")
@@ -450,26 +466,20 @@ def execute_acquisition(
             details = "; ".join(diagnostics) or "no requested subtitle file was produced"
             failures.append(f"{video.video_id} ({video.title}): {details}")
 
-    all_vtts = [path for paths in ready_by_id.values() for path in paths]
+    all_vtts = [snapshot for snapshots in ready_by_id.values() for snapshot in snapshots]
     insights_ready = 0
     if plan.analyze and all_vtts:
         try:
             missing_insights = [
-                path
-                for path in all_vtts
+                snapshot
+                for snapshot in all_vtts
                 if not _safe_regular_file(
-                    _matching_insight(path, plan.insights_dir), plan.data_paths.root
+                    _matching_insight(snapshot, plan.insights_dir), plan.data_paths.root
                 )
             ]
         except ValueError as exc:
             failures.append(f"analysis: {exc}")
             missing_insights = []
-        if missing_insights:
-            try:
-                _validate_confined_directory(plan.insights_dir, plan.data_paths.root)
-            except ValueError as exc:
-                failures.append(f"analysis: {exc}")
-                missing_insights = []
         if missing_insights:
             if analyze_many is None:
                 from .analyzer import analyze_all
@@ -486,8 +496,32 @@ def execute_acquisition(
             )
             backend: Any | None = None
             try:
-                backend = backend_resolver(effective)
-                analyze_many(missing_insights, plan.insights_dir, backend, effective)
+                with _confined_directory(
+                    plan.data_paths.root, plan.insights_dir, create=True
+                ) as insights_fd:
+                    with tempfile.TemporaryDirectory(
+                        prefix="yt-insights-analysis-"
+                    ) as staging_name:
+                        staging = Path(staging_name)
+                        staged_vtts = staging / "transcripts"
+                        staged_insights = staging / "insights"
+                        staged_vtts.mkdir()
+                        staged_insights.mkdir()
+                        analyzer_inputs: list[Path] = []
+                        for snapshot in missing_insights:
+                            staged = staged_vtts / snapshot.path.name
+                            staged.write_bytes(snapshot.content)
+                            analyzer_inputs.append(staged)
+                        backend = backend_resolver(effective)
+                        analyze_many(
+                            analyzer_inputs, staged_insights, backend, effective
+                        )
+                        for artifact in staged_insights.iterdir():
+                            if artifact.suffix not in {".json", ".md"}:
+                                continue
+                            _promote_regular_file(
+                                artifact, insights_fd, artifact.name
+                            )
             except Exception as exc:
                 failures.append(f"analysis: {type(exc).__name__}: {exc}")
             finally:
@@ -497,9 +531,9 @@ def execute_acquisition(
             try:
                 ready_insight = any(
                     _safe_regular_file(
-                        _matching_insight(path, plan.insights_dir), plan.data_paths.root
+                        _matching_insight(snapshot, plan.insights_dir), plan.data_paths.root
                     )
-                    for path in paths
+                    for snapshot in paths
                 )
             except ValueError as exc:
                 title = next(v.title for v in plan.selected_videos if v.video_id == video_id)

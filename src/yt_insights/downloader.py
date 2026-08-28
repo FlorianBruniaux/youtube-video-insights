@@ -7,8 +7,12 @@ import os
 import re
 import stat
 import subprocess
+import tempfile
+import secrets
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Iterator
 
 
 @dataclass
@@ -122,22 +126,181 @@ def fetch_video_list(
     )
 
 
-def _reject_symlink_output(path: Path) -> None:
-    """Reject any existing symlink component or entry before yt-dlp writes."""
-    absolute = path.expanduser().absolute()
-    for component in reversed((absolute, *absolute.parents)):
+_DIRECTORY_FLAGS = (
+    os.O_RDONLY
+    | getattr(os, "O_DIRECTORY", 0)
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+)
+_READ_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+
+
+@contextmanager
+def _confined_directory(
+    root: Path, destination: Path, *, create: bool
+) -> Iterator[int]:
+    """Open destination from `/` with no-follow directory descriptors held open."""
+    absolute_root = root.expanduser().absolute()
+    absolute_destination = destination.expanduser().absolute()
+    try:
+        absolute_destination.relative_to(absolute_root)
+    except ValueError as exc:
+        raise ValueError("destination must remain under data root") from exc
+    if not getattr(os, "O_NOFOLLOW", 0) or not getattr(os, "O_DIRECTORY", 0):
+        raise ValueError("platform lacks safe no-follow directory operations")
+
+    descriptors: list[int] = [os.open("/", _DIRECTORY_FLAGS)]
+    try:
+        current = descriptors[-1]
+        for component in absolute_destination.parts[1:]:
+            if component in {"", ".", ".."}:
+                raise ValueError("unsafe destination component")
+            try:
+                child = os.open(component, _DIRECTORY_FLAGS, dir_fd=current)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(component, mode=0o755, dir_fd=current)
+                child = os.open(component, _DIRECTORY_FLAGS, dir_fd=current)
+            except OSError as exc:
+                raise ValueError(
+                    f"unsafe, unstable, or symlink directory component: {component}"
+                ) from exc
+            descriptors.append(child)
+            current = child
+        yield descriptors[-1]
+    finally:
+        for descriptor in reversed(descriptors):
+            os.close(descriptor)
+
+
+def _list_regular_names(
+    directory_fd: int, *, suffix: str | None = None, reject_unsafe: bool = True
+) -> tuple[str, ...]:
+    names: list[str] = []
+    for name in os.listdir(directory_fd):
         try:
-            details = component.lstat()
-        except FileNotFoundError:
+            details = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+        except OSError:
+            if reject_unsafe:
+                raise ValueError(f"directory entry changed during inventory: {name}")
             continue
-        if stat.S_ISLNK(details.st_mode):
-            raise ValueError(f"output path contains a symlink: {component}")
-        if component == absolute and not stat.S_ISDIR(details.st_mode):
-            raise ValueError(f"output path is not a directory: {component}")
-    if absolute.is_dir():
-        for entry in absolute.iterdir():
-            if stat.S_ISLNK(entry.lstat().st_mode):
-                raise ValueError(f"output directory contains a symlink: {entry.name}")
+        if not stat.S_ISREG(details.st_mode):
+            if reject_unsafe:
+                raise ValueError(f"directory contains a non-regular entry: {name}")
+            continue
+        if suffix is None or name.endswith(suffix):
+            names.append(name)
+    return tuple(sorted(names))
+
+
+def _read_regular_at(
+    directory_fd: int, name: str, *, max_bytes: int | None = None
+) -> bytes:
+    if Path(name).name != name or "\x00" in name:
+        raise ValueError("unsafe file name")
+    descriptor = os.open(name, _READ_FLAGS | os.O_NONBLOCK, dir_fd=directory_fd)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError(f"not a regular file: {name}")
+        if max_bytes is not None and opened.st_size > max_bytes:
+            raise ValueError(f"file exceeds byte limit: {name}")
+        remaining = opened.st_size + 1 if max_bytes is None else max_bytes + 1
+        chunks: list[bytes] = []
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        payload = b"".join(chunks)
+        final = os.fstat(descriptor)
+        identity = (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+        if (
+            (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns) != identity
+            or len(payload) != opened.st_size
+            or (max_bytes is not None and len(payload) > max_bytes)
+        ):
+            raise ValueError(f"file changed while being read: {name}")
+        return payload
+    finally:
+        os.close(descriptor)
+
+
+def _promote_regular_file(source: Path, destination_fd: int, name: str) -> bool:
+    """Copy a stable source to a private sibling, then publish without overwrite."""
+    if Path(name).name != name or "\x00" in name:
+        raise ValueError("unsafe promoted file name")
+    try:
+        existing = os.stat(name, dir_fd=destination_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        existing = None
+    if existing is not None:
+        if not stat.S_ISREG(existing.st_mode):
+            raise ValueError(f"destination is not a regular file: {name}")
+        return False
+
+    source_fd = os.open(source, _READ_FLAGS | os.O_NONBLOCK)
+    temporary_name = f".{name}.{secrets.token_hex(8)}.tmp"
+    temporary_fd: int | None = None
+    try:
+        source_before = os.fstat(source_fd)
+        if not stat.S_ISREG(source_before.st_mode):
+            raise ValueError(f"staged source is not regular: {name}")
+        temporary_fd = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=destination_fd,
+        )
+        copied = 0
+        while True:
+            chunk = os.read(source_fd, 64 * 1024)
+            if not chunk:
+                break
+            view = memoryview(chunk)
+            while view:
+                written = os.write(temporary_fd, view)
+                view = view[written:]
+            copied += len(chunk)
+        os.fsync(temporary_fd)
+        source_after = os.fstat(source_fd)
+        if (
+            (source_after.st_dev, source_after.st_ino, source_after.st_size, source_after.st_mtime_ns)
+            != (
+                source_before.st_dev,
+                source_before.st_ino,
+                source_before.st_size,
+                source_before.st_mtime_ns,
+            )
+            or copied != source_before.st_size
+        ):
+            raise ValueError(f"staged source changed while copying: {name}")
+        os.close(temporary_fd)
+        temporary_fd = None
+        try:
+            os.link(
+                temporary_name,
+                name,
+                src_dir_fd=destination_fd,
+                dst_dir_fd=destination_fd,
+                follow_symlinks=False,
+            )
+            return True
+        except FileExistsError:
+            existing = os.stat(name, dir_fd=destination_fd, follow_symlinks=False)
+            if not stat.S_ISREG(existing.st_mode):
+                raise ValueError(f"destination changed to a non-regular file: {name}")
+            return False
+    finally:
+        if temporary_fd is not None:
+            os.close(temporary_fd)
+        os.close(source_fd)
+        try:
+            os.unlink(temporary_name, dir_fd=destination_fd)
+        except FileNotFoundError:
+            pass
 
 
 def list_videos(source: str, *, cookies_from_browser: str | None = None) -> list[VideoInfo]:
@@ -179,73 +342,80 @@ def download_subtitles(
     sleep_requests: int = 0,
     cookies_from_browser: str | None = None,
     sub_langs: str = "fr,en",
+    data_root: Path | None = None,
 ) -> DownloadResult:
     """Download auto-generated subtitles from a YouTube channel/playlist/video.
 
     Detects new VTT files via a before/after snapshot of output_dir.
     (--print after_move:filepath only fires for media downloads, not subtitles.)
     """
-    _reject_symlink_output(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    _reject_symlink_output(output_dir)
-    before = set(output_dir.glob("*.vtt"))
+    requested_root = (data_root or output_dir.parent).expanduser().absolute()
+    requested_output = output_dir.expanduser().absolute()
+    relative_output = requested_output.relative_to(requested_root)
+    root = Path(os.path.realpath(requested_root))
+    stable_output = root / relative_output
+    with _confined_directory(root, stable_output, create=True) as destination_fd:
+        _list_regular_names(destination_fd, reject_unsafe=True)
+        with tempfile.TemporaryDirectory(prefix="yt-insights-download-") as staging_name:
+            staging = Path(staging_name)
+            cmd = [
+                "yt-dlp",
+                "--write-auto-subs",
+                "--sub-langs", sub_langs,
+                "--sub-format", "vtt",
+                "--skip-download",
+                "--write-info-json",
+                "--no-write-playlist-metafiles",
+                "--ignore-errors",
+                "--output", str(staging / "%(upload_date)s - %(title)s [%(id)s].%(ext)s"),
+                "--extractor-retries", "5",
+                "--retry-sleep", "extractor:exp=1:30",
+            ]
+            if sleep_requests > 0:
+                cmd += ["--sleep-requests", str(sleep_requests)]
+            if cookies_from_browser:
+                cmd += ["--cookies-from-browser", cookies_from_browser]
+            cmd += _source_args(channel_url)
+            result = subprocess.run(cmd, capture_output=True, text=True)
 
-    cmd = [
-        "yt-dlp",
-        "--write-auto-subs",
-        "--sub-langs", sub_langs,
-        "--sub-format", "vtt",
-        "--skip-download",
-        "--write-info-json",
-        "--no-write-playlist-metafiles",
-        "--ignore-errors",
-        "--output", str(output_dir / "%(upload_date)s - %(title)s [%(id)s].%(ext)s"),
-        # Retry up to 5 times on extractor errors (e.g. 429), with exponential
-        # backoff starting at 1s and capping at 30s between attempts.
-        "--extractor-retries", "5",
-        "--retry-sleep", "extractor:exp=1:30",
-    ]
-    if sleep_requests > 0:
-        cmd += ["--sleep-requests", str(sleep_requests)]
-    if cookies_from_browser:
-        cmd += ["--cookies-from-browser", cookies_from_browser]
-    cmd += _source_args(channel_url)
+            errors = [
+                line.strip()
+                for line in (result.stdout + "\n" + result.stderr).splitlines()
+                if "ERROR" in line.upper()
+            ]
+            if result.returncode != 0 and not errors:
+                detail = result.stderr.strip() or "no diagnostic output"
+                errors.append(f"yt-dlp exited with status {result.returncode}: {detail}")
 
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    _reject_symlink_output(output_dir)
+            selected_vtt_names: set[str] = set()
+            skipped_count = 0
+            for entry in staging.iterdir():
+                details = entry.lstat()
+                if not stat.S_ISREG(details.st_mode):
+                    raise ValueError(f"yt-dlp staged a non-regular entry: {entry.name}")
+                promoted = _promote_regular_file(entry, destination_fd, entry.name)
+                if not promoted:
+                    skipped_count += 1
+                if entry.name.endswith(".vtt"):
+                    selected_vtt_names.add(entry.name)
 
-    vtt_files: list[Path] = []
-    errors: list[str] = []
-    skipped_count = 0
+            for line in (result.stdout + "\n" + result.stderr).splitlines():
+                marker = "Subtitle file already exists:"
+                if marker in line:
+                    name = Path(line.split(marker, 1)[1].strip()).name
+                    if name.endswith(".vtt"):
+                        selected_vtt_names.add(name)
+                        skipped_count += 1
+                marker = "Writing video subtitles to:"
+                if marker in line:
+                    name = Path(line.split(marker, 1)[1].strip()).name
+                    if name.endswith(".vtt"):
+                        selected_vtt_names.add(name)
 
-    # yt-dlp writes the "[info] Writing video subtitles to:" lines to stdout and
-    # WARNING/ERROR lines to stderr, so both streams must be scanned.
-    for line in (result.stdout + "\n" + result.stderr).splitlines():
-        line = line.strip()
-        # yt-dlp logs written paths as "[info] Writing video subtitles to: <path>"
-        # and skipped paths as "[info] <id>: Subtitle file already exists: <path>"
-        if "Writing video subtitles to:" in line:
-            path_str = line.split("Writing video subtitles to:", 1)[1].strip()
-            p = Path(path_str)
-            if p.suffix == ".vtt" and p.exists():
-                vtt_files.append(p)
-        elif "Subtitle file already exists:" in line:
-            path_str = line.split("Subtitle file already exists:", 1)[1].strip()
-            p = Path(path_str)
-            if p.suffix == ".vtt" and p.exists():
-                vtt_files.append(p)
-                skipped_count += 1
-        elif "ERROR" in line.upper():
-            errors.append(line)
-
-    vtt_files.extend(path for path in output_dir.glob("*.vtt") if path not in before)
-    if result.returncode != 0 and not errors:
-        detail = result.stderr.strip() or "no diagnostic output"
-        errors.append(f"yt-dlp exited with status {result.returncode}: {detail}")
-
-    return DownloadResult(
-        vtt_files=sorted(set(vtt_files)),
-        errors=errors,
-        skipped_count=skipped_count,
-        returncode=result.returncode,
-    )
+            available = set(_list_regular_names(destination_fd, suffix=".vtt"))
+            return DownloadResult(
+                vtt_files=[output_dir / name for name in sorted(selected_vtt_names & available)],
+                errors=errors,
+                skipped_count=skipped_count,
+                returncode=result.returncode,
+            )

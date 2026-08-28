@@ -223,6 +223,83 @@ def test_execute_rejects_cache_directory_swapped_to_symlink(tmp_path: Path) -> N
     assert "symlink" in report.failures[0]
 
 
+def test_cache_file_swap_between_inventory_and_open_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.acquisition as acquisition
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    video = VideoInfo("aaa123DEF45", "Swapped cache", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url, data_paths=paths, discovered=[video]
+    )
+    paths.transcripts.mkdir(parents=True)
+    vtt = paths.transcripts / "20260820 - Swapped cache [aaa123DEF45].fr.vtt"
+    vtt.write_text("WEBVTT\noriginal\n", encoding="utf-8")
+    outside = tmp_path / "outside.vtt"
+    outside.write_text("WEBVTT\nexternal\n", encoding="utf-8")
+    original_list = acquisition._list_regular_names
+    swapped = False
+
+    def swapping_list(*args: object, **kwargs: object) -> tuple[str, ...]:
+        nonlocal swapped
+        names = original_list(*args, **kwargs)
+        if not swapped and vtt.name in names:
+            swapped = True
+            vtt.rename(vtt.with_suffix(".original"))
+            vtt.symlink_to(outside)
+        return names
+
+    monkeypatch.setattr(acquisition, "_list_regular_names", swapping_list)
+    report = execute_acquisition(plan, refresh_indexes=False)
+
+    assert report.exit_code == 1
+    assert report.transcripts_ready == 0
+    assert "changed" in report.failures[0] or "unsafe" in report.failures[0]
+
+
+def test_analyzer_uses_private_snapshot_and_never_writes_swapped_destination(
+    tmp_path: Path
+) -> None:
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    video = VideoInfo("aaa123DEF45", "Snapshot", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url, data_paths=paths, analyze=True, discovered=[video]
+    )
+    paths.transcripts.mkdir(parents=True)
+    paths.insights.mkdir()
+    vtt = paths.transcripts / "20260820 - Snapshot [aaa123DEF45].fr.vtt"
+    vtt.write_text("WEBVTT\ntrusted snapshot\n", encoding="utf-8")
+    outside = tmp_path / "outside-insights"
+    outside.mkdir()
+    original_insights = paths.root / "original-insights"
+
+    class Backend:
+        def close(self) -> None:
+            pass
+
+    def fake_analyze(
+        inputs: list[Path], output: Path, backend: object, config: object
+    ) -> list[object]:
+        assert paths.root not in inputs[0].parents
+        assert inputs[0].read_bytes() == b"WEBVTT\ntrusted snapshot\n"
+        paths.insights.rename(original_insights)
+        paths.insights.symlink_to(outside, target_is_directory=True)
+        (output / f"{inputs[0].stem}.json").write_text("{}", encoding="utf-8")
+        return []
+
+    report = execute_acquisition(
+        plan,
+        analyze_many=fake_analyze,
+        backend_resolver=lambda config: Backend(),
+        refresh_indexes=False,
+    )
+
+    assert report.exit_code == 4
+    assert not any(outside.iterdir())
+    assert (original_insights / f"{vtt.stem}.json").is_file()
+
+
 def test_execute_all_failed_exits_one(tmp_path: Path) -> None:
     video = VideoInfo("aaa123DEF45", "No subtitles", "20260820")
     plan = build_acquisition_plan(
