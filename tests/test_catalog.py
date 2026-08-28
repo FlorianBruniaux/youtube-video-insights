@@ -877,3 +877,58 @@ def test_read_only_catalog_rejects_foreign_key_violations(tmp_path: Path) -> Non
 
     with pytest.raises(CatalogError):
         Catalog.open_read_only(database)
+
+
+@pytest.mark.parametrize("corruption", ["duplicate_schema_meta", "foreign_keys"])
+def test_writer_rejects_invalid_existing_catalog_without_creating_sidecars(
+    tmp_path: Path, corruption: str
+) -> None:
+    corpus = tmp_path / "corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        corpus,
+        channel="product-channel",
+        language="en",
+        transcript="Writer preflight validation.",
+    )
+    with Catalog(database) as catalog:
+        catalog.import_corpus(corpus)
+        catalog.checkpoint()
+    with sqlite3.connect(database) as connection:
+        if corruption == "duplicate_schema_meta":
+            connection.execute("INSERT INTO schema_meta(version) VALUES (1)")
+        else:
+            for index in range(3):
+                connection.execute(
+                    """
+                    INSERT INTO artifacts(
+                        video_id, source_slug, kind, language, path, sha256,
+                        searchable_text, imported_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        f"missing000{index}",
+                        "product-channel",
+                        "insight",
+                        "en",
+                        f"product-channel/insights/20260820 - Missing {index} [{VIDEO_ID}].en.json",
+                        str(index) * 64,
+                        "",
+                        "2026-08-28T00:00:00+00:00",
+                    ),
+                )
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    before_names = sorted(path.name for path in tmp_path.iterdir())
+    before_database = database.read_bytes()
+    candidate: Catalog | None = None
+    try:
+        with pytest.raises(CatalogError):
+            candidate = Catalog(database)
+    finally:
+        if candidate is not None:
+            candidate.close()
+
+    assert sorted(path.name for path in tmp_path.iterdir()) == before_names
+    assert database.read_bytes() == before_database

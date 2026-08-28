@@ -429,26 +429,30 @@ class Catalog:
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = Path(db_path)
+        self._connection: sqlite3.Connection | None = None
         self._directory_context = _held_catalog_parent(self.db_path.parent)
         self._parent_fd = self._directory_context.__enter__()
-        self._lock_context = catalog_writer_lock(self._parent_fd, self.db_path.name)
-        try:
-            self._lock_context.__enter__()
-        except BaseException:
-            self._directory_context.__exit__(None, None, None)
-            self._directory_context = None
-            raise
-        self._connection: sqlite3.Connection | None = None
+        self._lock_context = None
         try:
             database_identity = _catalog_database_identity(
                 self._parent_fd, self.db_path.name
             )
+            if database_identity is not None:
+                with ReadOnlyCatalog(self.db_path):
+                    pass
+            self._lock_context = catalog_writer_lock(self._parent_fd, self.db_path.name)
+            self._lock_context.__enter__()
+            locked_identity = _catalog_database_identity(
+                self._parent_fd, self.db_path.name
+            )
+            if locked_identity != database_identity:
+                raise CatalogError("catalog database path changed while opening")
             self._connection = sqlite3.connect(self.db_path)
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys = ON")
             self._connection.execute("PRAGMA busy_timeout = 60000")
+            self._create_schema(existing=database_identity is not None)
             self._connection.execute("PRAGMA journal_mode = WAL")
-            self._create_schema()
             initialized_identity = _catalog_database_identity(
                 self._parent_fd, self.db_path.name
             )
@@ -531,7 +535,15 @@ class Catalog:
         finally:
             connection.close()
 
-    def _create_schema(self) -> None:
+    def _create_schema(self, *, existing: bool) -> None:
+        if self._connection is None:
+            raise CatalogError("catalog database is closed")
+        if existing:
+            quick_check = self._connection.execute("PRAGMA quick_check").fetchone()
+            if quick_check is None or quick_check[0] != "ok":
+                raise CatalogError("catalog database is unavailable or invalid")
+            _validate_schema_metadata(self._connection)
+            return
         self._connection.executescript(
             """
             CREATE TABLE IF NOT EXISTS schema_meta (
@@ -603,15 +615,10 @@ class Catalog:
             );
             """
         )
-        row = self._connection.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
-        if row is None:
-            self._connection.execute(
-                "INSERT INTO schema_meta(version) VALUES (?)", (_SCHEMA_VERSION,)
-            )
-        elif row["version"] != _SCHEMA_VERSION:
-            raise RuntimeError(
-                f"Unsupported catalog schema {row['version']}; expected {_SCHEMA_VERSION}"
-            )
+        self._connection.execute(
+            "INSERT INTO schema_meta(version) VALUES (?)", (_SCHEMA_VERSION,)
+        )
+        _validate_schema_metadata(self._connection)
         self._connection.commit()
 
     def import_corpus(self, root: Path) -> RunSummary:
