@@ -200,7 +200,7 @@ rtk git commit -m "feat: add Claude and Codex corpus researchers"
 - Consumes: five legacy project skills
 - Produces: explicit-only compatibility commands while the new skills own implicit routing
 
-- [ ] **Step 1: Capture exact preimages before editing**
+- [x] **Step 1: Capture exact preimages before editing**
 
 ```bash
 rtk git diff -- .claude/skills/yt-add-channel.md .claude/skills/yt-get-transcript.md .claude/skills/yt-get-insights.md .claude/skills/yt-get-shorts.md .claude/skills/yt-run-pipeline.md
@@ -209,11 +209,11 @@ shasum -a 256 .claude/skills/yt-add-channel.md .claude/skills/yt-get-transcript.
 
 Store the hashes in the execution notes. If a preimage changes before editing, stop this task and recompute the intended patch.
 
-- [ ] **Step 2: Add a failing collision test**
+- [x] **Step 2: Add a failing collision test**
 
 Require each legacy frontmatter to contain `disable-model-invocation: true`. Require its body to point to the replacement skill where relevant. Do not require any other body change.
 
-- [ ] **Step 3: Add only the explicit-only field and migration note**
+- [x] **Step 3: Add only the explicit-only field and migration note**
 
 Preserve every current line of the modified `yt-add-channel.md` body. Add:
 
@@ -223,7 +223,7 @@ disable-model-invocation: true
 
 Do the same for the four clean legacy skills. Add one short first paragraph naming the replacement command without deleting the legacy procedure.
 
-- [ ] **Step 4: Verify the scoped diff**
+- [x] **Step 4: Verify the scoped diff**
 
 ```bash
 rtk pytest tests/test_agent_assets.py -q
@@ -231,7 +231,7 @@ rtk git diff -- .claude/skills/yt-add-channel.md .claude/skills/yt-get-transcrip
 rtk git diff --check
 ```
 
-- [ ] **Step 5: Commit only the named files**
+- [x] **Step 5: Commit only the named files**
 
 ```bash
 rtk git add .claude/skills/yt-add-channel.md .claude/skills/yt-get-transcript.md .claude/skills/yt-get-insights.md .claude/skills/yt-get-shorts.md .claude/skills/yt-run-pipeline.md tests/test_agent_assets.py
