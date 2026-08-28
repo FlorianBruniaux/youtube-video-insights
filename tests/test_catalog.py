@@ -6,6 +6,7 @@ import os
 import sqlite3
 import tempfile
 import unittest
+from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
 
@@ -703,29 +704,69 @@ def test_imported_artifact_paths_survive_relocation_and_reject_escape_symlinks(
         f"product-channel/transcripts/20260820 - Agentic product discovery [{VIDEO_ID}].en.vtt",
     ]
     original_root.rename(relocated_root)
-    resolved = [Catalog.resolve_artifact_path(relocated_root, path) for path in stored_paths]
-    assert all(path.is_file() for path in resolved)
+    with Catalog(database) as catalog:
+        summary = catalog.import_corpus(relocated_root)
+        stats = catalog.stats()
 
-    linked_path = relocated_root / "product-channel" / "linked-insight.json"
-    linked_path.symlink_to(resolved[0])
-    assert Catalog.resolve_artifact_path(
-        relocated_root, "product-channel/linked-insight.json"
-    ) == resolved[0].resolve(strict=True)
-
-    outside = tmp_path / "outside.json"
-    outside.write_text("outside", encoding="utf-8")
-    resolved[0].unlink()
-    resolved[0].symlink_to(outside)
-    with pytest.raises(CatalogError):
-        Catalog.resolve_artifact_path(relocated_root, stored_paths[0])
-
-    root_link = tmp_path / "corpus-root-link"
-    root_link.symlink_to(relocated_root, target_is_directory=True)
-    with pytest.raises(CatalogError):
-        Catalog.resolve_artifact_path(root_link, stored_paths[1])
+    assert summary.items_seen == 2
+    assert summary.items_written == 0
+    assert stats.artifacts == 2
 
 
-@pytest.mark.parametrize("unsafe_path", ["../escape.vtt", "/absolute.vtt", r"C:\\escape.vtt"])
+def test_import_rejects_corpus_root_replaced_after_identity_check(tmp_path: Path) -> None:
+    import yt_insights.catalog as catalog_module
+
+    corpus = tmp_path / "corpus"
+    original = tmp_path / "original-corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        corpus,
+        channel="product-channel",
+        language="en",
+        transcript="Original corpus bytes.",
+    )
+    original_confined_directory = catalog_module._confined_directory
+    swapped = False
+
+    @contextmanager
+    def replace_root_before_open(*args: object, **kwargs: object):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            corpus.rename(original)
+            _write_video_artifacts(
+                corpus,
+                channel="hostile-channel",
+                language="en",
+                transcript="Replacement corpus bytes.",
+                video_id="hostile1234",
+            )
+        with original_confined_directory(*args, **kwargs) as descriptor:
+            yield descriptor
+
+    with patch.object(catalog_module, "_confined_directory", replace_root_before_open):
+        with Catalog(database) as catalog:
+            with pytest.raises(ValueError, match="corpus root changed"):
+                catalog.import_corpus(corpus)
+            stats = catalog.stats()
+
+    assert stats.videos == 0
+    assert stats.artifacts == 0
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    [
+        "../escape.vtt",
+        "/absolute.vtt",
+        "//double-slash.vtt",
+        "product-channel//transcripts/file.vtt",
+        "product-channel/./transcripts/file.vtt",
+        "C:drive-relative.vtt",
+        r"C:\\escape.vtt",
+        "product-channel/transcripts",
+    ],
+)
 def test_read_only_catalog_rejects_unsafe_stored_artifact_paths(
     tmp_path: Path, unsafe_path: str
 ) -> None:
@@ -763,6 +804,74 @@ def test_read_only_catalog_rejects_pre_portability_schema(tmp_path: Path) -> Non
         catalog.checkpoint()
     with sqlite3.connect(database) as connection:
         connection.execute("UPDATE schema_meta SET version = 1")
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    with pytest.raises(CatalogError):
+        Catalog.open_read_only(database)
+
+
+@pytest.mark.parametrize(
+    "sql, parameters",
+    [
+        ("INSERT INTO schema_meta(version) VALUES (?)", (2,)),
+        ("UPDATE schema_meta SET version = ?", ("2.5",)),
+    ],
+)
+def test_read_only_catalog_requires_one_integer_portability_schema_row(
+    tmp_path: Path, sql: str, parameters: tuple[object, ...]
+) -> None:
+    corpus = tmp_path / "corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        corpus,
+        channel="product-channel",
+        language="en",
+        transcript="Schema metadata must be exact.",
+    )
+    with Catalog(database) as catalog:
+        catalog.import_corpus(corpus)
+        catalog.checkpoint()
+    with sqlite3.connect(database) as connection:
+        connection.execute(sql, parameters)
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    with pytest.raises(CatalogError):
+        Catalog.open_read_only(database)
+
+
+def test_read_only_catalog_rejects_foreign_key_violations(tmp_path: Path) -> None:
+    corpus = tmp_path / "corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        corpus,
+        channel="product-channel",
+        language="en",
+        transcript="Foreign key validation.",
+    )
+    with Catalog(database) as catalog:
+        catalog.import_corpus(corpus)
+        catalog.checkpoint()
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            """
+            INSERT INTO artifacts(
+                video_id, source_slug, kind, language, path, sha256,
+                searchable_text, imported_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                "missing0000",
+                "product-channel",
+                "insight",
+                "en",
+                f"product-channel/insights/20260820 - Missing [{VIDEO_ID}].en.json",
+                "0" * 64,
+                "",
+                "2026-08-28T00:00:00+00:00",
+            ),
+        )
         connection.commit()
         connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 

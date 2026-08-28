@@ -48,34 +48,40 @@ class CatalogError(RuntimeError):
 def _validate_artifact_relative_path(value: object) -> str:
     if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
         raise CatalogError("catalog artifact path is invalid")
+    raw_parts = value.split("/")
+    windows_path = PureWindowsPath(value)
     path = PurePosixPath(value)
     if (
-        path.is_absolute()
-        or PureWindowsPath(value).is_absolute()
+        value.startswith("//")
+        or path.is_absolute()
+        or windows_path.is_absolute()
+        or windows_path.drive
         or not path.parts
-        or any(part in {"", ".", ".."} for part in path.parts)
+        or any(part in {"", ".", ".."} for part in raw_parts)
     ):
         raise CatalogError("catalog artifact path is invalid")
     return path.as_posix()
 
 
-def _resolve_artifact_path(corpus_root: Path, stored_path: object) -> Path:
+def _read_portable_artifact_at(root_fd: int, stored_path: object) -> bytes:
+    """Read one stored artifact through held no-follow corpus descriptors."""
     relative_path = _validate_artifact_relative_path(stored_path)
-    raw_root = Path(corpus_root).expanduser()
-    try:
-        root_details = raw_root.lstat()
-        root = raw_root.resolve(strict=True)
-    except (OSError, RuntimeError) as exc:
-        raise CatalogError("corpus root is not safe") from exc
-    if not stat.S_ISDIR(root_details.st_mode) or stat.S_ISLNK(root_details.st_mode):
-        raise CatalogError("corpus root is not safe")
-    candidate = root.joinpath(*PurePosixPath(relative_path).parts)
-    try:
-        resolved = candidate.resolve(strict=True)
-        resolved.relative_to(root)
-    except (OSError, RuntimeError, ValueError) as exc:
-        raise CatalogError("catalog artifact path escapes corpus root") from exc
-    return resolved
+    parts = PurePosixPath(relative_path).parts
+    with _relative_directory(root_fd, parts[:-1]) as directory_fd:
+        return _read_regular_at(directory_fd, parts[-1])
+
+
+def _validate_schema_metadata(connection: sqlite3.Connection) -> None:
+    rows = connection.execute("SELECT version FROM schema_meta").fetchall()
+    if (
+        len(rows) != 1
+        or not isinstance(rows[0][0], int)
+        or isinstance(rows[0][0], bool)
+        or rows[0][0] != _SCHEMA_VERSION
+    ):
+        raise CatalogError("catalog schema metadata is invalid")
+    if connection.execute("PRAGMA foreign_key_check").fetchone() is not None:
+        raise CatalogError("catalog foreign keys are invalid")
 
 
 def _catalog_database_identity(
@@ -341,13 +347,14 @@ def _safe_artifacts(
             snapshots: list[_ArtifactSnapshot] = []
             for name in names:
                 try:
+                    stored_path = Path(*directory_parts, name).as_posix()
                     snapshots.append(
                         _ArtifactSnapshot(
-                            path=Path(*directory_parts, name),
-                            raw_bytes=_read_regular_at(directory_fd, name),
+                            path=Path(stored_path),
+                            raw_bytes=_read_portable_artifact_at(root_fd, stored_path),
                         )
                     )
-                except (OSError, ValueError):
+                except (CatalogError, OSError, ValueError):
                     continue
             return snapshots
     except (OSError, ValueError):
@@ -356,9 +363,13 @@ def _safe_artifacts(
 
 def _inventory_corpus(
     corpus_root: Path,
+    expected_root_identity: tuple[int, int],
 ) -> list[tuple[str, str, _ArtifactSnapshot]]:
     inventory: list[tuple[str, str, _ArtifactSnapshot]] = []
     with _confined_directory(corpus_root, corpus_root, create=False) as root_fd:
+        opened_root = os.fstat(root_fd)
+        if (opened_root.st_dev, opened_root.st_ino) != expected_root_identity:
+            raise ValueError("corpus root changed while opening")
         layouts: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = [
             ("inbox", ("insights",), ("transcripts",))
         ]
@@ -461,11 +472,6 @@ class Catalog:
         """Open catalog discovery queries without locks, journals, or writes."""
         return ReadOnlyCatalog(db_path)
 
-    @staticmethod
-    def resolve_artifact_path(corpus_root: Path, stored_path: object) -> Path:
-        """Resolve a stored relative artifact path without allowing corpus escape."""
-        return _resolve_artifact_path(corpus_root, stored_path)
-
     def close(self) -> None:
         connection = self._connection
         self._connection = None
@@ -518,11 +524,10 @@ class Catalog:
             result = connection.execute("PRAGMA quick_check").fetchone()
             if result != ("ok",):
                 raise RuntimeError("staged catalog failed SQLite quick_check")
-            row = connection.execute(
-                "SELECT version FROM schema_meta LIMIT 1"
-            ).fetchone()
-            if row != (_SCHEMA_VERSION,):
-                raise RuntimeError("staged catalog schema is invalid")
+            try:
+                _validate_schema_metadata(connection)
+            except (CatalogError, sqlite3.Error) as exc:
+                raise RuntimeError("staged catalog schema is invalid") from exc
         finally:
             connection.close()
 
@@ -618,9 +623,12 @@ class Catalog:
         if not stat.S_ISDIR(raw_details.st_mode) or stat.S_ISLNK(raw_details.st_mode):
             raise ValueError(f"Corpus directory is not safe: {raw_root}")
         corpus_root = Path(os.path.realpath(raw_root.parent)) / raw_root.name
+        expected_root_identity = (raw_details.st_dev, raw_details.st_ino)
         try:
-            with _confined_directory(corpus_root, corpus_root, create=False):
-                pass
+            with _confined_directory(corpus_root, corpus_root, create=False) as root_fd:
+                opened_root = os.fstat(root_fd)
+                if (opened_root.st_dev, opened_root.st_ino) != expected_root_identity:
+                    raise ValueError("corpus root changed while opening")
         except OSError as exc:
             raise ValueError(f"Corpus directory is not safe: {raw_root}") from exc
         started_at = _utc_now()
@@ -642,7 +650,9 @@ class Catalog:
                 items_written,
                 error_count,
                 touched_video_ids,
-            ) = self._import_corpus_items(corpus_root, run_id)
+            ) = self._import_corpus_items(
+                corpus_root, expected_root_identity, run_id
+            )
             for video_id in sorted(touched_video_ids):
                 self._reindex_video(video_id)
         except BaseException as exc:
@@ -690,6 +700,7 @@ class Catalog:
     def _import_corpus_items(
         self,
         corpus_root: Path,
+        expected_root_identity: tuple[int, int],
         run_id: int,
     ) -> tuple[int, int, int, set[str]]:
         items_seen = 0
@@ -697,7 +708,7 @@ class Catalog:
         error_count = 0
         touched_video_ids: set[str] = set()
 
-        artifacts = _inventory_corpus(corpus_root)
+        artifacts = _inventory_corpus(corpus_root, expected_root_identity)
         for source_slug, kind, snapshot in artifacts:
             items_seen += 1
             path = snapshot.path
@@ -1289,9 +1300,6 @@ class ReadOnlyCatalog:
         quick_check = connection.execute("PRAGMA quick_check").fetchone()
         if quick_check is None or quick_check[0] != "ok":
             raise CatalogError("catalog database is unavailable or invalid")
-        row = connection.execute("SELECT version FROM schema_meta LIMIT 1").fetchone()
-        if row is None or int(row["version"]) != _SCHEMA_VERSION:
-            raise CatalogError("catalog database is unavailable or invalid")
         required = {
             "artifacts",
             "collection_errors",
@@ -1309,8 +1317,21 @@ class ReadOnlyCatalog:
         }
         if not required.issubset(present):
             raise CatalogError("catalog database is unavailable or invalid")
-        for artifact in connection.execute("SELECT path FROM artifacts"):
-            _validate_artifact_relative_path(artifact["path"])
+        _validate_schema_metadata(connection)
+        for artifact in connection.execute("SELECT path, kind, language FROM artifacts"):
+            stored_path = _validate_artifact_relative_path(artifact["path"])
+            try:
+                artifact_name = _parse_artifact_name(Path(stored_path))
+            except ValueError as exc:
+                raise CatalogError("catalog artifact path is invalid") from exc
+            if (
+                artifact["kind"] not in {"insight", "transcript"}
+                or not isinstance(artifact["language"], str)
+                or artifact_name.language != artifact["language"]
+                or Path(stored_path).suffix
+                != (".json" if artifact["kind"] == "insight" else ".vtt")
+            ):
+                raise CatalogError("catalog artifact path is invalid")
 
     @staticmethod
     def _validate_source_slug(value: object) -> str:
