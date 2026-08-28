@@ -9,6 +9,13 @@ import pytest
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SKILLS = ("youtube-acquire", "youtube-research", "youtube-export")
+LEGACY_CLAUDE_SKILLS = {
+    "yt-add-channel.md": "youtube-acquire",
+    "yt-get-transcript.md": "youtube-acquire",
+    "yt-get-insights.md": "youtube-research",
+    "yt-get-shorts.md": None,
+    "yt-run-pipeline.md": "youtube-acquire",
+}
 CLAUDE_AGENT = (
     REPOSITORY_ROOT / ".claude" / "agents" / "youtube-corpus-researcher.md"
 )
@@ -208,3 +215,16 @@ def test_researcher_agent_has_a_source_backed_output_contract(path: Path) -> Non
     assert "yt-dlp " not in content
     assert "yt-insights acquire" not in content
     assert "yt-insights export" not in content
+
+
+@pytest.mark.parametrize(("filename", "replacement"), LEGACY_CLAUDE_SKILLS.items())
+def test_legacy_claude_skill_is_explicit_only(
+    filename: str, replacement: str | None
+) -> None:
+    path = REPOSITORY_ROOT / ".claude" / "skills" / filename
+    frontmatter, body = parse_frontmatter(path)
+
+    assert frontmatter["disable-model-invocation"] == "true"
+    assert "compatibilité explicite" in body
+    if replacement is not None:
+        assert replacement in body

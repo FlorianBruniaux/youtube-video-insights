@@ -1,7 +1,10 @@
 ---
 name: yt-get-insights
 description: Analyse les insights d'une vidéo YouTube depuis son VTT existant. Vérifie le cache JSON avant de relancer le LLM. Affiche sujet, points clés, outils et citations. Usage : /yt-get-insights [URL YouTube]
+disable-model-invocation: true
 ---
+
+Commande de compatibilité explicite. Pour rechercher les analyses déjà présentes, utiliser `youtube-research`.
 
 ## 1. Vérifier les prérequis
 

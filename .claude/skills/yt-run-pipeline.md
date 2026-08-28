@@ -1,7 +1,10 @@
 ---
 name: yt-run-pipeline
 description: Pipeline complet pour une vidéo YouTube : transcript, insights et suggestions de Shorts enchaînés en séquence, avec sélection interactive du clip final. Usage : /yt-run-pipeline [URL YouTube]
+disable-model-invocation: true
 ---
+
+Commande de compatibilité explicite. Pour le routage agent courant d'acquisition, utiliser `youtube-acquire`.
 
 ## Séquence
 

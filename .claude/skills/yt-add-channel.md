@@ -1,7 +1,10 @@
 ---
 name: yt-add-channel
 description: Ajoute une chaîne YouTube entière au corpus : résout la liste de vidéos (filtre année optionnel), télécharge transcripts + insights dans output/<slug>/, déduplique les pistes de langue, régénère les index globaux, puis rafraîchit le catalogue SQLite. Usage : /yt-add-channel [URL chaîne] [slug] [années]
+disable-model-invocation: true
 ---
+
+Commande de compatibilité explicite. Pour le routage agent courant, utiliser `youtube-acquire`.
 
 Ce skill traite une chaîne complète, pas une vidéo isolée. Pour une seule vidéo, utiliser
 `/yt-run-pipeline`. Il s'appuie sur `runbook/run-channel.sh` et `runbook/README.md`, qui

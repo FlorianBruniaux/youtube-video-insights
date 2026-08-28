@@ -1,7 +1,10 @@
 ---
 name: yt-get-shorts
 description: Suggère les meilleurs moments pour un YouTube Short, présente les options avec timestamps et verbatim, demande le choix à l'utilisateur, puis télécharge le clip en mp4. Usage : /yt-get-shorts [URL YouTube]
+disable-model-invocation: true
 ---
+
+Commande de compatibilité explicite. Aucun skill canonique ne remplace encore ce workflow Shorts.
 
 ## 1. Vérifier les prérequis
 

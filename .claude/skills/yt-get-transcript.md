@@ -1,7 +1,10 @@
 ---
 name: yt-get-transcript
 description: Télécharge le transcript VTT d'une vidéo YouTube via yt-dlp. Vérifie le cache avant de lancer yt-dlp, retente avec les cookies Chrome en cas de 429. Usage : /yt-get-transcript [URL YouTube]
+disable-model-invocation: true
 ---
+
+Commande de compatibilité explicite. Pour le routage agent courant, utiliser `youtube-acquire`.
 
 ## Étape 1 : extraire le VIDEO_ID
 
