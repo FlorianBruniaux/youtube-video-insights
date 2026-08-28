@@ -442,3 +442,18 @@ def test_catalog_holds_cooperative_writer_lock_for_connection_lifetime(
         fcntl.flock(competing_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     finally:
         os.close(competing_fd)
+
+
+def test_catalog_constructor_rejects_database_symlink_before_sqlite_open(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "catalog.sqlite3"
+    outside = tmp_path / "outside.sqlite3"
+    database.symlink_to(outside)
+
+    with pytest.raises(Exception) as raised:
+        Catalog(database)
+
+    assert raised.value.__class__.__name__ == "CatalogError"
+    assert str(raised.value) == "catalog database path is unsafe"
+    assert not outside.exists()

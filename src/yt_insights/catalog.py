@@ -37,6 +37,24 @@ _ARTIFACT_NAME = re.compile(
 _INSIGHT_KEYS = {"subject", "key_points", "tools", "advice", "quotes"}
 
 
+class CatalogError(RuntimeError):
+    """Raised when the catalog database path cannot be trusted."""
+
+
+def _catalog_database_identity(
+    parent_fd: int, database_name: str
+) -> tuple[int, int] | None:
+    try:
+        details = os.stat(database_name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise CatalogError("catalog database path is unsafe") from exc
+    if not stat.S_ISREG(details.st_mode):
+        raise CatalogError("catalog database path is unsafe")
+    return details.st_dev, details.st_ino
+
+
 def _catalog_lock_name(database_name: str) -> str:
     if Path(database_name).name != database_name or "\x00" in database_name:
         raise ValueError("unsafe catalog database name")
@@ -353,12 +371,23 @@ class Catalog:
             raise
         self._connection: sqlite3.Connection | None = None
         try:
+            database_identity = _catalog_database_identity(
+                self._parent_fd, self.db_path.name
+            )
             self._connection = sqlite3.connect(self.db_path)
             self._connection.row_factory = sqlite3.Row
             self._connection.execute("PRAGMA foreign_keys = ON")
             self._connection.execute("PRAGMA busy_timeout = 60000")
             self._connection.execute("PRAGMA journal_mode = WAL")
             self._create_schema()
+            initialized_identity = _catalog_database_identity(
+                self._parent_fd, self.db_path.name
+            )
+            if initialized_identity is None or (
+                database_identity is not None
+                and initialized_identity != database_identity
+            ):
+                raise CatalogError("catalog database path is unsafe")
         except BaseException:
             self.close()
             raise
