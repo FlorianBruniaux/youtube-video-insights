@@ -4,7 +4,7 @@
 **État du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **État du runtime et des assets agentiques projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **État du candidat global :** `CONSTRUIT ET VALIDÉ EN ENVIRONNEMENT INERTE`.
-**État du routeur réel :** `FAIL`, 20/30 positifs et 0/15 activations interdites.
+**État du routeur réel :** `REJETÉ`, aucun candidat disjoint ne passe tous les gates.
 **État de l'installation globale :** `NON INSTALLÉE`, approbations exactes requises.
 **Règle :** `UNKNOWN` bloque promotion/readiness produit, pas l'implémentation P3 à P5 autorisée.
 
@@ -39,12 +39,12 @@ A0 contrats runtime -> A1 chemins
                          ↓ A5 intégration CLI
              contrats runtime gelés
     ┌────────┼─────────────┐
-    B1 MCP   B2 skills     B3 agents + routage
+    B1 MCP   B2 skills     B3 agents + évaluation du routage
     └────────┼─────────────┘
              ↓ candidat local validé
         C1 trois candidats -> trois approbations digest -> C2 installation + sessions neuves
 
-D1 backends + MLX : optionnel, hors chemin critique A-C
+D1 backends explicites + MLX : terminé, canaris réels séparés
 
 H service hébergé + extension : conditionnel aux signaux d'usage, hors chemin critique A-C
 ```

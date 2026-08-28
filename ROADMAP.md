@@ -4,8 +4,8 @@
 **Statut du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **Statut du runtime pour Claude Code et Codex :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **Statut des skills et agents projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**Statut du candidat global :** `INTÉGRÉ AU DÉPÔT SOURCE GLOBAL ET VALIDÉ`, non activé.
-**Statut du routage implicite :** `FAIL`, 20/30 positifs et 0/15 activations interdites.
+**Statut du candidat global :** `VALIDÉ DANS UN CLONE INERTE`, non intégré et non activé.
+**Statut du routage implicite :** `REJETÉ`, aucun candidat disjoint ne passe tous les gates.
 **Statut de l'installation globale :** `NON INSTALLÉE`, approbations exactes requises.
 **Readiness éditoriale :** `UNKNOWN` ; ce statut bloque la promotion produit, pas l'implémentation autorisée.
 
@@ -51,6 +51,11 @@ atteste 3 270 documents, 183 789 passages, un build en 48,75 s, un p95
 chaud de 13,806 ms et une recherche dans un nouveau processus en 0,32 s.
 Cette dernière mesure conserve le cache disque du système. Ces résultats
 valident la capacité technique, pas la pertinence éditoriale.
+
+La [preuve d'intégration finale](plans/evidence/2026-08-28-final-integration.md)
+ajoute un candidat catalogue v2 portable: 3 130 vidéos, 6 487 artefacts, cinq
+erreurs persistées et un manifeste identique des 10 240 fichiers source avant
+et après. Aucun remplacement des bases actives n'a eu lieu.
 
 ## Flux cible : deux branches indépendantes
 
@@ -110,10 +115,10 @@ preview obligatoire pour channel/playlist
 | A4 | `TERMINÉ` | `export video` en VTT, TXT et Markdown sans LLM | Sortie déterministe avec URL, identité source et timestamps |
 | B1 | `TERMINÉ` | MCP étendu de deux à quatre outils read-only | Smoke réel sur les quatre outils, aucun outil de mutation |
 | B2 | `TERMINÉ` | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | Trois validateurs officiels et tests de portabilité au vert |
-| B3 | `FAIL` | Agents natifs et fixture terminés; benchmark réel à 20/30 positifs, 0/15 interdits, p95 0,709 ms | Atteindre 27/30 sans baisser le seuil global ni ajouter un second hook |
-| C1 | `TERMINÉ` | Source globale à `4d8a5a4`, 108/108 tests, release inerte `b5b7e9de…`, `issues: []` | Générer trois digests liés aux nouvelles préimages live avant toute activation |
-| C2 | `BLOQUÉ TECHNIQUEMENT` | Runtime, config, skills, agents et MCP globaux | Corriger la migration quand `~/.claude/skills` est absent et reconstruire ou sélectionner un index réel valide avant les approbations d'activation |
-| D1 | `OPTIONNEL` | Choix explicite Ollama, MLX, cc-bridge ou remote | Backend réellement résolu, canari MLX séparé |
+| B3 | `REJETÉ` | Skills et agents natifs terminés; candidat disjoint à 30/30 positifs et 0 confusion, mais 5/15 activations interdites | Conserver l'invocation explicite; rouvrir seulement avec un mécanisme différent et un besoin observé |
+| C1 | `CANDIDAT INERTE VALIDÉ` | Correctif absent-target `44aee7d`, 112/112 tests, release inerte `73f4393…`, `issues: []` | Présenter le diff exact et son digest avant toute intégration globale |
+| C2 | `NON INSTALLÉ` | Runtime, config, skills, agents et MCP globaux | Finaliser le candidat corpus, puis obtenir l'approbation liée aux préimages live |
+| D1 | `TERMINÉ` | Choix explicite Ollama, MLX, cc-bridge, Anthropic ou endpoint compatible | Canari MLX et Ollama réels séparés des tests sans réseau |
 
 Les détails exécutables sont dans le [plan runtime](plans/2026-08-28-09-agent-ready-runtime.md), le [plan d'intégration globale](plans/2026-08-28-10-claude-codex-global-integration.md) et le [suivi parallèle](plans/PARALLEL-SESSIONS.md).
 
@@ -123,9 +128,9 @@ Les détails exécutables sont dans le [plan runtime](plans/2026-08-28-09-agent-
 |---|---|---|
 | Récupérer les sous-titres | Aucun LLM | YouTube fournit déjà les VTT |
 | Rechercher et exporter | Aucun LLM | FTS5 et transformations déterministes suffisent |
-| Produire des insights en volume | Ollama local ou cc-bridge | Coût maîtrisé et modèle interchangeable |
+| Produire des insights en volume | Ollama ou MLX explicite, ou cc-bridge | Coût maîtrisé et modèle interchangeable |
 | Analyse exigeant plus de qualité | Backend distant explicite | Choix volontaire, jamais un fallback silencieux |
-| MLX direct | Lot D1 optionnel après l'intégration agentique | L'implémentation actuelle ne charge pas encore correctement modèle et tokenizer |
+| MLX direct | `--backend mlx --model MODEL` | Chargement paresseux; concurrence locale forcée à 1 |
 
 La transcription audio n'entre pas dans ce lot. Elle ne devient pertinente que
 si une vidéo ne fournit aucun sous-titre exploitable et qu'un cas réel justifie
@@ -158,12 +163,13 @@ index dérivés, ouverts uniquement par un corpus de questions en échec.
 
 | Priorité | Décision | Critère de sortie |
 |---:|---|---|
-| 1 | Mesurer la fixture sur le routeur global existant | Au moins 27/30 positifs, 0/15 négatifs, aucune nouvelle interception interdite |
-| 2 | Construire les trois candidats globaux C1 | Runtime, shared et integrations ont chacun diff expurgé, digest, test inerte et rollback |
+| 1 | Valider le candidat corpus portable sans le promouvoir | Sources inchangées, chemins relatifs, lecteurs immuables, hashes et benchmark consignés |
+| 2 | Présenter les candidats globaux avec leurs diffs et digests | Runtime, shared et integrations restent inertes jusqu'à l'approbation liée aux préimages live |
 | 3 | Installer C2 après approbation explicite | Claude Code et Codex neufs voient les mêmes skills, agent et corpus |
 | 4 | Revoir humainement l'artefact P2 sur un article réel | Statut `PASS` ou `FAIL`, passages conservés et frictions consignées |
-| 5 | Activer ou rejeter le lot hébergé | Au moins un déclencheur du plan H est prouvé |
-| 6 | Étudier hybride, graphe ou Qdrant | Échec mesuré de FTS5 ou limite SQLite reproduite |
+| 5 | Exécuter les canaris Ollama et MLX | Une génération courte par backend, modèle et identité runtime consignés |
+| 6 | Activer ou rejeter le lot hébergé | Au moins un déclencheur du plan H est prouvé |
+| 7 | Étudier hybride, graphe ou Qdrant | Échec mesuré de FTS5 ou limite SQLite reproduite |
 
 ## Documents de référence
 
@@ -176,3 +182,4 @@ index dérivés, ouverts uniquement par un corpus de questions en échec.
 - [Plan runtime agentique](plans/2026-08-28-09-agent-ready-runtime.md)
 - [Plan intégration globale](plans/2026-08-28-10-claude-codex-global-integration.md)
 - [Plan hébergé et extension](plans/2026-08-28-11-hosted-extension.md)
+- [Preuve d'intégration finale](plans/evidence/2026-08-28-final-integration.md)

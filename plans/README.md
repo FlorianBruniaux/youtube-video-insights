@@ -4,8 +4,8 @@
 **État du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **État du runtime agentique :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **État des skills et agents projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**État du candidat global :** `INTÉGRÉ AU DÉPÔT SOURCE GLOBAL ET VALIDÉ`, non activé.
-**État du routeur réel :** `FAIL`, 20/30 positifs et 0/15 activations interdites.
+**État du candidat global :** `VALIDÉ DANS UN CLONE INERTE`, non intégré et non activé.
+**État du routeur réel :** `REJETÉ`, aucun candidat disjoint ne passe tous les gates.
 **État de l'installation globale :** `NON INSTALLÉE`, approbations exactes requises.
 **Readiness produit :** `UNKNOWN` jusqu'à la revue humaine P2 ; ce n'est pas un veto de développement.
 
@@ -29,9 +29,9 @@ répertoire par Claude Code et Codex, sans dupliquer la logique métier :
 
 | Vague | Résultat | État |
 |---|---|---|
-| A | Runtime indépendant du répertoire courant, `doctor`, acquisition avec preview, export et MCP quatre outils | `TERMINÉ`, 428 tests plus 10 sous-tests et smoke wheel offline |
-| B | Trois skills communs, deux agents natifs et corpus de routage | `FAIL`: benchmark réel à 20/30 positifs, sous le gate de 27/30; 0/15 activations interdites |
-| C | Trois candidats globaux immuables pour runtime, skills et intégrations, avec diffs expurgés, digests, rollback et tests en sessions neuves | `BLOQUÉ`: source globale intégrée et runtime préparé; migration Claude impossible avec un dossier skills absent, index réel invalide |
+| A | Runtime indépendant du répertoire courant, `doctor`, acquisition avec preview, export, backends explicites et MCP quatre outils | `TERMINÉ`, intégration à 508 tests plus 10 sous-tests avant mise à jour documentaire |
+| B | Trois skills communs, deux agents natifs et corpus de routage | `PARTIEL`: assets terminés; routage implicite rejeté après holdout disjoint, invocation explicite retenue |
+| C | Candidats globaux immuables, diffs, digests, rollback et tests en sessions neuves | `EN ATTENTE D'APPROBATION`: correctif absent-target à 112 tests; aucun live modifié |
 | H | API hébergée, worker, extension et MCP distant | `CONDITIONNEL` aux déclencheurs d'usage |
 
 Aucune modification de `~/.claude`, `~/.codex` ou `~/.config/ai-agents` ne fait
@@ -59,6 +59,7 @@ actif ci-dessus.
 | [09 - Runtime utilisable par les agents](2026-08-28-09-agent-ready-runtime.md) | Plan d'exécution prioritaire du socle local |
 | [10 - Intégration globale Claude Code et Codex](2026-08-28-10-claude-codex-global-integration.md) | Plan d'exécution des skills, agents, MCP et garde-fous globaux |
 | [11 - Service hébergé et extension](2026-08-28-11-hosted-extension.md) | Plan conditionnel pour navigateur, accès distant et multi-utilisateur |
+| [Preuve d'intégration finale](evidence/2026-08-28-final-integration.md) | Code, packaging, corpus v2, routeur et candidat global inerte |
 | [Spécification de la plateforme agentique](specs/AGENT-PLATFORM.md) | Architecture cible et décisions de périmètre |
 | [Spécification d'architecture](specs/SEARCH-ARCHITECTURE.md) | Contrats de conception initiaux |
 | [Critique architecture et plan](reviews/2026-08-27-architecture-plan-critique.md) | Décisions écartées, risques et garde-fous |

@@ -151,8 +151,8 @@ call. Timestamped FTS search indexes the full VTT content independently.
 - Keep the MCP layer thin: it must call the same Python transcript search
   service as the CLI instead of duplicating storage or query logic.
 - Backend choice is irrelevant to acquisition without `--analyze`, doctor,
-  export, index, search, and MCP. For LLM analysis, an explicit endpoint plus
-  exact model takes priority over cc-bridge, Ollama, and Anthropic detection.
+  export, index, search, and MCP. For LLM analysis, use `--backend` with the
+  exact model when provider choice matters; `auto` keeps local-first detection.
 
 ## Current state
 
@@ -172,17 +172,18 @@ Implemented:
 - deterministic VTT, text, and Markdown transcript exports;
 - four read-only MCP tools for corpus, video, and passage research;
 - backend/model identity reporting and secret-safe endpoint display;
+- explicit Ollama, MLX, cc-bridge, Anthropic, and OpenAI-compatible routing;
+- three portable YouTube skills plus native read-only researcher agents for
+  Claude Code and Codex;
+- portable catalog schema v2 with immutable readers and copy-on-write writers;
 - clean-source wheel smoke tests for minimal and MCP installations outside the
   checkout.
 
 Planned:
 
 - human relevance review for the frozen P2 search artifact;
-- three portable YouTube skills plus native read-only researcher agents for
-  Claude Code and Codex;
 - a digest-bound, reversible global installation only after explicit approval;
 - chunked LLM analysis for transcripts longer than 10,000 characters;
-- explicit MLX selection in the backend resolver;
 - YouTube Data API and channel RSS discovery adapters;
 - metadata refresh policy and quota tracking;
 - deterministic Tech/Product/AI relevance scoring;

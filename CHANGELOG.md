@@ -10,6 +10,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Explicit LLM backend selection through `--backend` and
+  `YT_INSIGHTS_BACKEND` for Ollama, MLX, cc-bridge, Anthropic, OpenAI-compatible
+  endpoints, or automatic local-first detection. Local backends use one worker;
+  MLX loads its model and tokenizer lazily.
+- Three portable assistant skills, `youtube-acquire`, `youtube-research`, and
+  `youtube-export`, plus read-only Claude Code and Codex corpus researchers.
+- Portable catalog schema v2 with corpus-relative artifact paths, immutable
+  read-only snapshots, private copy-on-write writers, conditional atomic
+  publication, rollback witnesses, and stale-stage recovery.
+
 - Timestamped transcript search with `yt-insights index`, `index --all`,
   `index --status`, and `yt-insights search`. Results include bounded excerpts,
   language and channel filters, timestamps, and direct YouTube links.
@@ -53,6 +63,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Historical Claude YouTube commands are explicit-only and can no longer
+  compete with the portable skills through model-triggered invocation.
+- Catalog reads create no lock, WAL, or SHM beside the live database. Catalog
+  writers never open the live path through SQLite and preserve the old inode
+  until atomic publication succeeds.
+
 - Backend resolution now keeps endpoint and model intent separate, honors an
   explicitly requested Ollama model, rejects unavailable models with an
   actionable error, and falls back after failed cc-bridge probes.
@@ -84,9 +100,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - The full-corpus evidence records 3,270 documents, 183,789 passages, a
   48.75-second build, 13.81 ms warm p95, and 258 passing tests on the measured
   development snapshot. Editorial relevance remains unreviewed.
+- The final temporary schema-v2 candidate records the same 3,270 documents and
+  183,789 passages, plus 3,130 catalog videos and 6,487 artifacts. Manifests of
+  all 10,240 source files are byte-identical before and after; no live database
+  was promoted.
 - README, Claude Code instructions, `/yt-add-channel`, and the channel-routing
   hook now include the local SQLite catalog workflow.
-- README's Backends table now flags that `MLXBackend` (`backends/mlx.py`) is not wired into `resolve_backend()` despite being documented as available via `--base-url mlx`. Not fixed yet, only surfaced so it isn't relied upon by mistake.
+- The routing evaluation now uses a disjoint holdout. No generalizable BM25
+  calibration met every positive, forbidden-activation, confusion, and
+  historical gate, so implicit routing remains disabled and explicit native
+  skill invocation is the supported path.
 
 ---
 

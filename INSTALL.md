@@ -248,17 +248,14 @@ l’ordre automatique.
 
 ```bash
 export ANTHROPIC_API_KEY="sk-ant-..."
-uv run yt-insights run URL_YOUTUBE --model claude-haiku-4-5
+uv run yt-insights run URL_YOUTUBE \
+  --backend anthropic \
+  --model claude-haiku-4-5
 ```
 
-L’API Anthropic sert de repli lorsque cc-bridge et Ollama ne répondent pas et
-que `ANTHROPIC_API_KEY` existe.
-
-Le résolveur actuel ne fournit pas encore d’option `--backend anthropic` pour
-court-circuiter cc-bridge et Ollama tout en gardant l’endpoint Anthropic par
-défaut. Pour une sélection distante strictement explicite, utilisez un endpoint
-compatible OpenAI configuré comme ci-dessous. L’ajout d’un sélecteur de backend
-nommé reste un lot séparé.
+`--backend anthropic` empêche tout changement silencieux vers cc-bridge ou
+Ollama. En mode `auto`, l'API Anthropic reste le dernier choix lorsque sa clé
+existe.
 
 ### Endpoint compatible OpenAI
 
@@ -268,14 +265,22 @@ Un endpoint explicite passe avant la détection automatique :
 export YT_INSIGHTS_BASE_URL="https://fournisseur.example/v1"
 export YT_INSIGHTS_API_KEY="..."
 export YT_INSIGHTS_MODEL="nom-exact-du-modele"
-uv run yt-insights run URL_YOUTUBE
+uv run yt-insights run URL_YOUTUBE --backend openai
 ```
 
-### Limite MLX direct
+### MLX direct sur Apple Silicon
 
-Le code contient `MLXBackend`, mais le résolveur ne le câble pas. Installer
-l’extra `mlx` ou utiliser `--base-url mlx` ne sélectionne donc pas MLX direct.
-Ollama reste la voie locale prise en charge par le résolveur actuel.
+```bash
+uv sync --extra mlx
+uv run yt-insights run URL_YOUTUBE \
+  --backend mlx \
+  --model mlx-community/Qwen3-4B
+```
+
+Le modèle et le tokenizer sont chargés au premier appel. La concurrence est
+forcée à 1 pour éviter plusieurs allocations du même modèle. Le gate automatisé
+valide le routage et le chargement paresseux avec des doublures; exécutez un
+canari court avec le modèle installé avant un traitement en volume.
 
 ### Limite de texte envoyée au LLM
 

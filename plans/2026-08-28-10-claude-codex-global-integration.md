@@ -464,7 +464,7 @@ rtk git commit -m "feat: add yt-insights runtime and integration transactions"
 - Consumes: `tests/fixtures/agent-routing.json` from yt-insights
 - Produces: one route or no route, without a new hook handler
 
-- [ ] **Step 1: Import the 45 prompts into the router evaluation**
+- [x] **Step 1: Import the 45 prompts into the router evaluation**
 
 Preserve the expected labels. Map `none` to the router's forbidden-hit contract.
 
@@ -480,11 +480,18 @@ Résultat du 2026-08-28 : `FAIL`, 20/30 routes positives correctes,
 17 confusions inter-skills, 0/15 activations interdites, p95 0,709 ms. Aucun
 seuil global, hook ou fichier live n'a été modifié.
 
-- [ ] **Step 3: Change only skill descriptions or per-skill thresholds supported by misses**
+- [x] **Step 3: Change only skill descriptions or per-skill thresholds supported by misses**
 
 Do not lower a global threshold to rescue one YouTube prompt. Add contrastive negatives for player development, SEO and video editing when they cause false positives.
 
-- [ ] **Step 4: Enforce promotion thresholds**
+Résultat final : quatre familles simples ont été évaluées sur un holdout
+disjoint, sans optimisation brute. L'exclusivité top-1 conserve 30/30 positifs
+et supprime les trois confusions, mais déclenche encore 5/15 requêtes
+interdites. Les seuils par skill, marges et ancres d'intention perdent des
+positifs ou conservent des faux positifs. Aucun changement de production n'est
+retenu.
+
+- [x] **Step 4: Enforce promotion thresholds**
 
 ```text
 positive routes: at least 27/30
@@ -493,13 +500,19 @@ warm p95: <= 10 ms
 existing forbidden hits: 0
 ```
 
-- [ ] **Step 5: Commit calibration data**
+Gate final : `FAIL`. Le routage implicite BM25 des trois skills est abandonné
+pour ce lot au profit de l'invocation explicite et des agents natifs.
+
+- [x] **Step 5: Commit calibration data**
 
 Stage only the evaluation, description and threshold files that changed. Do not modify the hook registration.
 
 ```bash
 rtk git commit -m "test: calibrate yt-insights skill routing"
 ```
+
+Aucun commit de calibration n'a été promu. Les commits expérimentaux restent
+dans les clones inertes et sont explicitement non promouvables.
 
 ### Task 7.5: Retire the local Claude hook after routing passes
 

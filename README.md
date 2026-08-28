@@ -92,8 +92,8 @@ YouTube URL / channel
         │                       and HTML tags from VTT format
         ▼
    analyzer.py ─────────────►  LLM backend
-   ThreadPoolExecutor           cc-bridge │ Ollama │ Anthropic API
-   (3× remote, 1× Ollama)       OpenAI-compatible endpoint supported
+   ThreadPoolExecutor           cc-bridge │ Ollama │ MLX │ Anthropic API
+   (3× remote, 1× local)        OpenAI-compatible endpoint supported
         │
         ├──► output/insights/<video>.json   ← source of truth (atomic write)
         └──► output/insights/<video>.md     ← rendered from JSON
@@ -390,8 +390,23 @@ Any URL accepted by yt-dlp works as SOURCE.
 
 ## Backends
 
-An explicit `--base-url` or `YT_INSIGHTS_BASE_URL` has Priority 0 and
-short-circuits every automatic probe. This includes the explicit Ollama endpoint.
+Use `--backend` or `YT_INSIGHTS_BACKEND` when the execution target matters.
+Accepted values are `auto`, `ollama`, `mlx`, `cc-bridge`, `anthropic`, and
+`openai`. The same option is available on `run`, `report`, `suggest-shorts`,
+and `acquire --analyze`.
+
+| Explicit backend | Required configuration | Runtime behavior |
+|---|---|---|
+| `ollama` | Optional exact `--model`; optional `--base-url http://HOST:11434/v1` | Verifies the model against `/api/tags`; one local worker |
+| `mlx` | Exact MLX model name and the `mlx` extra | Loads model and tokenizer lazily in-process; one local worker |
+| `cc-bridge` | Local service on port 4141 | Requires a healthy endpoint and a usable completion route |
+| `anthropic` | `ANTHROPIC_API_KEY` | Uses only an Anthropic-scoped key |
+| `openai` | Explicit `--base-url`, model, and provider key | Calls the named OpenAI-compatible endpoint |
+
+An explicit backend never silently changes provider. `auto` keeps the existing
+local-first detection order. Within `auto`, an Explicit endpoint supplied by
+`--base-url` or `YT_INSIGHTS_BASE_URL` remains Priority 0 and is selected before
+any localhost probe. It short-circuits every automatic probe.
 
 | Priority | Backend | How to activate | Model format |
 |---|---|---|---|
@@ -422,13 +437,10 @@ alone keeps the normal detection order, including cc-bridge before Ollama.
 
 **cc-bridge model ID gotcha**: use the gateway format `anthropic/{provider}/{model}` (e.g. `anthropic/github_copilot/gpt-5-mini`) to route directly to the named provider via cc-bridge's stored credentials. A plain model ID (e.g. `claude-haiku-4-5`) uses cc-bridge's `active_route`. The probe requires `/health` to return 200 and the minimal completion to return 2xx or 3xx. A 4xx, 429, or 5xx response falls back to Ollama, then Anthropic when its API key is available.
 
-Set `--base-url http://127.0.0.1:4141/v1` with the gateway model ID to force
-cc-bridge as an explicit compatible endpoint. The current resolver has no named
-`--backend anthropic` switch: default Anthropic remains the last automatic
-choice, while a non-default compatible cloud endpoint can be forced with
-`--base-url`, `--model`, and its API key.
-
-**MLX status**: `MLXBackend` (`backends/mlx.py`) is not currently wired into the auto-detection logic in `backends/__init__.py`. `--base-url mlx` does not select it. Installing the `mlx` extra does not change that limitation.
+Use `--backend cc-bridge` with the gateway model ID to force cc-bridge. Use
+`--backend mlx --model mlx-community/Qwen3-4B` for direct MLX execution. MLX
+selection is explicit because loading a local model is materially different
+from probing an HTTP service.
 
 ---
 
@@ -444,6 +456,7 @@ yt-insights run SOURCE [OPTIONS]
 
   --skip-download           Skip yt-dlp, use existing VTT files in output/transcripts/
   --force                   Re-analyze even if insight cache exists
+  --backend NAME            auto, ollama, mlx, cc-bridge, anthropic, or openai
   --model TEXT              Override LLM model
   --base-url TEXT           Override LLM API base URL
   --concurrency INTEGER     Max parallel LLM calls (0 = auto: 3 for API, 1 for Ollama)
@@ -453,6 +466,7 @@ yt-insights run SOURCE [OPTIONS]
 yt-insights report [OPTIONS]
 
   --output PATH    Output path (default: <insights_dir>/AGGREGATE_REPORT.md)
+  --backend NAME
   --model TEXT
   --base-url TEXT
 
@@ -465,6 +479,7 @@ yt-insights suggest-shorts [OPTIONS]
   --vtt PATH         Process a single VTT file instead of the full transcripts dir
   --force            Re-analyze even if suggestion cache exists
   --index-only       Regenerate INDEX.md only, no LLM calls
+  --backend NAME     Select the LLM execution target
   --model TEXT       Override LLM model
   --base-url TEXT    Override LLM API base URL
   --output-dir PATH  Base output directory (default: output/)
@@ -484,7 +499,7 @@ yt-insights config show [OPTIONS]
 
   Print effective values and sources without probing or resolving a backend.
   Endpoint diagnostics remove URL credentials, query strings, and fragments.
-  Accepts --model and --base-url to simulate overrides before running.
+  Accepts --backend, --model, and --base-url to simulate overrides before running.
 
 yt-insights config init
 
@@ -552,7 +567,7 @@ to preserve channel identity.
 Example `output/shorts/video.md` entry:
 
 ```markdown
-## Short 1 — Score : 5/5
+## Short 1 - Score : 5/5
 
 **Timestamps :** 00:05:10 -> 00:05:48 (38s)
 **Lien direct :** https://youtube.com/watch?v=VIDEO_ID&t=310s
@@ -642,8 +657,8 @@ All keys are optional. CLI flags and `YT_INSIGHTS_*` env vars take precedence ov
 | Atomic writes | `.tmp.json` → `os.replace()`, no corrupt files on Ctrl-C |
 | Truncation guard | `stop_reason == "max_tokens"` → skip cache, retry next run |
 | Caching | Cache hit = zero LLM calls, `--force` to override |
-| Concurrency | 3 threads for remote APIs, 1 for Ollama (auto-tuned) |
-| Backends | cc-bridge, Ollama, Anthropic API, any OpenAI-compatible endpoint |
+| Concurrency | 3 threads for remote APIs, 1 for Ollama or MLX (auto-tuned) |
+| Backends | Explicit or automatic cc-bridge, Ollama, MLX, Anthropic, and OpenAI-compatible endpoints |
 | Auto-detection | Backend probed at first LLM call, no config needed |
 | Aggregate report | `Counter` top tools (no LLM) + one narrative LLM call |
 | Config file | 4-layer merge: defaults → TOML → env vars → CLI flags |
@@ -675,11 +690,15 @@ features, conditional work, and reproducible validation commands.
 
 ### Portable agent integration status
 
-The packaged runtime now provides one configurable absolute data root,
-secret-safe diagnostics, safe acquisition, deterministic export, and four
-read-only MCP tools. The repository still needs the portable shared skills,
-native Claude Code and Codex agents, routing evaluation, and separately
-approved global installation described by the next plan.
+The repository includes three portable skills, `youtube-acquire`,
+`youtube-research`, and `youtube-export`, plus a read-only corpus researcher for
+Claude Code and Codex. They call the packaged CLI or the four-tool MCP instead
+of reimplementing acquisition and search.
+
+Invoke the skills explicitly. The disjoint routing evaluation rejected the
+implicit BM25 hook because every generalizable calibration left either missed
+requests or forbidden activations. Global installation remains a separate,
+digest-bound operation and has not been applied.
 
 | Document | Purpose |
 |---|---|
@@ -688,25 +707,39 @@ approved global installation described by the next plan.
 | [Claude Code and Codex integration plan](plans/2026-08-28-10-claude-codex-global-integration.md) | Portable skills, native agents, routing evaluation and digest-bound global installation |
 | [Hosted service and extension plan](plans/2026-08-28-11-hosted-extension.md) | Conditional browser and remote-access path |
 
-The runtime plan is implemented through the package smoke gate. No global
-Claude Code or Codex configuration is installed by the current repository
-setup.
+The runtime plan passes the package smoke gate. No global Claude Code or Codex
+configuration is installed by the current repository setup.
 
 ---
 
 ## Claude Code integration
 
-`.claude/agents/yt-video-analyst.md` and five skills in `.claude/skills/` wrap the CLI pipeline in a conversational workflow. The agent checks caches, presents options, and waits for your input before downloading any clip.
+The five historical commands under `.claude/skills/` remain available only for
+explicit compatibility calls. Their frontmatter blocks model-triggered
+invocation so they do not compete with the portable skills.
 
-The skill table below and the example session are the full reference.
+Use the portable skills below for new workflows. The historical commands and
+example remain as a compatibility reference.
 
 ### Agent
 
-`yt-video-analyst` dispatches automatically when you paste a YouTube URL in Claude Code. It identifies what is already cached, asks what you want (transcript, insights, Shorts, or the full pipeline), and invokes the matching skill.
+`youtube-corpus-researcher` is a read-only native agent for source-backed corpus
+research. It uses `youtube-research` and the MCP, returns timestamped evidence,
+and cannot acquire videos, rebuild indexes, or write exports. The historical
+`yt-video-analyst` remains in the repository but is not the supported implicit
+dispatcher.
 
 ### Skills
 
 | Skill | What it does |
+|---|---|
+| `youtube-acquire` | Previews and acquires one video, playlist, or channel through the packaged CLI |
+| `youtube-research` | Searches the local catalogue and timestamped passage index without writes |
+| `youtube-export` | Exports an existing video as VTT, text, or sourced Markdown |
+
+Historical explicit-only compatibility commands:
+
+| Command | What it does |
 |---|---|
 | `/yt-get-transcript` | Downloads the VTT, checks cache first, retries with browser cookies on 429 |
 | `/yt-get-insights` | Runs insight analysis on an existing VTT, reads from cache when already processed |
@@ -716,17 +749,17 @@ The skill table below and the example session are the full reference.
 
 ### How it works
 
-1. You paste a YouTube URL in Claude Code
-2. Agent checks `output/transcripts/`, `output/insights/`, `output/shorts/` for existing cache
-3. Agent asks what you want: transcript, insights, Shorts, or everything
-4. For Shorts: shows all 3 suggestions with hook, timestamps, and verbatim before asking your choice
-5. Clip download starts only after you confirm the moment
+1. Invoke `youtube-acquire`, `youtube-research`, or `youtube-export` explicitly.
+2. Acquisition runs `doctor`, then a dry-run preview before any multi-video write.
+3. Research uses the four read-only MCP tools and returns timestamped sources.
+4. Export uses existing corpus artifacts and performs no LLM call.
+5. Historical Shorts commands remain explicit and download a clip only after confirmation.
 
 Each skill respects the same idempotence as the CLI: a VTT already on disk is not re-downloaded, a cached insight JSON triggers no LLM call.
 
 ### Example session
 
-Paste a URL in Claude Code and the agent takes over:
+Explicitly invoke the historical pipeline when you need its Shorts workflow:
 
 ```
 You:   https://www.youtube.com/watch?v=nfupYzLjFGc
