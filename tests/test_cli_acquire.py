@@ -10,6 +10,56 @@ from yt_insights.acquisition import AcquisitionReport
 from yt_insights.downloader import VideoInfo, VideoListResult
 
 
+def test_acquire_help_exposes_backend_choice() -> None:
+    result = CliRunner().invoke(cli_acquire.acquire, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    assert "--backend" in result.output
+    for backend in ("auto", "ollama", "mlx", "cc-bridge", "anthropic", "openai"):
+        assert backend in result.output
+
+
+def test_acquire_propagates_explicit_backend_to_analysis_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(
+        cli_acquire,
+        "fetch_video_list",
+        lambda *args, **kwargs: VideoListResult(
+            videos=[VideoInfo("aaa123DEF45", "One", "20260820")]
+        ),
+    )
+
+    def fake_execute(plan, *, config, cookies_from_browser=None):
+        observed["backend"] = config.backend
+        observed["analyze"] = plan.analyze
+        return AcquisitionReport(
+            selected=1,
+            transcripts_ready=1,
+            insights_ready=1,
+            failures=(),
+        )
+
+    monkeypatch.setattr(cli_acquire, "execute_acquisition", fake_execute)
+
+    result = CliRunner().invoke(
+        cli_acquire.acquire,
+        [
+            "https://youtu.be/aaa123DEF45",
+            "--analyze",
+            "--backend",
+            "mlx",
+            "--data-root",
+            str(tmp_path / "corpus"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed == {"backend": "mlx", "analyze": True}
+
+
 def test_dry_run_discovers_but_never_executes_or_writes(tmp_path: Path, monkeypatch) -> None:
     root = tmp_path / "corpus"
     monkeypatch.setattr(

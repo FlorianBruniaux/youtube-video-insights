@@ -123,7 +123,7 @@ def _ollama_backend(config: Config, endpoint: str, *, explicit: bool) -> Resolve
     try:
         with httpx.Client(timeout=1.0) as client:
             response = client.get(f"{endpoint}/api/tags")
-    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+    except httpx.HTTPError as exc:
         if explicit:
             raise BackendNotFoundError(
                 f"Cannot reach explicitly configured Ollama at {sanitize_endpoint(endpoint)}. "
@@ -195,15 +195,24 @@ def _probe_llm(cfg: "Config") -> bool:
                 json={"model": cfg.model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
             )
         return 200 <= r.status_code < 400
-    except (httpx.ConnectError, httpx.TimeoutException):
+    except httpx.HTTPError:
         return False
+
+
+def _anthropic_key(config: Config) -> str:
+    """Return only a credential whose configured endpoint intent is Anthropic."""
+    if key := os.getenv("ANTHROPIC_API_KEY"):
+        return key
+    if config.base_url == DEFAULT_BASE_URL:
+        return config.api_key
+    return ""
 
 
 def _cc_bridge_backend(config: Config, *, explicit: bool) -> ResolvedBackend | None:
     try:
         with httpx.Client(timeout=1.0) as client:
             response = client.get(f"{_CC_BRIDGE}/health")
-    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+    except httpx.HTTPError as exc:
         if explicit:
             raise BackendNotFoundError(
                 "Cannot reach explicitly configured cc-bridge at "
@@ -259,10 +268,11 @@ def _explicit_backend(config: Config) -> ResolvedBackend:
         return _cc_bridge_backend(config, explicit=True)  # type: ignore[return-value]
 
     if config.backend == "anthropic":
-        key = os.getenv("ANTHROPIC_API_KEY") or config.api_key
+        key = _anthropic_key(config)
         if not key:
             raise BackendNotFoundError(
-                "Explicit Anthropic requires ANTHROPIC_API_KEY or api_key in config."
+                "Explicit Anthropic requires ANTHROPIC_API_KEY or api_key with "
+                "the default Anthropic base_url."
             )
         return _resolved(
             config.with_url(
@@ -307,7 +317,7 @@ def available_backend_routes(config: Config) -> tuple[str, ...]:
             response = client.get(f"{_CC_BRIDGE}/health")
         if response.status_code == 200:
             routes.append("cc-bridge")
-    except (httpx.ConnectError, httpx.TimeoutException):
+    except httpx.HTTPError:
         pass
 
     try:
@@ -319,7 +329,7 @@ def available_backend_routes(config: Config) -> tuple[str, ...]:
                 config.model_source == "default" or config.model in models
             ):
                 routes.append("ollama")
-    except (BackendNotFoundError, httpx.ConnectError, httpx.TimeoutException):
+    except (BackendNotFoundError, httpx.HTTPError):
         pass
 
     try:
@@ -334,7 +344,7 @@ def available_backend_routes(config: Config) -> tuple[str, ...]:
     ):
         routes.append("mlx")
 
-    if os.getenv("ANTHROPIC_API_KEY") or config.api_key:
+    if _anthropic_key(config):
         routes.append("anthropic")
 
     configured_endpoint = sanitize_endpoint(config.base_url)
@@ -382,7 +392,7 @@ def resolve_backend(config: Config) -> ResolvedBackend:
         return ollama
 
     # Anthropic API key in env
-    if key := os.getenv("ANTHROPIC_API_KEY") or config.api_key:
+    if key := _anthropic_key(config):
         return _resolved(config.with_url("https://api.anthropic.com/v1", api_key=key, base_url_source="detected"), "anthropic")
 
     if ollama_error is not None:

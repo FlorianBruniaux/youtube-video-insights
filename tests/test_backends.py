@@ -561,6 +561,97 @@ def test_explicit_anthropic_requires_a_configured_key(
         resolve_backend(Config(backend="anthropic", api_key=""))
 
 
+def test_explicit_anthropic_never_reuses_a_custom_gateway_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    with pytest.raises(BackendNotFoundError, match="ANTHROPIC_API_KEY"):
+        resolve_backend(
+            Config(
+                backend="anthropic",
+                base_url="https://gateway.example.test/v1",
+                api_key="gateway-only-key",
+            )
+        )
+
+
+def test_explicit_anthropic_environment_key_overrides_a_custom_gateway_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed_keys: list[str] = []
+
+    class _CapturingBackend(_FakeMLXBackend):
+        def __init__(self, config: Config) -> None:
+            super().__init__(config)
+            observed_keys.append(config.api_key)
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-env-key")
+    monkeypatch.setattr(backends, "OpenAICompatBackend", _CapturingBackend)
+
+    resolved = resolve_backend(
+        Config(
+            backend="anthropic",
+            base_url="https://gateway.example.test/v1",
+            api_key="gateway-only-key",
+        )
+    )
+
+    try:
+        assert resolved.identity.backend == "anthropic"
+        assert observed_keys == ["anthropic-env-key"]
+    finally:
+        resolved.close()
+
+
+def test_backend_discovery_never_lists_anthropic_from_a_custom_gateway_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _UnavailableClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str) -> _Response:
+            raise httpx.ConnectError("unavailable")
+
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(backends.httpx, "Client", lambda timeout: _UnavailableClient())
+    monkeypatch.setattr(backends.importlib.util, "find_spec", lambda name: None)
+
+    routes = backends.available_backend_routes(
+        Config(
+            base_url="https://gateway.example.test/v1",
+            api_key="gateway-only-key",
+            model="gateway-model",
+        )
+    )
+
+    assert routes == ("openai",)
+
+
+def test_auto_backend_keeps_a_custom_gateway_key_on_the_custom_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    resolved = resolve_backend(
+        Config(
+            base_url="https://gateway.example.test/v1",
+            api_key="gateway-only-key",
+            model="gateway-model",
+        )
+    )
+
+    try:
+        assert resolved.identity.backend == "api"
+        assert resolved.identity.endpoint == "https://gateway.example.test/v1"
+    finally:
+        resolved.close()
+
+
 def test_explicit_openai_fails_closed_without_a_configured_endpoint() -> None:
     with pytest.raises(BackendNotFoundError, match="base_url"):
         resolve_backend(Config(backend="openai", model="gpt-test"))
@@ -712,3 +803,123 @@ def test_backend_route_discovery_does_not_offer_invalid_or_reserved_openai(
     assert backends.available_backend_routes(
         Config(backend="auto", base_url=endpoint, model="gpt-test")
     ) == ()
+
+
+class _FailingTransportClient:
+    def __init__(self, error_type: type[httpx.HTTPError], *, healthy_bridge: bool = False) -> None:
+        self._error_type = error_type
+        self._healthy_bridge = healthy_bridge
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def close(self) -> None:
+        return None
+
+    def _failure(self) -> httpx.HTTPError:
+        return self._error_type("injected transport failure")
+
+    def get(self, url: str) -> _Response:
+        if self._healthy_bridge and url.endswith("/health"):
+            return _Response(200)
+        raise self._failure()
+
+    def post(self, url: str, **kwargs: object) -> _Response:
+        raise self._failure()
+
+
+def test_explicit_ollama_wraps_read_errors_as_backend_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda timeout: _FailingTransportClient(httpx.ReadError),
+    )
+
+    with pytest.raises(BackendNotFoundError, match="explicitly configured Ollama"):
+        resolve_backend(Config(backend="ollama", model="qwen3:8b"))
+
+
+def test_explicit_cc_bridge_wraps_health_protocol_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda timeout: _FailingTransportClient(httpx.RemoteProtocolError),
+    )
+
+    with pytest.raises(BackendNotFoundError, match="explicitly configured cc-bridge"):
+        resolve_backend(Config(backend="cc-bridge", model="route/model"))
+
+
+def test_explicit_cc_bridge_wraps_canary_read_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda timeout: _FailingTransportClient(
+            httpx.ReadError, healthy_bridge=True
+        ),
+    )
+
+    with pytest.raises(BackendNotFoundError, match="completion route is unusable"):
+        resolve_backend(Config(backend="cc-bridge", model="route/model"))
+
+
+@pytest.mark.parametrize("error_type", [httpx.ReadError, httpx.RemoteProtocolError])
+def test_auto_backend_continues_after_local_transport_errors(
+    error_type: type[httpx.HTTPError], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda timeout: _FailingTransportClient(error_type),
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "cloud-key")
+
+    resolved = resolve_backend(Config())
+
+    try:
+        assert resolved.identity.backend == "anthropic"
+    finally:
+        resolved.close()
+
+
+@pytest.mark.parametrize("error_type", [httpx.ReadError, httpx.RemoteProtocolError])
+def test_route_discovery_continues_after_local_transport_errors(
+    error_type: type[httpx.HTTPError], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda timeout: _FailingTransportClient(error_type),
+    )
+    monkeypatch.setattr(backends.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "cloud-key")
+
+    assert backends.available_backend_routes(Config()) == ("anthropic",)
+
+
+@pytest.mark.parametrize("error_type", [httpx.ReadError, httpx.RemoteProtocolError])
+def test_auto_backend_continues_after_cc_bridge_canary_transport_errors(
+    error_type: type[httpx.HTTPError], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda timeout: _FailingTransportClient(error_type, healthy_bridge=True),
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "cloud-key")
+
+    resolved = resolve_backend(Config())
+
+    try:
+        assert resolved.identity.backend == "anthropic"
+    finally:
+        resolved.close()

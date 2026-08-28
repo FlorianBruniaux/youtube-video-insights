@@ -14,7 +14,7 @@ from .acquisition import (
     execute_acquisition,
     read_batch_snapshot,
 )
-from .config import load_config
+from .config import BACKEND_NAMES, load_config
 from .downloader import fetch_video_list
 
 
@@ -39,7 +39,13 @@ def _echo_json(payload: dict[str, object]) -> None:
 @click.option("--slug", default=None, help="Safe corpus slug for a channel or playlist.")
 @click.option("--years", default=None, metavar="2025,2026", help="Exact upload years.")
 @click.option("--lang", "language", default="fr", show_default=True)
-@click.option("--analyze", is_flag=True, help="Generate insights with automatic backend resolution.")
+@click.option("--analyze", is_flag=True, help="Generate insights with the selected backend.")
+@click.option(
+    "--backend",
+    type=click.Choice(BACKEND_NAMES),
+    default=None,
+    help="Select the LLM backend used by --analyze.",
+)
 @click.option("--dry-run", is_flag=True, help="Discover and print the plan without writes.")
 @click.option("--yes", "confirmed", is_flag=True, help="Confirm a multi-video acquisition.")
 @click.option("--json", "as_json", is_flag=True, help="Emit stable JSON output.")
@@ -51,6 +57,7 @@ def acquire(
     years: str | None,
     language: str,
     analyze: bool,
+    backend: str | None,
     dry_run: bool,
     confirmed: bool,
     as_json: bool,
@@ -64,7 +71,7 @@ def acquire(
     except (ValueError, click.BadParameter) as exc:
         raise click.BadParameter(str(exc), param_hint="SOURCE" if isinstance(exc, ValueError) else "--years") from exc
 
-    config = load_config({"data_root": data_root})
+    config = load_config({"data_root": data_root, "backend": backend})
     snapshot_urls: tuple[str, ...] = ()
     discovery_sources = (source,)
     if source_kind is SourceKind.BATCH:
