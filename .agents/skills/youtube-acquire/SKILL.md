@@ -14,7 +14,7 @@ Use the packaged `yt-insights` CLI. Keep acquisition in the main session because
 3. Summarize the preview's selected count, source kind, output target, transcript language, and whether analysis is enabled. Report exclusions and discovery errors.
 4. If the source is one video and the user explicitly requested acquisition, repeat the command without `--dry-run`.
 5. If the source is a channel, playlist, or batch, wait for explicit confirmation of the preview. Then repeat the same command without `--dry-run` and with `--yes`.
-6. Report `selected`, `transcripts_ready`, `insights_ready`, the number and details of items that failed, and the output paths returned by the CLI.
+6. Report `selected`, `transcripts_ready`, `insights_ready`, and the number and details of items that failed. Retain the preview's output target and report it with the final counts; do not invent more specific paths than the CLI returned.
 
 Do not replace this workflow with a downloader command or direct corpus edits. Do not add `--yes` to the preview. If the CLI reports an authentication or bot-check failure for which browser cookies are relevant, suggest a new explicit preview using `--cookies-from-browser chrome`; do not add it preemptively.
 

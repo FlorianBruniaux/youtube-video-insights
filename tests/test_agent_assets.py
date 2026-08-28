@@ -114,7 +114,8 @@ def test_export_skill_uses_catalog_discovery_and_deterministic_export() -> None:
         REPOSITORY_ROOT / ".agents" / "skills" / "youtube-export" / "SKILL.md"
     )[1]
 
-    assert "catalog search" in body
+    assert "yt-insights catalog search QUERY" in body
+    assert "yt-insights catalog search QUERY --json" not in body
     assert "yt-insights export video" in body
     assert "source_sha256" in body
     assert "--json" in body
