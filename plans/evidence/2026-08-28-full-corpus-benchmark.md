@@ -4,12 +4,14 @@
 **Statut technique :** `PASS` pour le build complet et les mesures de latence  
 **Pertinence éditoriale :** `UNKNOWN`  
 **État Git mesuré :** `tree_state=UNCOMMITTED`  
-**HEAD de départ :** `aebd6a474244bdf000544a076675ba43481f90f5`
+**HEAD de départ :** `aebd6a474244bdf000544a076675ba43481f90f5`  
+**Commit d'implémentation contenant le code mesuré :** `4124f42`
 
 Cette preuve lie les mesures aux hash des fichiers utilisés. Le HEAD ci-dessus
 ne décrit pas à lui seul le code mesuré, car le lot n’était pas encore commité.
-Le commit final doit ajouter son SHA à ce document. Tant que cette mise à jour
-n’existe pas, le manifeste SHA-256 ci-dessous fait autorité.
+Le code mesuré est maintenant conservé dans le commit d'implémentation indiqué
+ci-dessus. Le manifeste SHA-256 ci-dessous permet de le vérifier fichier par
+fichier.
 
 ## Environnement
 
@@ -251,4 +253,5 @@ une protection contre un attaquant local disposant de ces droits.
 - La mesure séparée de 0,32 s couvre une nouvelle instance avec cache disque non purgé.
 - L’index de test est dérivé des VTT et n’a remplacé aucun fichier source.
 - La pertinence éditoriale reste `UNKNOWN` jusqu’à la validation humaine P2.
-- Le commit final doit ajouter son SHA pour fermer la traçabilité Git.
+- Le commit `4124f42` contient le code mesuré ; le commit documentaire suivant
+  lie durablement cette preuve à ce SHA.
