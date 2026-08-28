@@ -13,6 +13,7 @@ import time, so the module can be imported in tests without triggering network p
 
 from __future__ import annotations
 
+import importlib.util
 import os
 from dataclasses import dataclass
 from typing import Iterator
@@ -21,8 +22,9 @@ from urllib.parse import urlsplit, urlunsplit
 import httpx
 
 from .base import BackendNotFoundError, LLMBackend
+from .mlx import MLXBackend
 from .openai_compat import OpenAICompatBackend
-from ..config import Config, DEFAULT_BASE_URL
+from ..config import Config, DEFAULT_BASE_URL, DEFAULT_MODEL
 
 _CC_BRIDGE = "http://127.0.0.1:4141"
 _OLLAMA = "http://127.0.0.1:11434"
@@ -62,6 +64,8 @@ def format_backend_identity(identity: BackendIdentity) -> str:
 
 def sanitize_endpoint(endpoint: str) -> str:
     """Return a useful endpoint label without credentials or URL parameters."""
+    if endpoint == "local://mlx":
+        return endpoint
     try:
         if any(character.isspace() or ord(character) < 32 for character in endpoint):
             return "<invalid-endpoint>"
@@ -84,6 +88,17 @@ def _resolved(config: Config, backend: str) -> ResolvedBackend:
         BackendIdentity(
             backend=backend,
             endpoint=sanitize_endpoint(config.base_url),
+            model=config.model,
+        ),
+    )
+
+
+def _resolved_mlx(config: Config) -> ResolvedBackend:
+    return ResolvedBackend(
+        MLXBackend(config),
+        BackendIdentity(
+            backend="mlx",
+            endpoint="local://mlx",
             model=config.model,
         ),
     )
@@ -184,8 +199,162 @@ def _probe_llm(cfg: "Config") -> bool:
         return False
 
 
+def _cc_bridge_backend(config: Config, *, explicit: bool) -> ResolvedBackend | None:
+    try:
+        with httpx.Client(timeout=1.0) as client:
+            response = client.get(f"{_CC_BRIDGE}/health")
+    except (httpx.ConnectError, httpx.TimeoutException) as exc:
+        if explicit:
+            raise BackendNotFoundError(
+                "Cannot reach explicitly configured cc-bridge at "
+                f"{_CC_BRIDGE}. Start cc-bridge and retry."
+            ) from exc
+        return None
+    if response.status_code != 200:
+        if explicit:
+            raise BackendNotFoundError(
+                f"Explicitly configured cc-bridge returned HTTP {response.status_code} "
+                "for /health."
+            )
+        return None
+    bridge_config = config.with_url(f"{_CC_BRIDGE}/v1", api_key="local")
+    if not _probe_llm(bridge_config):
+        if explicit:
+            raise BackendNotFoundError(
+                "Explicitly configured cc-bridge is healthy but its completion "
+                "route is unusable."
+            )
+        return None
+    return _resolved(bridge_config, "cc-bridge")
+
+
+def _explicit_backend(config: Config) -> ResolvedBackend:
+    if config.backend == "mlx":
+        if not config.model.strip() or config.model == DEFAULT_MODEL:
+            raise BackendNotFoundError(
+                "Explicit MLX requires an MLX model name, for example "
+                "mlx-community/Qwen3-4B."
+            )
+        return _resolved_mlx(config)
+
+    if config.backend == "ollama":
+        if config.base_url == DEFAULT_BASE_URL:
+            endpoint = _OLLAMA
+        else:
+            endpoint = _ollama_endpoint(config.base_url)
+            if endpoint is None:
+                raise BackendNotFoundError(
+                    "Explicit Ollama requires an endpoint shaped like "
+                    "http://HOST:11434/v1."
+                )
+        return _ollama_backend(config, endpoint, explicit=True)  # type: ignore[return-value]
+
+    if config.backend == "cc-bridge":
+        if config.base_url != DEFAULT_BASE_URL and sanitize_endpoint(
+            config.base_url
+        ) != f"{_CC_BRIDGE}/v1":
+            raise BackendNotFoundError(
+                f"Explicit cc-bridge uses the fixed local endpoint {_CC_BRIDGE}/v1."
+            )
+        return _cc_bridge_backend(config, explicit=True)  # type: ignore[return-value]
+
+    if config.backend == "anthropic":
+        key = os.getenv("ANTHROPIC_API_KEY") or config.api_key
+        if not key:
+            raise BackendNotFoundError(
+                "Explicit Anthropic requires ANTHROPIC_API_KEY or api_key in config."
+            )
+        return _resolved(
+            config.with_url(
+                DEFAULT_BASE_URL,
+                api_key=key,
+                base_url_source="explicit-backend",
+            ),
+            "anthropic",
+        )
+
+    if config.backend == "openai":
+        if config.base_url == DEFAULT_BASE_URL:
+            raise BackendNotFoundError(
+                "Explicit OpenAI requires a configured non-default base_url."
+            )
+        endpoint = sanitize_endpoint(config.base_url)
+        if endpoint == "<invalid-endpoint>":
+            raise BackendNotFoundError(
+                "Explicit OpenAI requires a valid HTTP(S) base_url."
+            )
+        if not config.model.strip() or config.model == DEFAULT_MODEL:
+            raise BackendNotFoundError(
+                "Explicit OpenAI requires an explicit non-default model."
+            )
+        if endpoint == f"{_CC_BRIDGE}/v1" or _ollama_endpoint(config.base_url) is not None:
+            raise BackendNotFoundError(
+                "A reserved local endpoint cannot be selected as the explicit OpenAI route."
+            )
+        return _resolved(config, "openai")
+
+    raise BackendNotFoundError(f"Unsupported explicit backend: {config.backend}")
+
+
+def available_backend_routes(config: Config) -> tuple[str, ...]:
+    """Return only configured or cheaply detected routes, without model calls."""
+    if config.backend != "auto":
+        return (config.backend,)
+
+    routes: list[str] = []
+    try:
+        with httpx.Client(timeout=1.0) as client:
+            response = client.get(f"{_CC_BRIDGE}/health")
+        if response.status_code == 200:
+            routes.append("cc-bridge")
+    except (httpx.ConnectError, httpx.TimeoutException):
+        pass
+
+    try:
+        with httpx.Client(timeout=1.0) as client:
+            response = client.get(f"{_OLLAMA}/api/tags")
+        if response.status_code == 200:
+            models = _parse_ollama_models(response)
+            if models and (
+                config.model_source == "default" or config.model in models
+            ):
+                routes.append("ollama")
+    except (BackendNotFoundError, httpx.ConnectError, httpx.TimeoutException):
+        pass
+
+    try:
+        mlx_available = importlib.util.find_spec("mlx_lm") is not None
+    except (ImportError, ModuleNotFoundError, ValueError):
+        mlx_available = False
+    if (
+        mlx_available
+        and config.model_source != "default"
+        and config.model.strip()
+        and config.model != DEFAULT_MODEL
+    ):
+        routes.append("mlx")
+
+    if os.getenv("ANTHROPIC_API_KEY") or config.api_key:
+        routes.append("anthropic")
+
+    configured_endpoint = sanitize_endpoint(config.base_url)
+    if (
+        config.base_url != DEFAULT_BASE_URL
+        and configured_endpoint != "<invalid-endpoint>"
+        and configured_endpoint != f"{_CC_BRIDGE}/v1"
+        and _ollama_endpoint(config.base_url) is None
+        and config.model_source != "default"
+    ):
+        routes.append("openai")
+
+    return tuple(routes)
+
+
 def resolve_backend(config: Config) -> ResolvedBackend:
     """Auto-detect and return a ready-to-use LLM backend."""
+
+    if config.backend != "auto":
+        return _explicit_backend(config)
 
     # An explicit Ollama endpoint must verify the requested model before use.
     if endpoint := _ollama_endpoint(config.base_url):
@@ -196,15 +365,9 @@ def resolve_backend(config: Config) -> ResolvedBackend:
         return _resolved(config, "api")
 
     # Probe cc-bridge: health check + minimal LLM call to detect 502 upstreams
-    try:
-        with httpx.Client(timeout=1.0) as c:
-            r = c.get(f"{_CC_BRIDGE}/health")
-        if r.status_code == 200:
-            cc_cfg = config.with_url(f"{_CC_BRIDGE}/v1", api_key="local")
-            if _probe_llm(cc_cfg):
-                return _resolved(cc_cfg, "cc-bridge")
-    except (httpx.ConnectError, httpx.TimeoutException):
-        pass
+    cc_bridge = _cc_bridge_backend(config, explicit=False)
+    if cc_bridge is not None:
+        return cc_bridge
 
     # Probe Ollama
     ollama_error: BackendNotFoundError | None = None
@@ -251,4 +414,5 @@ __all__ = [
     "ResolvedBackend",
     "format_backend_identity",
     "sanitize_endpoint",
+    "available_backend_routes",
 ]

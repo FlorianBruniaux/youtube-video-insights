@@ -11,6 +11,14 @@ from .paths import DataPaths
 
 DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 DEFAULT_MODEL = "claude-haiku-4-5"
+BACKEND_NAMES = (
+    "auto",
+    "ollama",
+    "mlx",
+    "cc-bridge",
+    "anthropic",
+    "openai",
+)
 _CONFIG_PATH = Path.home() / ".config" / "yt-insights" / "config.toml"
 _INIT_TEMPLATE = Path.home() / ".config" / "yt-insights"
 
@@ -54,6 +62,7 @@ class Config:
     Any directly supplied model is a firm caller request, including the default
     model value.
     """
+    backend: str = "auto"
     base_url: str = DEFAULT_BASE_URL
     api_key: str = ""
     anthropic_version: str = "2023-06-01"
@@ -84,6 +93,11 @@ class Config:
     )
 
     def __post_init__(self) -> None:
+        if self.backend not in BACKEND_NAMES:
+            choices = ", ".join(BACKEND_NAMES)
+            raise ValueError(
+                f"Invalid backend '{self.backend}'. Expected one of: {choices}"
+            )
         if isinstance(self.model, _DefaultModel):
             self._model_was_omitted = True
         self.model = str(self.model)
@@ -149,6 +163,7 @@ def load_config(overrides: dict) -> Config:
 
     # Layer 2: environment variables
     env_map = {
+        "YT_INSIGHTS_BACKEND": "backend",
         "YT_INSIGHTS_BASE_URL": "base_url",
         "YT_INSIGHTS_API_KEY": "api_key",
         "YT_INSIGHTS_MODEL": "model",
@@ -180,11 +195,11 @@ def load_config(overrides: dict) -> Config:
 
 
 def effective_concurrency(config: Config, backend_type: str) -> int:
-    if config.concurrency > 0:
-        return config.concurrency
-    # MLX and Ollama serialize anyway — no benefit beyond 1
+    # MLX and Ollama are always serialized, even if a generic override exists.
     if backend_type in ("mlx", "ollama"):
         return 1
+    if config.concurrency > 0:
+        return config.concurrency
     return 3
 
 
@@ -234,6 +249,7 @@ CONFIG_TOML_TEMPLATE = """\
 # yt-insights configuration
 # All values are optional — defaults shown.
 
+# backend = "auto"     # auto, ollama, mlx, cc-bridge, anthropic, openai
 # base_url = "https://api.anthropic.com/v1"
 # api_key = ""          # or set YT_INSIGHTS_API_KEY env var
 # anthropic_version = "2023-06-01"
@@ -241,7 +257,7 @@ CONFIG_TOML_TEMPLATE = """\
 # max_transcript_chars = 10000
 # max_tokens = 2048
 # timeout = 120
-# concurrency = 0       # 0 = auto (3 for API, 1 for Ollama/MLX)
+# concurrency = 0       # 0 = auto; Ollama/MLX are always serialized
 # data_root = "output"
 # transcripts_dir = "output/transcripts"  # Legacy named override
 # insights_dir = "output/insights"        # Legacy named override

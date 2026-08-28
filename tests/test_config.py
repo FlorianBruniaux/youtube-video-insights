@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
+
 from yt_insights import config as config_module
 from yt_insights.config import DEFAULT_MODEL, Config, effective_concurrency, load_config
 
@@ -136,6 +138,40 @@ def test_load_config_applies_toml_env_and_cli_in_precedence_order(
     assert result.base_url_source == "env"
 
 
+def test_backend_precedence_is_cli_then_environment_then_toml(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "config.toml"
+    config_path.write_text('backend = "anthropic"\n', encoding="utf-8")
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", config_path)
+
+    assert load_config({}).backend == "anthropic"
+
+    monkeypatch.setenv("YT_INSIGHTS_BACKEND", "ollama")
+    assert load_config({}).backend == "ollama"
+    assert load_config({"backend": "mlx"}).backend == "mlx"
+
+
+@pytest.mark.parametrize("backend", ["", "local", "claude", "OLLAMA", "api"])
+def test_config_rejects_unknown_backend_names(backend: str) -> None:
+    with pytest.raises(ValueError, match="backend"):
+        Config(backend=backend)
+
+
+def test_config_accepts_every_documented_backend_name() -> None:
+    assert config_module.BACKEND_NAMES == (
+        "auto",
+        "ollama",
+        "mlx",
+        "cc-bridge",
+        "anthropic",
+        "openai",
+    )
+    assert [Config(backend=name).backend for name in config_module.BACKEND_NAMES] == list(
+        config_module.BACKEND_NAMES
+    )
+
+
 def test_data_root_precedence_is_cli_then_environment_then_toml_then_output(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -194,4 +230,6 @@ def test_effective_concurrency_keeps_local_backends_serial() -> None:
     assert effective_concurrency(Config(), "mlx") == 1
     assert effective_concurrency(Config(), "ollama") == 1
     assert effective_concurrency(Config(), "api") == 3
-    assert effective_concurrency(Config(concurrency=7), "mlx") == 7
+    assert effective_concurrency(Config(concurrency=7), "mlx") == 1
+    assert effective_concurrency(Config(concurrency=7), "ollama") == 1
+    assert effective_concurrency(Config(concurrency=7), "anthropic") == 7

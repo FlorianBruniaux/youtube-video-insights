@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 import httpx
 import pytest
 
@@ -10,6 +13,7 @@ from yt_insights.backends import (
     format_backend_identity,
     resolve_backend,
 )
+from yt_insights.backends.mlx import MLXBackend
 from yt_insights.config import DEFAULT_MODEL, Config, load_config
 
 OLLAMA_URL = "http://127.0.0.1:11434/v1"
@@ -441,3 +445,270 @@ def test_cc_bridge_success_or_redirect_completion_status_is_accepted(
         assert backend.identity.model == "requested-model"
     finally:
         backend.close()
+
+
+class _FakeMLXBackend:
+    def __init__(self, config: Config) -> None:
+        self.config = config
+
+    def generate(self, prompt: str, *, max_tokens: int, timeout: int) -> tuple[str, str]:
+        return prompt, "end_turn"
+
+    def stream(self, prompt: str, *, max_tokens: int, timeout: int):
+        yield prompt
+
+    def close(self) -> None:
+        return None
+
+
+def test_explicit_mlx_never_probes_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda *args, **kwargs: pytest.fail("explicit MLX performed an HTTP probe"),
+    )
+    monkeypatch.setattr(backends, "MLXBackend", _FakeMLXBackend)
+
+    resolved = resolve_backend(
+        Config(backend="mlx", model="mlx-community/Qwen3-4B")
+    )
+
+    try:
+        assert resolved.identity == BackendIdentity(
+            backend="mlx",
+            endpoint="local://mlx",
+            model="mlx-community/Qwen3-4B",
+        )
+    finally:
+        resolved.close()
+
+
+@pytest.mark.parametrize("model", ["", DEFAULT_MODEL])
+def test_explicit_mlx_rejects_an_empty_or_default_cloud_model(model: str) -> None:
+    with pytest.raises(BackendNotFoundError, match="MLX model"):
+        resolve_backend(Config(backend="mlx", model=model))
+
+
+def test_mlx_loads_model_once_and_uses_the_public_generate_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    load_calls: list[str] = []
+    generate_calls: list[tuple[object, object, str, int, bool]] = []
+    model = object()
+    tokenizer = object()
+
+    def fake_load(model_name: str) -> tuple[object, object]:
+        load_calls.append(model_name)
+        return model, tokenizer
+
+    def fake_generate(
+        loaded_model: object,
+        loaded_tokenizer: object,
+        *,
+        prompt: str,
+        max_tokens: int,
+        verbose: bool,
+    ) -> str:
+        generate_calls.append(
+            (loaded_model, loaded_tokenizer, prompt, max_tokens, verbose)
+        )
+        return f" answer to {prompt} "
+
+    monkeypatch.setitem(
+        sys.modules,
+        "mlx_lm",
+        SimpleNamespace(load=fake_load, generate=fake_generate),
+    )
+    backend = MLXBackend(Config(backend="mlx", model="test-model"))
+
+    assert backend.generate("one", max_tokens=8, timeout=10) == (
+        "answer to one",
+        "end_turn",
+    )
+    assert backend.generate("two", max_tokens=9, timeout=10) == (
+        "answer to two",
+        "end_turn",
+    )
+    assert load_calls == ["test-model"]
+    assert generate_calls == [
+        (model, tokenizer, "one", 8, False),
+        (model, tokenizer, "two", 9, False),
+    ]
+
+
+def test_explicit_ollama_backend_validates_the_requested_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_probes(monkeypatch, {"models": [{"name": "llama3.2:latest"}]})
+
+    with pytest.raises(BackendNotFoundError, match="missing:tag") as exc_info:
+        resolve_backend(Config(backend="ollama", model="missing:tag"))
+
+    assert "ollama pull missing:tag" in str(exc_info.value)
+
+
+def test_explicit_anthropic_requires_a_configured_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda *args, **kwargs: pytest.fail("missing key reached HTTP setup"),
+    )
+
+    with pytest.raises(BackendNotFoundError, match="ANTHROPIC_API_KEY"):
+        resolve_backend(Config(backend="anthropic", api_key=""))
+
+
+def test_explicit_openai_fails_closed_without_a_configured_endpoint() -> None:
+    with pytest.raises(BackendNotFoundError, match="base_url"):
+        resolve_backend(Config(backend="openai", model="gpt-test"))
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["not-an-http-endpoint", "http://127.0.0.1:4141/v1"],
+)
+def test_explicit_openai_rejects_invalid_or_reserved_endpoints(endpoint: str) -> None:
+    with pytest.raises(BackendNotFoundError, match="OpenAI"):
+        resolve_backend(
+            Config(backend="openai", base_url=endpoint, model="gpt-test")
+        )
+
+
+def test_explicit_openai_uses_a_configured_endpoint_without_probing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeOpenAIBackend(_FakeMLXBackend):
+        pass
+
+    monkeypatch.setattr(backends, "OpenAICompatBackend", _FakeOpenAIBackend)
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda *args, **kwargs: pytest.fail("explicit OpenAI performed a probe"),
+    )
+
+    resolved = resolve_backend(
+        Config(
+            backend="openai",
+            base_url="https://gateway.example.test/v1",
+            model="gpt-test",
+        )
+    )
+
+    try:
+        assert resolved.identity.backend == "openai"
+        assert resolved.identity.endpoint == "https://gateway.example.test/v1"
+        assert resolved.identity.model == "gpt-test"
+    finally:
+        resolved.close()
+
+
+def test_explicit_cc_bridge_fails_closed_when_completion_route_is_unusable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda timeout: _CcBridgeClient(502, {"models": []}),
+    )
+
+    with pytest.raises(BackendNotFoundError, match="cc-bridge"):
+        resolve_backend(Config(backend="cc-bridge", model="route/model"))
+
+
+def test_auto_backend_keeps_cc_bridge_before_ollama(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda timeout: _CcBridgeClient(
+            200, {"models": [{"name": "ollama-would-have-won"}]}
+        ),
+    )
+
+    resolved = resolve_backend(Config(backend="auto", model="route/model"))
+
+    try:
+        assert resolved.identity.backend == "cc-bridge"
+    finally:
+        resolved.close()
+
+
+def test_backend_route_discovery_never_loads_mlx_or_calls_a_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _DiscoveryClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str) -> _Response:
+            if url.endswith("/health"):
+                return _Response(200)
+            if url.endswith("/api/tags"):
+                return _Response(200, {"models": [{"name": "qwen3:8b"}]})
+            raise AssertionError(url)
+
+        def post(self, *args: object, **kwargs: object) -> _Response:
+            raise AssertionError("route discovery called a model")
+
+    monkeypatch.setattr(backends.httpx, "Client", lambda timeout: _DiscoveryClient())
+    monkeypatch.setattr(backends.importlib.util, "find_spec", lambda name: object())
+    monkeypatch.setattr(
+        backends,
+        "MLXBackend",
+        lambda config: pytest.fail("route discovery loaded MLX"),
+    )
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "configured")
+
+    routes = backends.available_backend_routes(
+        Config(backend="auto", model="qwen3:8b", model_source="cli")
+    )
+
+    assert routes == ("cc-bridge", "ollama", "mlx", "anthropic")
+
+
+def test_backend_route_discovery_lists_an_explicit_route_without_probing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda *args, **kwargs: pytest.fail("configured route was probed"),
+    )
+
+    assert backends.available_backend_routes(Config(backend="cc-bridge")) == (
+        "cc-bridge",
+    )
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    ["not-an-http-endpoint", "http://127.0.0.1:4141/v1"],
+)
+def test_backend_route_discovery_does_not_offer_invalid_or_reserved_openai(
+    endpoint: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class _UnavailableClient:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str) -> _Response:
+            raise httpx.ConnectError("unavailable")
+
+    monkeypatch.setattr(backends.httpx, "Client", lambda timeout: _UnavailableClient())
+    monkeypatch.setattr(backends.importlib.util, "find_spec", lambda name: None)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+    assert backends.available_backend_routes(
+        Config(backend="auto", base_url=endpoint, model="gpt-test")
+    ) == ()

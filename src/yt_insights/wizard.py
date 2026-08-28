@@ -44,6 +44,14 @@ DURATION_LABELS: dict[str, str] = {
 
 OUTPUT_FORMATS = ["mp4", "webm", "mkv"]
 
+BACKEND_LABELS = {
+    "cc-bridge": "cc-bridge local",
+    "ollama": "Ollama local",
+    "mlx": "MLX local",
+    "anthropic": "Anthropic API",
+    "openai": "OpenAI-compatible API",
+}
+
 ACTIONS: dict[str, str] = {
     "insights": "Analyser une vidéo (extraire les insights)",
     "shorts":   "Suggérer des moments Shorts depuis les VTT en cache",
@@ -73,6 +81,7 @@ Réponds aux questions ci-dessous, puis relance avec les flags correspondants :
     --source   <url>      \\   (si action = insights ou pipeline)
     --duration <durée>    \\   (si action implique des Shorts)
     --platform <platform> \\   (si action implique des Shorts)
+    --backend <backend>    \\   (optionnel : route LLM explicite)
     --format   <format>       (si action implique un clip)
 
 """
@@ -167,6 +176,32 @@ def _prompt_format() -> str:
             Choice(value="mkv",  name="MKV  (conteneur universel)"),
         ],
         default="mp4",
+    ).execute()
+
+
+def _backend_choices(config) -> list[dict[str, str]]:
+    from . import backends
+
+    return [
+        {"name": BACKEND_LABELS[route], "value": route}
+        for route in backends.available_backend_routes(config)
+    ]
+
+
+def _prompt_backend(config) -> str:
+    from InquirerPy import inquirer
+
+    choices = _backend_choices(config)
+    if not choices:
+        from .backends.base import BackendNotFoundError
+
+        raise BackendNotFoundError(
+            "Aucune route LLM détectée ou configurée. Configure un backend "
+            "avant de lancer le wizard."
+        )
+    return inquirer.select(
+        message="Quel backend LLM utiliser ?",
+        choices=choices,
     ).execute()
 
 
@@ -337,8 +372,9 @@ def run_wizard(
     duration: str | None = None,
     platform: str | None = None,
     output_format: str | None = None,
+    backend: str | None = None,
 ) -> None:
-    config = load_config({})
+    config = load_config({"backend": backend})
     tty = _is_tty()
 
     # --- Collect missing params ---
@@ -376,6 +412,15 @@ def run_wizard(
             duration = duration or "any"
             platform = platform or "none"
             output_format = output_format or "mp4"
+        if action in ("insights", "shorts", "pipeline") and config.backend == "auto":
+            from .backends.base import BackendNotFoundError
+
+            try:
+                backend = _prompt_backend(config)
+            except BackendNotFoundError as exc:
+                print(f"Erreur backend : {exc}", file=sys.stderr)
+                return
+            config = load_config({"backend": backend})
 
     # Resolve duration + platform to numbers
     min_s, max_s = DURATION_RANGES.get(duration or "any", (0, 999))

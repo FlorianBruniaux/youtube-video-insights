@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+from click.testing import CliRunner
+
 from yt_insights.backends import BackendIdentity, ResolvedBackend
+from yt_insights.cli import cli
 from yt_insights.config import Config
 
 
@@ -79,3 +83,81 @@ def test_wizard_never_prints_endpoint_secrets(
     assert "password-secret" not in combined
     assert "query-secret" not in combined
     assert "fragment-secret" not in combined
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        ["run", "--help"],
+        ["report", "--help"],
+        ["suggest-shorts", "--help"],
+        ["interactive", "--help"],
+        ["config", "show", "--help"],
+    ],
+)
+def test_every_llm_cli_surface_exposes_backend_selection(command: list[str]) -> None:
+    result = CliRunner().invoke(cli, command)
+
+    assert result.exit_code == 0, result.output
+    assert "--backend" in result.output
+
+
+def test_config_show_reports_backend_without_runtime_probe(monkeypatch) -> None:
+    from yt_insights import backends
+
+    monkeypatch.setattr(
+        backends.httpx,
+        "Client",
+        lambda *args, **kwargs: pytest.fail("config show probed a backend"),
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        ["config", "show", "--backend", "mlx", "--model", "mlx/test-model"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "backend" in result.output
+    assert "mlx" in result.output
+
+
+def test_wizard_backend_choices_contain_only_detected_or_configured_routes(
+    monkeypatch,
+) -> None:
+    from yt_insights import backends, wizard
+
+    monkeypatch.setattr(
+        backends,
+        "available_backend_routes",
+        lambda config: ("ollama", "anthropic"),
+    )
+
+    assert wizard._backend_choices(Config()) == [
+        {"name": "Ollama local", "value": "ollama"},
+        {"name": "Anthropic API", "value": "anthropic"},
+    ]
+
+
+def test_tty_wizard_applies_selected_backend_without_loading_a_model(
+    monkeypatch,
+) -> None:
+    from yt_insights import wizard
+
+    selected: list[str] = []
+    monkeypatch.setattr(wizard, "_is_tty", lambda: True)
+    monkeypatch.setattr(wizard, "_prompt_backend", lambda config: "mlx")
+    monkeypatch.setattr(
+        wizard,
+        "_run_insights",
+        lambda source, config: selected.append(config.backend),
+    )
+
+    wizard.run_wizard(
+        action="insights",
+        source="https://example.test/video",
+        duration="any",
+        platform="none",
+        output_format="mp4",
+    )
+
+    assert selected == ["mlx"]
