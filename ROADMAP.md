@@ -111,7 +111,7 @@ preview obligatoire pour channel/playlist
 | B1 | `TERMINÉ` | MCP étendu de deux à quatre outils read-only | Smoke réel sur les quatre outils, aucun outil de mutation |
 | B2 | `TERMINÉ` | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | Trois validateurs officiels et tests de portabilité au vert |
 | B3 | `FAIL` | Agents natifs et fixture terminés; benchmark réel à 20/30 positifs, 0/15 interdits, p95 0,709 ms | Atteindre 27/30 sans baisser le seuil global ni ajouter un second hook |
-| C1 | `PARTIEL` | Source de release et transactions runtime/intégrations construites dans une copie inerte; 108/108 tests | Contre-revue finale, intégration dans le dépôt global puis trois digests liés aux préimages live |
+| C1 | `PARTIEL` | Source de release et transactions runtime/intégrations construites dans une copie inerte; 108/108 tests et contre-revue passés | Intégration approuvée dans le dépôt global puis trois digests liés aux nouvelles préimages live |
 | C2 | `BLOQUÉ PAR APPROBATION` | Runtime, config, skills, agents et MCP globaux | Même corpus depuis deux cwd, parité de cinq requêtes et restauration testée |
 | D1 | `OPTIONNEL` | Choix explicite Ollama, MLX, cc-bridge ou remote | Backend réellement résolu, canari MLX séparé |
 
