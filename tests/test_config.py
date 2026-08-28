@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from yt_insights import config as config_module
@@ -44,6 +45,33 @@ def test_direct_config_honors_an_explicit_legacy_directory_override(tmp_path: Pa
 
     assert paths.transcripts == transcript_override
     assert paths.insights == custom_root / "insights"
+
+
+def test_replace_config_honors_a_new_explicit_legacy_directory_override(
+    tmp_path: Path,
+) -> None:
+    custom_root = tmp_path / "custom-corpus"
+    transcript_override = tmp_path / "replaced-transcripts"
+
+    paths = replace(
+        Config(data_root=custom_root), transcripts_dir=transcript_override
+    ).data_paths
+
+    assert paths.transcripts == transcript_override
+    assert paths.insights == custom_root / "insights"
+
+
+def test_mutating_config_honors_a_new_explicit_legacy_directory_override(
+    tmp_path: Path,
+) -> None:
+    custom_root = tmp_path / "custom-corpus"
+    transcript_override = tmp_path / "assigned-transcripts"
+    config = Config(data_root=custom_root)
+
+    config.transcripts_dir = transcript_override
+
+    assert config.data_paths.transcripts == transcript_override
+    assert config.data_paths.insights == custom_root / "insights"
 
 
 def test_with_url_marks_a_supplied_default_model_as_direct() -> None:

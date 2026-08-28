@@ -40,6 +40,13 @@ _HISTORIC_PATH_DEFAULTS = {
     "shorts_clips_dir": Path("output/clips"),
     "exports_dir": Path("output/exports"),
 }
+_DATA_PATH_ATTRIBUTES = {
+    "transcripts_dir": "transcripts",
+    "insights_dir": "insights",
+    "shorts_dir": "shorts",
+    "shorts_clips_dir": "clips",
+    "exports_dir": "exports",
+}
 
 
 def _default_model() -> str:
@@ -74,13 +81,22 @@ class Config:
     _omitted_legacy_paths: frozenset[str] = field(
         default_factory=frozenset, repr=False, compare=False
     )
+    _initialization_complete: bool = field(
+        default=False, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
         omitted = set(self._omitted_legacy_paths)
+        defaults = DataPaths.from_root(self.data_root)
         for field_name, default in _HISTORIC_PATH_DEFAULTS.items():
             if getattr(self, field_name) is _UNSET_PATH:
                 setattr(self, field_name, default)
                 omitted.add(field_name)
+            elif field_name in omitted and getattr(self, field_name) not in {
+                default,
+                getattr(defaults, _DATA_PATH_ATTRIBUTES[field_name]),
+            }:
+                omitted.discard(field_name)
         self._omitted_legacy_paths = frozenset(omitted)
         if isinstance(self.model, _DefaultModel):
             self._model_was_omitted = True
@@ -89,6 +105,17 @@ class Config:
             self.model_source = "direct"
         if self.base_url_source == "default" and self.base_url != DEFAULT_BASE_URL:
             self.base_url_source = "direct"
+        self._initialization_complete = True
+
+    def __setattr__(self, name: str, value: object) -> None:
+        """Treat a post-construction legacy directory assignment as explicit."""
+        if name in _LEGACY_PATH_FIELDS and getattr(self, "_initialization_complete", False):
+            object.__setattr__(
+                self,
+                "_omitted_legacy_paths",
+                self._omitted_legacy_paths - {name},
+            )
+        object.__setattr__(self, name, value)
 
     def with_url(
         self,
