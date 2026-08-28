@@ -61,18 +61,21 @@ def _validate_artifact_relative_path(value: object) -> str:
 
 def _resolve_artifact_path(corpus_root: Path, stored_path: object) -> Path:
     relative_path = _validate_artifact_relative_path(stored_path)
+    raw_root = Path(corpus_root).expanduser()
     try:
-        root = Path(corpus_root).resolve(strict=True)
-    except OSError as exc:
+        root_details = raw_root.lstat()
+        root = raw_root.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
         raise CatalogError("corpus root is not safe") from exc
-    if not root.is_dir():
+    if not stat.S_ISDIR(root_details.st_mode) or stat.S_ISLNK(root_details.st_mode):
         raise CatalogError("corpus root is not safe")
     candidate = root.joinpath(*PurePosixPath(relative_path).parts)
     try:
-        candidate.resolve(strict=False).relative_to(root)
-    except (OSError, ValueError) as exc:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, RuntimeError, ValueError) as exc:
         raise CatalogError("catalog artifact path escapes corpus root") from exc
-    return candidate
+    return resolved
 
 
 def _catalog_database_identity(
@@ -214,6 +217,7 @@ class VideoSearchResult:
     sources: tuple[str, ...]
     sources_truncated: bool
     watch_url: str
+    highlight: str
     rank: float
 
 
@@ -1476,6 +1480,12 @@ class ReadOnlyCatalog:
         return value
 
     @staticmethod
+    def _validate_highlight(value: object) -> str:
+        if not isinstance(value, str) or len(value) > 2000 or "\x00" in value:
+            raise CatalogError("catalog row is invalid")
+        return value
+
+    @staticmethod
     def _validate_nonnegative_count(value: object) -> int:
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise CatalogError("catalog row is invalid")
@@ -1488,7 +1498,7 @@ class ReadOnlyCatalog:
         source: str | None = None,
         limit: int = 10,
     ) -> tuple[VideoSearchResult, ...]:
-        self._require_limit(limit, maximum=20)
+        self._require_limit(limit, maximum=100)
         if not isinstance(query, str):
             raise ValueError("query must be text")
         tokens = re.findall(r"\w+", query, flags=re.UNICODE)
@@ -1507,6 +1517,7 @@ class ReadOnlyCatalog:
                 videos.title,
                 videos.published_at,
                 videos.watch_url,
+                snippet(video_search, 4, '[', ']', ' … ', 18) AS highlight,
                 bm25(video_search) AS rank
             FROM video_search
             JOIN videos ON videos.video_id = video_search.video_id
@@ -1556,6 +1567,7 @@ class ReadOnlyCatalog:
                         sources=sources,
                         sources_truncated=len(source_rows) > 10,
                         watch_url=watch_url,
+                        highlight=self._validate_highlight(row["highlight"]),
                         rank=rank,
                     )
                 )

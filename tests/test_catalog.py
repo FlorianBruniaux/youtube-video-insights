@@ -410,7 +410,7 @@ class CatalogSearchTests(unittest.TestCase):
                 [item.video_id for item in videos],
                 sorted(item.video_id for item in videos),
             )
-            self.assertTrue(all(not hasattr(item, "highlight") for item in videos))
+            self.assertTrue(all(item.highlight for item in videos))
             self.assertEqual(database.read_bytes(), before_database)
             self.assertEqual(sorted(path.name for path in base.iterdir()), before_names)
 
@@ -423,8 +423,8 @@ class CatalogSearchTests(unittest.TestCase):
             with Catalog.open_read_only(database) as reader:
                 with self.assertRaisesRegex(ValueError, "between 1 and 100"):
                     reader.list_corpora(limit=101)
-                with self.assertRaisesRegex(ValueError, "between 1 and 20"):
-                    reader.search_videos("query", limit=21)
+                with self.assertRaisesRegex(ValueError, "between 1 and 100"):
+                    reader.search_videos("query", limit=101)
 
 
 class CatalogDiscoveryTests(unittest.TestCase):
@@ -706,12 +706,23 @@ def test_imported_artifact_paths_survive_relocation_and_reject_escape_symlinks(
     resolved = [Catalog.resolve_artifact_path(relocated_root, path) for path in stored_paths]
     assert all(path.is_file() for path in resolved)
 
+    linked_path = relocated_root / "product-channel" / "linked-insight.json"
+    linked_path.symlink_to(resolved[0])
+    assert Catalog.resolve_artifact_path(
+        relocated_root, "product-channel/linked-insight.json"
+    ) == resolved[0].resolve(strict=True)
+
     outside = tmp_path / "outside.json"
     outside.write_text("outside", encoding="utf-8")
     resolved[0].unlink()
     resolved[0].symlink_to(outside)
     with pytest.raises(CatalogError):
         Catalog.resolve_artifact_path(relocated_root, stored_paths[0])
+
+    root_link = tmp_path / "corpus-root-link"
+    root_link.symlink_to(relocated_root, target_is_directory=True)
+    with pytest.raises(CatalogError):
+        Catalog.resolve_artifact_path(root_link, stored_paths[1])
 
 
 @pytest.mark.parametrize("unsafe_path", ["../escape.vtt", "/absolute.vtt", r"C:\\escape.vtt"])

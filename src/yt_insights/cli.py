@@ -635,7 +635,7 @@ def catalog_discover(
 @click.option("--source", default=None, help="Restrict results to one source slug.")
 @click.option(
     "--limit",
-    type=click.IntRange(1, 20),
+    type=click.IntRange(1, 100),
     default=20,
     show_default=True,
 )
@@ -671,6 +671,8 @@ def catalog_search(
         sources = ",".join(result.sources) or "unknown-source"
         click.echo(f"{date}  {sources}  {result.title}  [{result.video_id}]")
         click.echo(f"  {result.watch_url}")
+        if result.highlight:
+            click.echo(f"  {result.highlight}")
 
 
 @catalog_group.command("stats")

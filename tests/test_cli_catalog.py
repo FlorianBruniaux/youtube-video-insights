@@ -66,6 +66,7 @@ class CatalogCliTests(unittest.TestCase):
         self.assertIn(VIDEO_ID, search.output)
         self.assertIn("Agentic product discovery", search.output)
         self.assertIn("product-channel", search.output)
+        self.assertIn("[market]", search.output.lower())
 
         self.assertEqual(stats.exit_code, 0, stats.output)
         self.assertIn("videos=1", stats.output)
@@ -145,10 +146,23 @@ class CatalogCliTests(unittest.TestCase):
             before_database = database.read_bytes()
 
             search = runner.invoke(cli, ["catalog", "search", "immutable", "--db", str(database)])
+            wide_search = runner.invoke(
+                cli,
+                [
+                    "catalog",
+                    "search",
+                    "immutable",
+                    "--limit",
+                    "100",
+                    "--db",
+                    str(database),
+                ],
+            )
             stats = runner.invoke(cli, ["catalog", "stats", "--db", str(database)])
             errors = runner.invoke(cli, ["catalog", "errors", "--db", str(database)])
 
             self.assertEqual(search.exit_code, 0, search.output)
+            self.assertEqual(wide_search.exit_code, 0, wide_search.output)
             self.assertEqual(stats.exit_code, 0, stats.output)
             self.assertEqual(errors.exit_code, 0, errors.output)
             self.assertEqual(sorted(path.name for path in base.iterdir()), before_names)
