@@ -11,6 +11,7 @@ import re
 import sqlite3
 import stat
 import tempfile
+import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -37,7 +38,7 @@ _ARTIFACT_NAME = re.compile(
 )
 _INSIGHT_KEYS = {"subject", "key_points", "tools", "advice", "quotes"}
 _VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
-_SOURCE_SLUG = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
+_SOURCE_SLUG = re.compile(r"[^\W_][\w.-]{0,199}", flags=re.UNICODE)
 
 
 class CatalogError(RuntimeError):
@@ -238,13 +239,16 @@ def _insight_validation_issues(data: Any) -> list[str]:
 def _source_slug(source: str) -> str:
     handle = re.search(r"/@([^/?#]+)", source)
     if handle:
-        return handle.group(1).lower()
-    parsed = urlparse(source)
-    candidate = Path(parsed.path).name if parsed.scheme else Path(source).stem
-    if not candidate and parsed.netloc:
-        candidate = parsed.netloc
-    slug = re.sub(r"[^a-z0-9]+", "-", candidate.lower()).strip("-")
-    return slug or "unknown-source"
+        candidate = handle.group(1)
+    else:
+        parsed = urlparse(source)
+        candidate = Path(parsed.path).name if parsed.scheme else Path(source).stem
+        if not candidate and parsed.netloc:
+            candidate = parsed.netloc
+    normalized = unicodedata.normalize("NFKC", candidate).lower()
+    slug = re.sub(r"[^\w.-]+", "-", normalized, flags=re.UNICODE).strip("._-")
+    slug = slug[:200].rstrip("._-")
+    return slug if _SOURCE_SLUG.fullmatch(slug) is not None else "unknown-source"
 
 
 @dataclass(frozen=True)

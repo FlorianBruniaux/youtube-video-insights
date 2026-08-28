@@ -213,6 +213,55 @@ def test_discovery_tools_return_bounded_metadata_without_paths_or_transcripts(
     assert sorted(path.name for path in tmp_path.iterdir()) == before_sidecars
 
 
+def test_discovery_tools_expose_unicode_handle_written_by_catalog_api(
+    tmp_path: Path,
+) -> None:
+    from yt_insights.mcp_server import create_server
+
+    search_database, _passage = _indexed_passage(tmp_path)
+    catalog_database = tmp_path / "catalog.sqlite3"
+    with Catalog(catalog_database) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@日本語/videos",
+            VideoListResult(
+                videos=[
+                    VideoInfo(
+                        video_id="unicodeAB12",
+                        title="Unicode metadata needle",
+                        upload_date="20260828",
+                    )
+                ],
+                errors=[],
+                returncode=0,
+            ),
+        )
+        catalog.checkpoint()
+
+    async def scenario() -> None:
+        async with Client(create_server(search_database, catalog_database)) as client:
+            corpora = await client.call_tool("list_corpora", {})
+            videos = await client.call_tool(
+                "search_videos",
+                {"query": "unicode metadata", "source": "日本語"},
+            )
+
+        assert corpora.is_error is False
+        assert videos.is_error is False
+        assert corpora.structured_content == {
+            "corpora": [
+                {"source": "日本語", "video_count": 1, "artifact_count": 0}
+            ],
+            "returned": 1,
+            "truncated": False,
+        }
+        assert videos.structured_content is not None
+        assert [item["sources"] for item in videos.structured_content["videos"]] == [
+            ["日本語"]
+        ]
+
+    _run(scenario())
+
+
 def test_search_passages_uses_the_local_index_and_bounds_its_payload(tmp_path: Path) -> None:
     from yt_insights.mcp_server import create_server
 

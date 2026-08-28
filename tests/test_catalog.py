@@ -11,7 +11,7 @@ from unittest.mock import patch
 
 import pytest
 
-from yt_insights.catalog import Catalog
+from yt_insights.catalog import Catalog, CatalogError
 from yt_insights.cleaner import clean_vtt
 from yt_insights.downloader import VideoInfo, VideoListResult
 
@@ -425,6 +425,117 @@ class CatalogSearchTests(unittest.TestCase):
 
 
 class CatalogDiscoveryTests(unittest.TestCase):
+    def test_unicode_handle_written_by_public_api_is_readable(self) -> None:
+        source = "https://www.youtube.com/@日本語/videos"
+        result = VideoListResult(
+            videos=[
+                VideoInfo(
+                    video_id=VIDEO_ID,
+                    title="Unicode source metadata",
+                    upload_date="20260828",
+                )
+            ],
+            errors=[],
+            returncode=0,
+        )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            database = Path(tmp) / "catalog.sqlite3"
+            with Catalog(database) as catalog:
+                catalog.ingest_discovery(source, result)
+                catalog.checkpoint()
+
+            with Catalog.open_read_only(database) as reader:
+                corpora = reader.list_corpora()
+                videos = reader.search_videos("unicode source", source="日本語")
+
+        self.assertEqual([corpus.source for corpus in corpora], ["日本語"])
+        self.assertEqual([video.video_id for video in videos], [VIDEO_ID])
+        self.assertEqual(videos[0].sources, ("日本語",))
+
+    def test_public_writer_canonicalizes_hostile_source_slug_characters(self) -> None:
+        cases = {
+            "https://www.youtube.com/@safe\x00name/videos": "safe-name",
+            "https://www.youtube.com/@safe\\name/videos": "safe-name",
+            "https://www.youtube.com/@／etc／passwd/videos": "etc-passwd",
+            r"C:\secret": "secret",
+            "/absolute/path": "path",
+        }
+
+        for index, (source, expected_slug) in enumerate(cases.items()):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
+                database = Path(tmp) / "catalog.sqlite3"
+                video_id = f"safe{index:07d}"
+                with Catalog(database) as catalog:
+                    catalog.ingest_discovery(
+                        source,
+                        VideoListResult(
+                            videos=[
+                                VideoInfo(
+                                    video_id=video_id,
+                                    title="Safe canonical source",
+                                    upload_date="20260828",
+                                )
+                            ],
+                            errors=[],
+                            returncode=0,
+                        ),
+                    )
+                    catalog.checkpoint()
+
+                with Catalog.open_read_only(database) as reader:
+                    corpora = reader.list_corpora()
+                    videos = reader.search_videos("safe canonical")
+
+                self.assertEqual(
+                    [corpus.source for corpus in corpora], [expected_slug]
+                )
+                self.assertEqual(videos[0].sources, (expected_slug,))
+                self.assertNotIn("\x00", expected_slug)
+                self.assertNotIn("/", expected_slug)
+                self.assertNotIn("\\", expected_slug)
+
+    def test_read_only_catalog_rejects_injected_hostile_source_slugs(self) -> None:
+        hostile_slugs = (
+            "safe/source",
+            r"safe\source",
+            "safe\x00source",
+            "/absolute/source",
+            r"C:\absolute\source",
+        )
+
+        for hostile_slug in hostile_slugs:
+            with self.subTest(slug=hostile_slug), tempfile.TemporaryDirectory() as tmp:
+                database = Path(tmp) / "catalog.sqlite3"
+                with Catalog(database) as catalog:
+                    catalog.ingest_discovery(
+                        "https://www.youtube.com/@safe-source/videos",
+                        VideoListResult(
+                            videos=[
+                                VideoInfo(
+                                    video_id=VIDEO_ID,
+                                    title="Safe metadata",
+                                    upload_date="20260828",
+                                )
+                            ],
+                            errors=[],
+                            returncode=0,
+                        ),
+                    )
+                    catalog.checkpoint()
+
+                with sqlite3.connect(database) as connection:
+                    connection.execute(
+                        "UPDATE video_sources SET source_slug = ?",
+                        (hostile_slug,),
+                    )
+                    connection.commit()
+                    connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+                with Catalog.open_read_only(database) as reader:
+                    with self.assertRaisesRegex(CatalogError, "catalog row is invalid"):
+                        reader.list_corpora()
+
     def test_discovery_upserts_videos_and_persists_partial_errors(self) -> None:
         result = VideoListResult(
             videos=[
