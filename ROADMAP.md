@@ -4,7 +4,7 @@
 **Statut du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **Statut du runtime pour Claude Code et Codex :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **Statut des skills et agents projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**Statut du candidat global :** `CONSTRUIT ET VALIDÉ EN ENVIRONNEMENT INERTE`.
+**Statut du candidat global :** `INTÉGRÉ AU DÉPÔT SOURCE GLOBAL ET VALIDÉ`, non activé.
 **Statut du routage implicite :** `FAIL`, 20/30 positifs et 0/15 activations interdites.
 **Statut de l'installation globale :** `NON INSTALLÉE`, approbations exactes requises.
 **Readiness éditoriale :** `UNKNOWN` ; ce statut bloque la promotion produit, pas l'implémentation autorisée.
@@ -111,7 +111,7 @@ preview obligatoire pour channel/playlist
 | B1 | `TERMINÉ` | MCP étendu de deux à quatre outils read-only | Smoke réel sur les quatre outils, aucun outil de mutation |
 | B2 | `TERMINÉ` | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | Trois validateurs officiels et tests de portabilité au vert |
 | B3 | `FAIL` | Agents natifs et fixture terminés; benchmark réel à 20/30 positifs, 0/15 interdits, p95 0,709 ms | Atteindre 27/30 sans baisser le seuil global ni ajouter un second hook |
-| C1 | `PARTIEL` | Source de release et transactions runtime/intégrations construites dans une copie inerte; 108/108 tests et contre-revue passés | Intégration approuvée dans le dépôt global puis trois digests liés aux nouvelles préimages live |
+| C1 | `TERMINÉ` | Source globale à `4d8a5a4`, 108/108 tests, release inerte `b5b7e9de…`, `issues: []` | Générer trois digests liés aux nouvelles préimages live avant toute activation |
 | C2 | `BLOQUÉ PAR APPROBATION` | Runtime, config, skills, agents et MCP globaux | Même corpus depuis deux cwd, parité de cinq requêtes et restauration testée |
 | D1 | `OPTIONNEL` | Choix explicite Ollama, MLX, cc-bridge ou remote | Backend réellement résolu, canari MLX séparé |
 
