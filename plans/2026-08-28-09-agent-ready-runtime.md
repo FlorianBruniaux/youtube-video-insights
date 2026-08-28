@@ -173,7 +173,9 @@ class DoctorReport:
     checks: tuple[CheckResult, ...]
 ```
 
-Use `shutil.which()` for executables. Validate SQLite with existing `status()` methods. `--probe-backends` may call localhost health endpoints but must not call a paid remote API.
+Use `shutil.which()` for executables and never expose resolved executable paths. Validate an existing FTS database with `SQLiteFtsIndex.status()`, but do not instantiate `Catalog`: its constructor initializes SQLite and would make `doctor` mutating. A missing `yt-dlp` or an existing invalid search index is a failure. Missing `ffmpeg`, an absent search index, an absent catalog database and absent cloud credentials are warnings or unknown states.
+
+`--probe-backends` is strictly bounded to `GET` requests against the hard-coded localhost cc-bridge and Ollama health endpoints. It must not call `resolve_backend()`, submit a completion request or contact a paid remote API.
 
 - [ ] **Step 4: Implement an unregistered Click command with deterministic JSON and readable text output**
 
@@ -303,9 +305,11 @@ rtk git commit -m "feat: select local and cloud backends explicitly"
 - Create: `src/yt_insights/acquisition.py`
 - Create: `src/yt_insights/cli_acquire.py`
 - Modify: `src/yt_insights/downloader.py`
+- Modify: `src/yt_insights/catalog.py`
 - Test: `tests/test_acquisition.py`
 - Test: `tests/test_cli_acquire.py`
 - Modify: `tests/test_downloader.py`
+- Modify: `tests/test_catalog.py`
 
 **Interfaces:**
 - Consumes: URL or batch path, optional channel slug, years, language and analysis flag
@@ -386,7 +390,6 @@ yt-insights acquire SOURCE
   --years 2025,2026
   --lang fr
   --analyze
-  --backend ollama
   --dry-run
   --yes
   --json
@@ -394,9 +397,11 @@ yt-insights acquire SOURCE
 
 `--dry-run` performs discovery but writes neither corpus files nor batch files. Without `--yes`, a multi-source command prints the plan and exits `3`. An explicit `--yes` is the only non-interactive confirmation.
 
+In this milestone, `--analyze` uses the existing automatic backend resolver. Explicit `--backend` selection belongs to optional Task D1 and must not be exposed before that task is implemented and tested.
+
 - [ ] **Step 6: Reuse Python services instead of invoking the old CLI**
 
-Call `download_subtitles()`, `analyze_all()`, `Catalog.import_corpus()` and `SQLiteFtsIndex.rebuild()` through Python. Do not spawn `yt-insights run` or `runbook/run-channel.sh` from the new service.
+Call `download_subtitles()`, `analyze_all()`, `Catalog.import_corpus()` and `SQLiteFtsIndex.rebuild()` through Python. Do not spawn `yt-insights run` or `runbook/run-channel.sh` from the new service. Extend `Catalog.import_corpus()` so the configured flat single-video inbox is imported alongside nested channel corpora, without double-counting either layout.
 
 - [ ] **Step 7: Add idempotency and failure accounting**
 
@@ -405,14 +410,14 @@ Count cached VTT and insight files as ready. Preserve external errors with video
 - [ ] **Step 8: Run focused and complete tests**
 
 ```bash
-rtk pytest tests/test_acquisition.py tests/test_cli_acquire.py tests/test_downloader.py -q
+rtk pytest tests/test_acquisition.py tests/test_cli_acquire.py tests/test_downloader.py tests/test_catalog.py -q
 rtk pytest -q
 ```
 
 - [ ] **Step 9: Commit acquisition**
 
 ```bash
-rtk git add src/yt_insights/acquisition.py src/yt_insights/cli_acquire.py src/yt_insights/downloader.py tests/test_acquisition.py tests/test_cli_acquire.py tests/test_downloader.py
+rtk git add src/yt_insights/acquisition.py src/yt_insights/cli_acquire.py src/yt_insights/downloader.py src/yt_insights/catalog.py tests/test_acquisition.py tests/test_cli_acquire.py tests/test_downloader.py tests/test_catalog.py
 rtk git commit -m "feat: add safe corpus acquisition command"
 ```
 
@@ -431,6 +436,8 @@ rtk git commit -m "feat: add safe corpus acquisition command"
 - [ ] **Step 1: Write failing source resolution tests**
 
 Cover exact ID matching, `watch?v=`, `youtu.be`, one language, multiple languages without `--lang`, missing VTT, and a corrupt sidecar. Never select by title substring.
+
+Resolution is filesystem-scoped, not a catalog query or full search-index scan. A flat inbox transcript requires a valid adjacent sidecar. The historical nested layout may derive source and title from its directory structure when no sidecar exists. Multiple candidates for the same video ID and language fail closed.
 
 ```python
 def test_ambiguous_languages_require_an_explicit_choice(corpus) -> None:
@@ -475,7 +482,7 @@ Publish through `<target>.tmp` and `os.replace()`. Refuse to overwrite an existi
 yt-insights export video VIDEO_OR_URL --format md --lang fr --output article-source.md
 ```
 
-When `--output` is absent, write under `data_root/exports/` with a deterministic filename. `--json` returns the absolute export path, source hash, video ID, language and format.
+When `--output` is absent, write under `data_root/exports/` as `<video_id>.<language>.<format>`. Metadata uses the canonical URL `https://www.youtube.com/watch?v=<video_id>`. `--json` returns the absolute export path, source hash, video ID, language and format.
 
 - [ ] **Step 6: Run tests and commit**
 
