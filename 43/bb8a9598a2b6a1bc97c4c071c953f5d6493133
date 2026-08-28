@@ -1,0 +1,47 @@
+CHANGELOG.md
+  s_0a442347250965::t_c9a67e9561f62a 64-66
+  s_0a442347250965::t_bd272d17f34c0d 13-26,47-56,67-69
+ROADMAP.md
+  s_0a442347250965::t_bd272d17f34c0d 7-11,84-93,99-100
+README.md
+  s_0a442347250965::t_782063e3b89169 9-12,23-25,35-38,40-42,587-591,601-602,685-691
+  s_0a442347250965::t_9c1d5a9f1d28ff 27-29,213,402,417,428,432-433,439-446
+  s_0a442347250965::t_679ef805a3dbcf 77,87-88,105,118-120,129,196,215,219-220,392,397,427,459-475,483
+  s_0a442347250965::t_bd272d17f34c0d 52-66
+  s_0a442347250965::t_4b375c00692f9b 478-482
+llms.txt
+  s_0a442347250965::t_9b384cce41736e 21-26,30-32,46-56,90-106,119-120,133-136,140-142,147-148,155-157
+.gitignore
+  s_0a442347250965::t_2f0e2fd29e35dc 12
+INSTALL.md
+  s_0a442347250965::t_bd272d17f34c0d 79-83,210-212,217-219
+  s_aeebbf2fc2680c::t_2ffeb43a61444f 220
+plans/README.md
+  s_0a442347250965::t_e40061f92296e1 12-14
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_782063e3b89169 1-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "43bb8a9598a2b6a1bc97c4c071c953f5d6493133",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_aeebbf2fc2680c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a03e20-0cfd-78b0-b1fa-bfb10ef6a72f",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
