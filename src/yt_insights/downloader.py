@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import os
 import re
+import stat
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -51,12 +54,14 @@ def fetch_video_list(
 ) -> VideoListResult:
     """Fetch videos and retain yt-dlp failures for durable collection logs.
 
-    Uses --flat-playlist so yt-dlp only queries the playlist API, no media fetch.
+    Uses structured JSON from full metadata extraction so upload dates are exact.
+    Media download remains disabled.
     """
     cmd = [
         "yt-dlp",
-        "--flat-playlist",
-        "--print", "%(upload_date)s|%(title)s|%(id)s",
+        "--dump-json",
+        "--skip-download",
+        "--no-flat-playlist",
         "--ignore-errors",
     ]
     if cookies_from_browser:
@@ -65,15 +70,43 @@ def fetch_video_list(
 
     result = subprocess.run(cmd, capture_output=True, text=True)
     videos: list[VideoInfo] = []
+    metadata_errors: list[str] = []
     for line in result.stdout.splitlines():
         line = line.strip()
-        if not line or line.count("|") < 2:
+        if not line:
             continue
-        date, title, vid_id = line.split("|", 2)
-        if vid_id:
-            videos.append(VideoInfo(video_id=vid_id, title=title, upload_date=date or ""))
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            if line.count("|") >= 2:
+                upload_date, remainder = line.split("|", 1)
+                title, vid_id = remainder.rsplit("|", 1)
+                payload = {
+                    "upload_date": upload_date,
+                    "title": title,
+                    "id": vid_id,
+                }
+            else:
+                metadata_errors.append("yt-dlp emitted an invalid metadata record")
+                continue
+        if not isinstance(payload, dict):
+            metadata_errors.append("yt-dlp emitted an invalid metadata record")
+            continue
+        vid_id = payload.get("id")
+        title = payload.get("title")
+        upload_date = payload.get("upload_date")
+        if not isinstance(vid_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid_id):
+            metadata_errors.append("yt-dlp emitted metadata without a valid video id")
+            continue
+        videos.append(
+            VideoInfo(
+                video_id=vid_id,
+                title=title if isinstance(title, str) else vid_id,
+                upload_date=upload_date if isinstance(upload_date, str) else "",
+            )
+        )
 
-    errors = [
+    errors = metadata_errors + [
         line.strip()
         for line in result.stderr.splitlines()
         if "ERROR" in line.upper()
@@ -87,6 +120,24 @@ def fetch_video_list(
         errors=errors,
         returncode=result.returncode,
     )
+
+
+def _reject_symlink_output(path: Path) -> None:
+    """Reject any existing symlink component or entry before yt-dlp writes."""
+    absolute = path.expanduser().absolute()
+    for component in reversed((absolute, *absolute.parents)):
+        try:
+            details = component.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(details.st_mode):
+            raise ValueError(f"output path contains a symlink: {component}")
+        if component == absolute and not stat.S_ISDIR(details.st_mode):
+            raise ValueError(f"output path is not a directory: {component}")
+    if absolute.is_dir():
+        for entry in absolute.iterdir():
+            if stat.S_ISLNK(entry.lstat().st_mode):
+                raise ValueError(f"output directory contains a symlink: {entry.name}")
 
 
 def list_videos(source: str, *, cookies_from_browser: str | None = None) -> list[VideoInfo]:
@@ -134,7 +185,9 @@ def download_subtitles(
     Detects new VTT files via a before/after snapshot of output_dir.
     (--print after_move:filepath only fires for media downloads, not subtitles.)
     """
+    _reject_symlink_output(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
+    _reject_symlink_output(output_dir)
     before = set(output_dir.glob("*.vtt"))
 
     cmd = [
@@ -158,8 +211,8 @@ def download_subtitles(
         cmd += ["--cookies-from-browser", cookies_from_browser]
     cmd += _source_args(channel_url)
 
-    output_dir.mkdir(parents=True, exist_ok=True)
     result = subprocess.run(cmd, capture_output=True, text=True)
+    _reject_symlink_output(output_dir)
 
     vtt_files: list[Path] = []
     errors: list[str] = []

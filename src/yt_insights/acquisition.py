@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import stat
+import os
 from dataclasses import asdict, dataclass
 from enum import Enum
 from pathlib import Path
@@ -18,6 +19,8 @@ from .paths import DataPaths
 _VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 _SAFE_SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")
 _YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com"}
+_MAX_BATCH_BYTES = 1024 * 1024
+_MAX_BATCH_LINES = 1000
 
 
 class SourceKind(str, Enum):
@@ -136,6 +139,75 @@ def classify_source(source: str) -> SourceKind:
     raise ValueError("unsupported or ambiguous YouTube URL")
 
 
+def read_batch_snapshot(path: Path) -> tuple[str, ...]:
+    """Read one bounded, stable batch snapshot without following symlinks."""
+    candidate = Path(path).expanduser().absolute()
+    try:
+        inventoried = candidate.lstat()
+    except OSError as exc:
+        raise ValueError("batch source is unavailable") from exc
+    if not stat.S_ISREG(inventoried.st_mode):
+        raise ValueError("batch source must be an existing regular file")
+    if inventoried.st_size > _MAX_BATCH_BYTES:
+        raise ValueError("batch source exceeds the byte limit")
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    if not no_follow:
+        raise ValueError("platform cannot safely read batch files")
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(candidate, os.O_RDONLY | os.O_NONBLOCK | no_follow)
+        opened = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(opened.st_mode)
+            or (opened.st_dev, opened.st_ino) != (inventoried.st_dev, inventoried.st_ino)
+            or opened.st_size > _MAX_BATCH_BYTES
+        ):
+            raise ValueError("batch source changed during inventory")
+        chunks: list[bytes] = []
+        remaining = _MAX_BATCH_BYTES + 1
+        while remaining:
+            chunk = os.read(descriptor, min(64 * 1024, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        encoded = b"".join(chunks)
+        final = os.fstat(descriptor)
+        current_path = candidate.lstat()
+        identity = (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
+        if (
+            len(encoded) > _MAX_BATCH_BYTES
+            or (final.st_dev, final.st_ino, final.st_size, final.st_mtime_ns) != identity
+            or (current_path.st_dev, current_path.st_ino) != identity[:2]
+        ):
+            raise ValueError("batch source changed while being read")
+    except OSError as exc:
+        raise ValueError("batch source could not be read safely") from exc
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+    if b"\x00" in encoded:
+        raise ValueError("batch source contains a NUL byte")
+    try:
+        text = encoded.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("batch source must be UTF-8") from exc
+    raw_lines = text.splitlines()
+    if len(raw_lines) > _MAX_BATCH_LINES:
+        raise ValueError("batch source exceeds the line limit")
+    urls = tuple(line.strip() for line in raw_lines if line.strip())
+    if not urls:
+        raise ValueError("batch source contains no video URLs")
+    for url in urls:
+        try:
+            kind = classify_source(url)
+        except ValueError as exc:
+            raise ValueError("batch source contains an invalid video URL") from exc
+        if kind is not SourceKind.VIDEO:
+            raise ValueError("batch source may contain only video URLs")
+    return urls
+
+
 def _video_id_from_url(source: str) -> str:
     parsed = urlparse(source)
     if (parsed.hostname or "").lower() == "youtu.be":
@@ -165,6 +237,47 @@ def _validated_slug(slug: str) -> str:
     return normalized
 
 
+def _validate_confined_directory(path: Path, root: Path) -> None:
+    """Require a lexical child of root with no existing symlink component."""
+    absolute_root = root.expanduser().absolute()
+    absolute_path = path.expanduser().absolute()
+    try:
+        root_details = absolute_root.lstat()
+    except FileNotFoundError:
+        root_details = None
+    if root_details is not None and stat.S_ISLNK(root_details.st_mode):
+        raise ValueError(f"data root contains a symlink: {absolute_root}")
+    if root_details is not None and not stat.S_ISDIR(root_details.st_mode):
+        raise ValueError(f"data root is not a directory: {absolute_root}")
+    try:
+        relative = absolute_path.relative_to(absolute_root)
+    except ValueError as exc:
+        raise ValueError(f"output path must remain under data root: {absolute_path}") from exc
+    current = absolute_root
+    for part in relative.parts:
+        current = current / part
+        try:
+            details = current.lstat()
+        except FileNotFoundError:
+            continue
+        if stat.S_ISLNK(details.st_mode):
+            raise ValueError(f"output path contains a symlink: {current}")
+        if current == absolute_path and not stat.S_ISDIR(details.st_mode):
+            raise ValueError(f"output path is not a directory: {current}")
+
+
+def _validate_confined_file_target(path: Path, root: Path) -> None:
+    _validate_confined_directory(path.parent, root)
+    try:
+        details = path.lstat()
+    except FileNotFoundError:
+        return
+    if stat.S_ISLNK(details.st_mode):
+        raise ValueError(f"output file is a symlink: {path}")
+    if not stat.S_ISREG(details.st_mode):
+        raise ValueError(f"output file is not regular: {path}")
+
+
 def build_acquisition_plan(
     *,
     source: str,
@@ -175,6 +288,7 @@ def build_acquisition_plan(
     analyze: bool = False,
     discovered: Iterable[VideoInfo] = (),
     discovery_errors: Iterable[str] = (),
+    source_urls: Iterable[str] = (),
 ) -> AcquisitionPlan:
     """Build a deterministic, non-mutating plan from already discovered metadata."""
     kind = classify_source(source)
@@ -182,6 +296,9 @@ def build_acquisition_plan(
     if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", normalized_language):
         raise ValueError("language must contain only letters, numbers and hyphens")
     videos = list(discovered)
+    snapshot_urls = tuple(source_urls)
+    if kind is SourceKind.BATCH and not snapshot_urls:
+        snapshot_urls = read_batch_snapshot(Path(source))
     if kind is SourceKind.VIDEO and not videos:
         video_id = _video_id_from_url(source)
         videos = [VideoInfo(video_id, video_id, "")]
@@ -218,6 +335,20 @@ def build_acquisition_plan(
         transcripts_dir = data_paths.transcripts
         insights_dir = data_paths.insights
 
+    for path in (
+        output_root,
+        transcripts_dir,
+        insights_dir,
+        data_paths.catalog_database.parent,
+        data_paths.search_database.parent,
+    ):
+        _validate_confined_directory(path, data_paths.root)
+    _validate_confined_file_target(data_paths.catalog_database, data_paths.root)
+    _validate_confined_file_target(data_paths.search_database, data_paths.root)
+    source_url_by_id = {
+        _video_id_from_url(url): url for url in snapshot_urls if classify_source(url) is SourceKind.VIDEO
+    }
+
     return AcquisitionPlan(
         source=source,
         source_kind=kind,
@@ -226,7 +357,7 @@ def build_acquisition_plan(
         insights_dir=insights_dir,
         data_paths=data_paths,
         selected_videos=tuple(selected),
-        selected_urls=tuple(video.watch_url for video in selected),
+        selected_urls=tuple(source_url_by_id.get(video.video_id, video.watch_url) for video in selected),
         selected_count=len(selected),
         language=normalized_language,
         analyze=analyze,
@@ -236,15 +367,36 @@ def build_acquisition_plan(
     )
 
 
-def _matching_vtts(directory: Path, video_id: str, language: str) -> list[Path]:
+def _matching_vtts(
+    directory: Path, video_id: str, language: str, root: Path
+) -> list[Path]:
+    _validate_confined_directory(directory, root)
     if not directory.is_dir():
         return []
     suffix = f"[{video_id}].{language}.vtt"
-    return sorted(path for path in directory.glob("*.vtt") if path.name.endswith(suffix))
+    matches: list[Path] = []
+    for path in directory.iterdir():
+        details = path.lstat()
+        if stat.S_ISLNK(details.st_mode):
+            raise ValueError(f"cache contains a symlink: {path.name}")
+        if stat.S_ISREG(details.st_mode) and path.name.endswith(suffix):
+            matches.append(path)
+    return sorted(matches)
 
 
 def _matching_insight(vtt: Path, insights_dir: Path) -> Path:
     return insights_dir / f"{vtt.stem}.json"
+
+
+def _safe_regular_file(path: Path, root: Path) -> bool:
+    _validate_confined_directory(path.parent, root)
+    try:
+        details = path.lstat()
+    except FileNotFoundError:
+        return False
+    if stat.S_ISLNK(details.st_mode):
+        raise ValueError(f"cache contains a symlink: {path.name}")
+    return stat.S_ISREG(details.st_mode)
 
 
 def execute_acquisition(
@@ -264,7 +416,13 @@ def execute_acquisition(
     ready_by_id: dict[str, list[Path]] = {}
 
     for video, url in zip(plan.selected_videos, plan.selected_urls):
-        cached = _matching_vtts(plan.transcripts_dir, video.video_id, plan.language)
+        try:
+            cached = _matching_vtts(
+                plan.transcripts_dir, video.video_id, plan.language, plan.data_paths.root
+            )
+        except ValueError as exc:
+            failures.append(f"{video.video_id} ({video.title}): {exc}")
+            continue
         result = DownloadResult(vtt_files=cached)
         if not cached:
             try:
@@ -276,25 +434,42 @@ def execute_acquisition(
                 )
             except Exception as exc:
                 result = DownloadResult(errors=[f"{type(exc).__name__}: {exc}"], returncode=1)
-        ready = _matching_vtts(plan.transcripts_dir, video.video_id, plan.language)
-        if not ready:
-            ready = [
-                path
-                for path in result.vtt_files
-                if path.name.endswith(f"[{video.video_id}].{plan.language}.vtt") and path.exists()
-            ]
+        try:
+            ready = _matching_vtts(
+                plan.transcripts_dir, video.video_id, plan.language, plan.data_paths.root
+            )
+        except ValueError as exc:
+            failures.append(f"{video.video_id} ({video.title}): {exc}")
+            continue
         if ready:
             ready_by_id[video.video_id] = sorted(set(ready))
-        else:
-            details = "; ".join(result.errors) or "no requested subtitle file was produced"
+        diagnostics = list(result.errors)
+        if result.returncode and not any("exited with status" in item for item in diagnostics):
+            diagnostics.append(f"yt-dlp exited with status {result.returncode}")
+        if diagnostics or not ready:
+            details = "; ".join(diagnostics) or "no requested subtitle file was produced"
             failures.append(f"{video.video_id} ({video.title}): {details}")
 
     all_vtts = [path for paths in ready_by_id.values() for path in paths]
     insights_ready = 0
     if plan.analyze and all_vtts:
-        missing_insights = [
-            path for path in all_vtts if not _matching_insight(path, plan.insights_dir).is_file()
-        ]
+        try:
+            missing_insights = [
+                path
+                for path in all_vtts
+                if not _safe_regular_file(
+                    _matching_insight(path, plan.insights_dir), plan.data_paths.root
+                )
+            ]
+        except ValueError as exc:
+            failures.append(f"analysis: {exc}")
+            missing_insights = []
+        if missing_insights:
+            try:
+                _validate_confined_directory(plan.insights_dir, plan.data_paths.root)
+            except ValueError as exc:
+                failures.append(f"analysis: {exc}")
+                missing_insights = []
         if missing_insights:
             if analyze_many is None:
                 from .analyzer import analyze_all
@@ -319,7 +494,18 @@ def execute_acquisition(
                 if backend is not None:
                     backend.close()
         for video_id, paths in ready_by_id.items():
-            if any(_matching_insight(path, plan.insights_dir).is_file() for path in paths):
+            try:
+                ready_insight = any(
+                    _safe_regular_file(
+                        _matching_insight(path, plan.insights_dir), plan.data_paths.root
+                    )
+                    for path in paths
+                )
+            except ValueError as exc:
+                title = next(v.title for v in plan.selected_videos if v.video_id == video_id)
+                failures.append(f"{video_id} ({title}): {exc}")
+                continue
+            if ready_insight:
                 insights_ready += 1
             else:
                 title = next(v.title for v in plan.selected_videos if v.video_id == video_id)
@@ -331,10 +517,16 @@ def execute_acquisition(
             from .search.corpus import scan_corpus
             from .search.sqlite_fts import SQLiteFtsIndex
 
+            _validate_confined_file_target(
+                plan.data_paths.catalog_database, plan.data_paths.root
+            )
+            _validate_confined_file_target(
+                plan.data_paths.search_database, plan.data_paths.root
+            )
             with Catalog(plan.data_paths.catalog_database) as catalog:
                 catalog.import_corpus(plan.data_paths.root)
             SQLiteFtsIndex(plan.data_paths.search_database).rebuild(
-                scan_corpus(plan.data_paths.root)
+                scan_corpus(plan.data_paths.root, limit=None)
             )
         except Exception as exc:
             failures.append(f"index: {type(exc).__name__}: {exc}")

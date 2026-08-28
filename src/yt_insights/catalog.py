@@ -161,6 +161,29 @@ def _flat_artifact_source_slug(
     return _source_slug(identity.strip())
 
 
+def _safe_artifacts(directory: Path, suffix: str, corpus_root: Path) -> list[Path]:
+    """List only regular, non-symlink artifacts confined to the corpus."""
+    try:
+        details = directory.lstat()
+    except FileNotFoundError:
+        return []
+    if not stat.S_ISDIR(details.st_mode) or stat.S_ISLNK(details.st_mode):
+        return []
+    try:
+        directory.resolve().relative_to(corpus_root)
+    except (OSError, ValueError):
+        return []
+    artifacts: list[Path] = []
+    for candidate in directory.iterdir():
+        try:
+            candidate_details = candidate.lstat()
+        except OSError:
+            continue
+        if stat.S_ISREG(candidate_details.st_mode) and candidate.suffix == suffix:
+            artifacts.append(candidate)
+    return sorted(artifacts)
+
+
 class Catalog:
     """Own the catalog connection, schema, and idempotent domain operations."""
 
@@ -267,7 +290,14 @@ class Catalog:
         self._connection.commit()
 
     def import_corpus(self, root: Path) -> RunSummary:
-        corpus_root = Path(root).resolve()
+        raw_root = Path(root).expanduser().absolute()
+        try:
+            raw_details = raw_root.lstat()
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Corpus directory does not exist: {raw_root}")
+        if stat.S_ISLNK(raw_details.st_mode) or not stat.S_ISDIR(raw_details.st_mode):
+            raise ValueError(f"Corpus directory must be a regular directory: {raw_root}")
+        corpus_root = raw_root.resolve()
         if not corpus_root.is_dir():
             raise FileNotFoundError(f"Corpus directory does not exist: {corpus_root}")
         started_at = _utc_now()
@@ -347,21 +377,31 @@ class Catalog:
         layouts: list[tuple[str, Path, Path]] = [
             ("inbox", corpus_root / "insights", corpus_root / "transcripts")
         ]
-        layouts.extend(
-            (source_dir.name, source_dir / "insights", source_dir / "transcripts")
-            for source_dir in sorted(path for path in corpus_root.iterdir() if path.is_dir())
-            if source_dir.name not in {"transcripts", "insights", "exports", "shorts", "clips", ".search"}
-        )
+        for source_dir in sorted(corpus_root.iterdir()):
+            try:
+                details = source_dir.lstat()
+            except OSError:
+                continue
+            if (
+                not stat.S_ISDIR(details.st_mode)
+                or stat.S_ISLNK(details.st_mode)
+                or source_dir.name
+                in {"transcripts", "insights", "exports", "shorts", "clips", ".search"}
+            ):
+                continue
+            layouts.append(
+                (source_dir.name, source_dir / "insights", source_dir / "transcripts")
+            )
 
         for source_slug, insights_dir, transcripts_dir in layouts:
             artifacts = [
                 ("insight", path)
-                for path in sorted(insights_dir.glob("*.json"))
+                for path in _safe_artifacts(insights_dir, ".json", corpus_root)
                 if not path.name.startswith("AGGREGATE_REPORT")
             ]
             artifacts += [
                 ("transcript", path)
-                for path in sorted(transcripts_dir.glob("*.vtt"))
+                for path in _safe_artifacts(transcripts_dir, ".vtt", corpus_root)
             ]
             for kind, path in artifacts:
                 items_seen += 1

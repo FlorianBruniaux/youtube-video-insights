@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 import json
+from dataclasses import replace
+from pathlib import Path
 
 import pytest
 
@@ -10,6 +11,7 @@ from yt_insights.acquisition import (
     build_acquisition_plan,
     classify_source,
     execute_acquisition,
+    read_batch_snapshot,
 )
 from yt_insights.downloader import DownloadResult, VideoInfo
 from yt_insights.paths import DataPaths
@@ -38,6 +40,40 @@ def test_classify_source_accepts_only_existing_regular_batch_file(tmp_path: Path
         classify_source(str(tmp_path))
     with pytest.raises(ValueError, match="does not exist"):
         classify_source(str(tmp_path / "missing.txt"))
+
+
+def test_batch_snapshot_is_bounded_and_accepts_only_video_urls(tmp_path: Path) -> None:
+    batch = tmp_path / "urls.txt"
+    batch.write_text(
+        "https://youtu.be/nfupYzLjFGc\n"
+        "https://www.youtube.com/watch?v=aaa123DEF45\n",
+        encoding="utf-8",
+    )
+    assert read_batch_snapshot(batch) == (
+        "https://youtu.be/nfupYzLjFGc",
+        "https://www.youtube.com/watch?v=aaa123DEF45",
+    )
+
+    batch.write_text("https://www.youtube.com/playlist?list=PL123\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="video URLs"):
+        read_batch_snapshot(batch)
+
+    batch.write_bytes(b"https://youtu.be/nfupYzLjFGc\x00\n")
+    with pytest.raises(ValueError, match="NUL"):
+        read_batch_snapshot(batch)
+
+
+def test_batch_snapshot_rejects_symlink_and_excessive_lines(tmp_path: Path) -> None:
+    target = tmp_path / "target.txt"
+    target.write_text("https://youtu.be/nfupYzLjFGc\n", encoding="utf-8")
+    link = tmp_path / "link.txt"
+    link.symlink_to(target)
+    with pytest.raises(ValueError, match="regular file"):
+        read_batch_snapshot(link)
+
+    target.write_text("https://youtu.be/nfupYzLjFGc\n" * 1001, encoding="utf-8")
+    with pytest.raises(ValueError, match="line"):
+        read_batch_snapshot(target)
 
 
 @pytest.mark.parametrize(
@@ -96,6 +132,29 @@ def test_single_video_plan_uses_flat_inbox_without_confirmation(tmp_path: Path) 
     assert plan.insights_dir == paths.insights
 
 
+def test_plan_rejects_output_override_outside_root_or_symlink(tmp_path: Path) -> None:
+    root = tmp_path / "corpus"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    unsafe_paths = replace(DataPaths.from_root(root), transcripts=outside)
+    video = VideoInfo("nfupYzLjFGc", "Reliable agents", "20260820")
+    with pytest.raises(ValueError, match="data root"):
+        build_acquisition_plan(
+            source=video.watch_url,
+            data_paths=unsafe_paths,
+            discovered=[video],
+        )
+
+    root.mkdir()
+    (root / "transcripts").symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        build_acquisition_plan(
+            source=video.watch_url,
+            data_paths=DataPaths.from_root(root),
+            discovered=[video],
+        )
+
+
 def test_plan_deduplicates_video_identity(tmp_path: Path) -> None:
     video = VideoInfo("nfupYzLjFGc", "Reliable agents", "20260820")
     plan = build_acquisition_plan(
@@ -138,8 +197,30 @@ def test_execute_counts_cached_and_failed_videos_with_identity(tmp_path: Path) -
     assert report.insights_ready == 0
     assert report.exit_code == 4
     assert report.failures == (
-        "bbb123DEF45 (Unavailable): ERROR: subtitles unavailable",
+        "bbb123DEF45 (Unavailable): ERROR: subtitles unavailable; "
+        "yt-dlp exited with status 1",
     )
+
+
+def test_execute_rejects_cache_directory_swapped_to_symlink(tmp_path: Path) -> None:
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    video = VideoInfo("aaa123DEF45", "Unsafe cache", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url,
+        data_paths=paths,
+        discovered=[video],
+    )
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    paths.root.mkdir()
+    paths.transcripts.symlink_to(outside, target_is_directory=True)
+
+    report = execute_acquisition(plan, refresh_indexes=False)
+
+    assert report.exit_code == 1
+    assert report.transcripts_ready == 0
+    assert report.failures[0].startswith("aaa123DEF45 (Unsafe cache):")
+    assert "symlink" in report.failures[0]
 
 
 def test_execute_all_failed_exits_one(tmp_path: Path) -> None:
@@ -160,6 +241,32 @@ def test_execute_all_failed_exits_one(tmp_path: Path) -> None:
 
     assert report.exit_code == 1
     assert report.transcripts_ready == 0
+
+
+def test_execute_preserves_downloader_error_when_vtt_was_written(tmp_path: Path) -> None:
+    video = VideoInfo("aaa123DEF45", "Partial", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url,
+        data_paths=DataPaths.from_root(tmp_path / "corpus"),
+        discovered=[video],
+    )
+
+    def partial_download(source: str, output_dir: Path, **_: object) -> DownloadResult:
+        output_dir.mkdir(parents=True)
+        vtt = output_dir / "20260820 - Partial [aaa123DEF45].fr.vtt"
+        vtt.write_text("WEBVTT\n", encoding="utf-8")
+        return DownloadResult(
+            vtt_files=[vtt], errors=["ERROR: metadata incomplete"], returncode=1
+        )
+
+    report = execute_acquisition(plan, download=partial_download, refresh_indexes=False)
+
+    assert report.transcripts_ready == 1
+    assert report.exit_code == 4
+    assert report.failures == (
+        "aaa123DEF45 (Partial): ERROR: metadata incomplete; "
+        "yt-dlp exited with status 1",
+    )
 
 
 def test_execute_refreshes_catalog_and_search_index_for_flat_inbox(tmp_path: Path) -> None:
@@ -195,6 +302,45 @@ def test_execute_refreshes_catalog_and_search_index_for_flat_inbox(tmp_path: Pat
     assert report.exit_code == 0
     assert paths.catalog_database.is_file()
     assert paths.search_database.is_file()
+
+
+def test_execute_rebuilds_full_index_beyond_default_fifty(tmp_path: Path) -> None:
+    from yt_insights.search.sqlite_fts import SQLiteFtsIndex
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    nested = paths.root / "bulk" / "transcripts"
+    nested.mkdir(parents=True)
+    for number in range(51):
+        video_id = f"bulk{number:07d}"
+        (nested / f"20260820 - Bulk {number} [{video_id}].fr.vtt").write_text(
+            "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nEvidence\n",
+            encoding="utf-8",
+        )
+
+    selected = VideoInfo("aaa123DEF45", "Selected", "20260820")
+    plan = build_acquisition_plan(
+        source=selected.watch_url,
+        data_paths=paths,
+        discovered=[selected],
+    )
+
+    def fake_download(source: str, output_dir: Path, **_: object) -> DownloadResult:
+        output_dir.mkdir(parents=True)
+        vtt = output_dir / "20260820 - Selected [aaa123DEF45].fr.vtt"
+        vtt.write_text(
+            "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nSelected evidence\n",
+            encoding="utf-8",
+        )
+        info = {"id": selected.video_id, "channel_id": "UCSelected", "channel": "Selected"}
+        (output_dir / "20260820 - Selected [aaa123DEF45].info.json").write_text(
+            json.dumps(info), encoding="utf-8"
+        )
+        return DownloadResult(vtt_files=[vtt])
+
+    report = execute_acquisition(plan, download=fake_download)
+
+    assert report.exit_code == 0
+    assert SQLiteFtsIndex(paths.search_database).status().documents_indexed == 52
 
 
 def test_execute_counts_cached_insight_without_resolving_backend(tmp_path: Path) -> None:

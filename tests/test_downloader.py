@@ -27,7 +27,13 @@ def test_list_videos_parses_metadata_and_uses_argument_vector(monkeypatch) -> No
         return subprocess.CompletedProcess(
             args=args,
             returncode=0,
-            stdout="20260223|Build reliable agents|nfupYzLjFGc\ninvalid\n",
+            stdout=json.dumps(
+                {
+                    "upload_date": "20260223",
+                    "title": "Build | reliable agents",
+                    "id": "nfupYzLjFGc",
+                }
+            ) + "\n",
             stderr="",
         )
 
@@ -38,7 +44,7 @@ def test_list_videos_parses_metadata_and_uses_argument_vector(monkeypatch) -> No
     assert videos == [
         VideoInfo(
             video_id="nfupYzLjFGc",
-            title="Build reliable agents",
+            title="Build | reliable agents",
             upload_date="20260223",
         )
     ]
@@ -46,9 +52,9 @@ def test_list_videos_parses_metadata_and_uses_argument_vector(monkeypatch) -> No
         (
             [
                 "yt-dlp",
-                "--flat-playlist",
-                "--print",
-                "%(upload_date)s|%(title)s|%(id)s",
+                "--dump-json",
+                "--skip-download",
+                "--no-flat-playlist",
                 "--ignore-errors",
                 "--cookies-from-browser",
                 "firefox",
@@ -191,7 +197,13 @@ def test_vtt_to_video_info_parses_date_title_and_video_id() -> None:
 
 def test_fetch_video_list_preserves_videos_and_external_errors() -> None:
     completed = SimpleNamespace(
-        stdout="20260820|Agentic Systems|abc123DEF45\nmalformed\n",
+        stdout=json.dumps(
+            {
+                "upload_date": "20260820",
+                "title": "Agentic | Systems",
+                "id": "abc123DEF45",
+            }
+        ) + "\n",
         stderr="WARNING: transient warning\nERROR: one item is unavailable\n",
         returncode=0,
     )
@@ -207,7 +219,7 @@ def test_fetch_video_list_preserves_videos_and_external_errors() -> None:
     assert result.errors == ["ERROR: one item is unavailable"]
     assert len(result.videos) == 1
     assert result.videos[0].video_id == "abc123DEF45"
-    assert result.videos[0].title == "Agentic Systems"
+    assert result.videos[0].title == "Agentic | Systems"
     assert result.videos[0].upload_date == "20260820"
     assert compatibility_videos == result.videos
 
@@ -242,3 +254,20 @@ def test_download_subtitles_exposes_nonzero_exit_without_error_line(
 
     assert result.returncode == 2
     assert result.errors == ["yt-dlp exited with status 2: connection refused"]
+
+
+def test_download_subtitles_rejects_symlink_output_before_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    link = tmp_path / "transcripts"
+    link.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(
+        downloader.subprocess,
+        "run",
+        lambda *args, **kwargs: pytest.fail("subprocess must not run"),
+    )
+
+    with pytest.raises(ValueError, match="symlink"):
+        download_subtitles("https://youtu.be/nfupYzLjFGc", link)

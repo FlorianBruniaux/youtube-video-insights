@@ -48,6 +48,30 @@ def _write_video_artifacts(
 
 
 class CatalogImportTests(unittest.TestCase):
+    def test_import_never_follows_symlinked_layout_or_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            corpus = base / "corpus"
+            outside = base / "outside"
+            outside_transcripts = outside / "transcripts"
+            outside_transcripts.mkdir(parents=True)
+            corpus.mkdir()
+            filename = f"20260820 - Outside [{VIDEO_ID}].fr.vtt"
+            outside_vtt = outside_transcripts / filename
+            outside_vtt.write_text("WEBVTT\n", encoding="utf-8")
+            (corpus / "escape").symlink_to(outside, target_is_directory=True)
+            flat = corpus / "transcripts"
+            flat.mkdir()
+            (flat / filename).symlink_to(outside_vtt)
+
+            with Catalog(base / "catalog.sqlite3") as catalog:
+                summary = catalog.import_corpus(corpus)
+                stats = catalog.stats()
+
+            self.assertEqual(summary.items_seen, 0)
+            self.assertEqual(stats.videos, 0)
+            self.assertEqual(stats.artifacts, 0)
+
     def test_import_includes_flat_inbox_and_nested_corpus_without_double_counting(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

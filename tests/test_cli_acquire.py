@@ -110,3 +110,29 @@ def test_invalid_years_is_click_usage_error() -> None:
         ["https://youtu.be/nfupYzLjFGc", "--years", "2025,nope"],
     )
     assert result.exit_code == 2
+
+
+def test_batch_cli_discovers_snapshot_urls_never_original_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    batch = tmp_path / "urls.txt"
+    batch.write_text("https://youtu.be/aaa123DEF45\n", encoding="utf-8")
+    calls: list[str] = []
+
+    def fake_fetch(source: str, **kwargs: object) -> VideoListResult:
+        calls.append(source)
+        return VideoListResult(
+            videos=[VideoInfo("aaa123DEF45", "Snapshot", "20260820")]
+        )
+
+    monkeypatch.setattr(cli_acquire, "fetch_video_list", fake_fetch)
+    result = CliRunner().invoke(
+        cli_acquire.acquire,
+        [str(batch), "--dry-run", "--json", "--data-root", str(tmp_path / "corpus")],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert calls == ["https://youtu.be/aaa123DEF45"]
+    assert json.loads(result.output)["selected_urls"] == [
+        "https://youtu.be/aaa123DEF45"
+    ]

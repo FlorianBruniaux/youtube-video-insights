@@ -7,7 +7,13 @@ from pathlib import Path
 
 import click
 
-from .acquisition import build_acquisition_plan, classify_source, execute_acquisition
+from .acquisition import (
+    SourceKind,
+    build_acquisition_plan,
+    classify_source,
+    execute_acquisition,
+    read_batch_snapshot,
+)
 from .config import load_config
 from .downloader import fetch_video_list
 
@@ -53,13 +59,28 @@ def acquire(
 ) -> None:
     """Discover SOURCE, print its plan, then acquire only after confirmation."""
     try:
-        classify_source(source)
+        source_kind = classify_source(source)
         selected_years = _years(years)
     except (ValueError, click.BadParameter) as exc:
         raise click.BadParameter(str(exc), param_hint="SOURCE" if isinstance(exc, ValueError) else "--years") from exc
 
     config = load_config({"data_root": data_root})
-    discovery = fetch_video_list(source, cookies_from_browser=cookies_from_browser)
+    snapshot_urls: tuple[str, ...] = ()
+    discovery_sources = (source,)
+    if source_kind is SourceKind.BATCH:
+        try:
+            snapshot_urls = read_batch_snapshot(Path(source))
+        except ValueError as exc:
+            raise click.BadParameter(str(exc), param_hint="SOURCE") from exc
+        discovery_sources = snapshot_urls
+    discovered: list = []
+    discovery_errors: list[str] = []
+    for discovery_source in discovery_sources:
+        result = fetch_video_list(
+            discovery_source, cookies_from_browser=cookies_from_browser
+        )
+        discovered.extend(result.videos)
+        discovery_errors.extend(result.errors)
     try:
         plan = build_acquisition_plan(
             source=source,
@@ -68,8 +89,9 @@ def acquire(
             years=selected_years,
             language=language,
             analyze=analyze,
-            discovered=discovery.videos,
-            discovery_errors=discovery.errors,
+            discovered=discovered,
+            discovery_errors=discovery_errors,
+            source_urls=snapshot_urls,
         )
     except ValueError as exc:
         raise click.BadParameter(str(exc), param_hint="--slug") from exc
