@@ -1,0 +1,182 @@
+[
+  {
+    "prompt": "Récupère le transcript de https://youtu.be/nfupYzLjFGc dans mon corpus",
+    "expected": "youtube-acquire"
+  },
+  {
+    "prompt": "Ajoute la chaîne @AnthropicAI à yt-insights",
+    "expected": "youtube-acquire"
+  },
+  {
+    "prompt": "Télécharge les sous-titres français de cette playlist YouTube : https://www.youtube.com/playlist?list=PL1234567890",
+    "expected": "youtube-acquire"
+  },
+  {
+    "prompt": "Ingère la vidéo dQw4w9WgXcQ sans lancer d'analyse LLM",
+    "expected": "youtube-acquire"
+  },
+  {
+    "prompt": "Va chercher les vidéos publiées cette semaine sur cette chaîne YouTube et ajoute-les au corpus",
+    "expected": "youtube-acquire"
+  },
+  {
+    "prompt": "Download the transcript for https://www.youtube.com/watch?v=nfupYzLjFGc into my local corpus",
+    "expected": "youtube-acquire"
+  },
+  {
+    "prompt": "Ingest every video from the YouTube channel @Fireship published after 2026-01-01",
+    "expected": "youtube-acquire"
+  },
+  {
+    "prompt": "Add this YouTube playlist to yt-insights, preferring English captions",
+    "expected": "youtube-acquire"
+  },
+  {
+    "prompt": "Fetch captions for video ID aqz-KE-bpKQ and index them locally",
+    "expected": "youtube-acquire"
+  },
+  {
+    "prompt": "Import the latest three uploads from this YouTube channel into my research corpus",
+    "expected": "youtube-acquire"
+  },
+  {
+    "prompt": "Trouve dans mon corpus les passages sur les hooks Claude Code",
+    "expected": "youtube-research"
+  },
+  {
+    "prompt": "Dans quelles vidéos locales parle-t-on de MCP et à quels timestamps ?",
+    "expected": "youtube-research"
+  },
+  {
+    "prompt": "Compare ce que les chaînes Anthropic et OpenAI disent des agents dans les transcripts indexés",
+    "expected": "youtube-research"
+  },
+  {
+    "prompt": "Retrouve la source vidéo de la citation « context is a finite resource » dans yt-insights",
+    "expected": "youtube-research"
+  },
+  {
+    "prompt": "Liste les vidéos de mon corpus qui abordent la recherche hybride",
+    "expected": "youtube-research"
+  },
+  {
+    "prompt": "Search my local YouTube corpus for passages about prompt caching",
+    "expected": "youtube-research"
+  },
+  {
+    "prompt": "Which indexed video mentions SQLite FTS5, and what is the timestamped URL?",
+    "expected": "youtube-research"
+  },
+  {
+    "prompt": "Compare the source-backed claims about local LLMs across these two channels",
+    "expected": "youtube-research"
+  },
+  {
+    "prompt": "Find the original video and excerpt for this quote in my transcript index",
+    "expected": "youtube-research"
+  },
+  {
+    "prompt": "What evidence does my yt-insights corpus contain about coding agent benchmarks?",
+    "expected": "youtube-research"
+  },
+  {
+    "prompt": "Exporte nfupYzLjFGc en Markdown pour mon article",
+    "expected": "youtube-export"
+  },
+  {
+    "prompt": "Prépare la matière de cette vidéo déjà indexée dans un fichier texte",
+    "expected": "youtube-export"
+  },
+  {
+    "prompt": "Sauvegarde le transcript français de dQw4w9WgXcQ au format VTT",
+    "expected": "youtube-export"
+  },
+  {
+    "prompt": "Crée une archive Markdown du transcript existant avec ses timestamps et sa source",
+    "expected": "youtube-export"
+  },
+  {
+    "prompt": "Exporte cette vidéo de mon corpus en texte brut pour que je puisse rédiger un billet",
+    "expected": "youtube-export"
+  },
+  {
+    "prompt": "Export video nfupYzLjFGc as Markdown for my article notes",
+    "expected": "youtube-export"
+  },
+  {
+    "prompt": "Save the existing English transcript as a plain-text source file",
+    "expected": "youtube-export"
+  },
+  {
+    "prompt": "Create a VTT export of this indexed video without downloading it again",
+    "expected": "youtube-export"
+  },
+  {
+    "prompt": "Turn the transcript already in yt-insights into a Markdown research archive",
+    "expected": "youtube-export"
+  },
+  {
+    "prompt": "Export the French caption track for aqz-KE-bpKQ and give me the output path",
+    "expected": "youtube-export"
+  },
+  {
+    "prompt": "Corrige le composant React de mon lecteur YouTube",
+    "expected": "none"
+  },
+  {
+    "prompt": "Optimise le SEO de ma prochaine vidéo YouTube",
+    "expected": "none"
+  },
+  {
+    "prompt": "Monte cette vidéo et ajoute des sous-titres animés",
+    "expected": "none"
+  },
+  {
+    "prompt": "Propose dix titres accrocheurs pour ma vidéo sur Claude Code",
+    "expected": "none"
+  },
+  {
+    "prompt": "J'ai regardé une vidéo sur les agents hier, qu'en penses-tu ?",
+    "expected": "none"
+  },
+  {
+    "prompt": "Scrape les prix de cette boutique en ligne",
+    "expected": "none"
+  },
+  {
+    "prompt": "Recherche cette expression dans mon corpus de PDF scientifiques",
+    "expected": "none"
+  },
+  {
+    "prompt": "Écris le script Python qui génère une miniature YouTube",
+    "expected": "none"
+  },
+  {
+    "prompt": "Ajoute un bouton YouTube dans la navbar de mon site",
+    "expected": "none"
+  },
+  {
+    "prompt": "Analyse les statistiques de rétention de ma chaîne dans YouTube Studio",
+    "expected": "none"
+  },
+  {
+    "prompt": "Fix the autoplay bug in our embedded YouTube player",
+    "expected": "none"
+  },
+  {
+    "prompt": "Write an SEO description and tags for my next YouTube upload",
+    "expected": "none"
+  },
+  {
+    "prompt": "Trim the first 30 seconds and color-grade this video file",
+    "expected": "none"
+  },
+  {
+    "prompt": "Scrape the speaker list from this conference website",
+    "expected": "none"
+  },
+  {
+    "prompt": "Find mentions of MCP in my local Slack message archive",
+    "expected": "none"
+  }
+]
