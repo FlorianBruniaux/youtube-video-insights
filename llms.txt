@@ -12,18 +12,24 @@ License: MIT
 
 1. Analyze a source with an LLM:
    `yt-insights run SOURCE`
-2. Import an existing corpus without an LLM:
+2. Inspect the local runtime without writes or completion calls:
+   `yt-insights doctor --json [--probe-backends]`
+3. Preview or acquire subtitles and metadata:
+   `yt-insights acquire SOURCE [--dry-run] [--yes] [--slug SLUG]`
+4. Export one transcript without an LLM:
+   `yt-insights export video VIDEO_OR_URL [--format vtt|txt|md]`
+5. Import an existing corpus without an LLM:
    `yt-insights catalog import-corpus CORPUS_ROOT`
-3. Discover video metadata without downloading media:
+6. Discover video metadata without downloading media:
    `yt-insights catalog discover SOURCE`
-4. Search the local catalog:
+7. Search the local catalog:
    `yt-insights catalog search QUERY [--source SLUG] [--limit N]`
-5. Build and search timestamped transcript passages:
+8. Build and search timestamped transcript passages:
    `yt-insights index [--all|--status|--dry-run]`
    `yt-insights search QUERY [--channel ID] [--lang CODE] [--limit N]`
-6. Expose transcript search to a local LLM client:
+9. Expose the corpus to a local LLM client:
    `yt-insights-mcp`
-7. Audit local catalog state:
+10. Audit local catalog state:
    `yt-insights catalog stats`
    `yt-insights catalog errors [--run-id N]`
 
@@ -31,9 +37,19 @@ The catalog defaults to `output/catalog.sqlite3`. Timestamped passage search
 defaults to `output/.search/search-v1.sqlite3`. Both databases are derived and
 gitignored. The VTT files remain the source of truth.
 
+For use outside this repository, configure one absolute `data_root` in
+`~/.config/yt-insights/config.toml` or `YT_INSIGHTS_DATA_ROOT`. Precedence is
+CLI override, environment, TOML, then `output` relative to the current working
+directory. Named database options override the derived paths per command.
+
 ## Module map
 
 - `src/yt_insights/cli.py`: Click command surface.
+- `src/yt_insights/cli_doctor.py`: no-write, secret-safe runtime diagnostics.
+- `src/yt_insights/cli_acquire.py`: preview-first acquisition adapter.
+- `src/yt_insights/acquisition.py`: bounded acquisition plans and publication.
+- `src/yt_insights/cli_export.py`: deterministic export command group.
+- `src/yt_insights/exporter.py`: VTT, text, and sourced Markdown exports.
 - `src/yt_insights/downloader.py`: yt-dlp subprocess adapter and structured
   discovery/download results.
 - `src/yt_insights/cleaner.py`: VTT text cleaning. Preserve its existing
@@ -51,7 +67,7 @@ gitignored. The VTT files remain the source of truth.
 - `src/yt_insights/search/sqlite_fts.py`: atomic timestamped FTS5 index,
   SHA-256 generation receipt, validation, and passage lookup.
 - `src/yt_insights/search/service.py`: shared read-only search service.
-- `src/yt_insights/mcp_server.py`: closed-world MCP facade with exactly two
+- `src/yt_insights/mcp_server.py`: closed-world MCP facade with exactly four
   read-only tools.
 - `src/yt_insights/mcp_entrypoint.py`: optional MCP console entrypoint.
 - `src/yt_insights/config.py`: defaults, TOML, environment variables, and CLI
@@ -100,10 +116,26 @@ call. Timestamped FTS search indexes the full VTT content independently.
 - The generation receipt binds the index `generation_id` to the database
   SHA-256. Validation is cached only while device, inode, size, mtime, and ctime
   remain unchanged.
-- CLI and MCP use the same `SearchService`; the MCP exposes only
-  `search_passages` and `get_passage`.
+- CLI and MCP use the same `SearchService`; the MCP exposes, in order,
+  `list_corpora`, `search_videos`, `search_passages`, and `get_passage`.
 - `catalog.sqlite3` is an inventory database. It never supplies timestamped
   passages to `search-v1.sqlite3`.
+
+## Agent runtime contract
+
+- `doctor --json` does not create corpus paths, call a completion endpoint, or
+  reveal configured secret values. Optional probes target localhost only.
+- `acquire --dry-run` writes nothing. Channel, playlist, and batch execution
+  requires `--yes`; a single video does not.
+- Acquisition downloads subtitles and metadata. It invokes an LLM only with
+  `--analyze`.
+- `export video` resolves one exact video. VTT preserves source bytes, TXT is
+  cleaned text, and Markdown contains source identity, canonical URL, SHA-256,
+  and timestamps.
+- `YT_INSIGHTS_SEARCH_DATABASE` and `YT_INSIGHTS_CATALOG_DATABASE` select the
+  two MCP databases. If absent, paths derive from the configured data root.
+- No command in this runtime transcribes audio. YouTube VTT remains the text
+  source.
 
 ## Constraints
 
@@ -118,6 +150,9 @@ call. Timestamped FTS search indexes the full VTT content independently.
   extraction, summarization, newsletter angles, and optional reranking.
 - Keep the MCP layer thin: it must call the same Python transcript search
   service as the CLI instead of duplicating storage or query logic.
+- Backend choice is irrelevant to acquisition without `--analyze`, doctor,
+  export, index, search, and MCP. For LLM analysis, an explicit endpoint plus
+  exact model takes priority over cc-bridge, Ollama, and Anthropic detection.
 
 ## Current state
 
@@ -131,17 +166,18 @@ Implemented:
 - FTS5 search and source filtering;
 - durable run and error history;
 - timestamped full-corpus FTS5 indexing and passage search;
-- read-only MCP tools for search and passage retrieval;
+- stable absolute data-root resolution and derived corpus paths;
+- secret-safe runtime diagnostics;
+- preview-first acquisition with confirmation for multi-video sources;
+- deterministic VTT, text, and Markdown transcript exports;
+- four read-only MCP tools for corpus, video, and passage research;
 - backend/model identity reporting and secret-safe endpoint display;
-- clean-source wheel smoke tests and 258 automated tests on commit `4124f42`.
+- clean-source wheel smoke tests for minimal and MCP installations outside the
+  checkout.
 
 Planned:
 
 - human relevance review for the frozen P2 search artifact;
-- a cwd-independent data root and secret-safe `doctor --json` command;
-- safe `acquire` preview/confirmation and deterministic `export video` commands;
-- four read-only MCP tools: corpus listing, video search, passage search, and
-  passage retrieval;
 - three portable YouTube skills plus native read-only researcher agents for
   Claude Code and Codex;
 - a digest-bound, reversible global installation only after explicit approval;

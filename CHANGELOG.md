@@ -15,10 +15,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   language and channel filters, timestamps, and direct YouTube links.
 - Full-corpus indexing with a disk-capacity preflight, representative 50-file
   selection, deterministic passage identities, and atomic SQLite publication.
-- Read-only MCP server with two closed-world tools, `search_passages` and
-  `get_passage`, backed by the same search service as the CLI.
+- Read-only MCP server with four closed-world tools: `list_corpora`,
+  `search_videos`, `search_passages`, and `get_passage`. Catalog and passage
+  search keep their separate SQLite sources.
+- Agent-facing `doctor --json`, `acquire`, and `export video` commands. Doctor
+  is secret-safe and no-write; multi-video acquisition requires confirmation;
+  export emits VTT, cleaned text, or sourced timestamped Markdown without an
+  LLM.
+- One configurable `data_root` that derives transcript, insight, export,
+  catalog, and search paths independently of the caller's working directory.
 - Optional `mcp` dependency, `yt-insights-mcp` entrypoint, versioned `uv.lock`,
-  clean-source wheel smoke test, and reproducible search benchmark script.
+  clean-source wheel smoke test, and reproducible search benchmark script. The
+  wheel smoke now installs both minimal and MCP variants outside the checkout,
+  exercises the five agent-facing commands, and calls all four MCP tools.
 - SHA-256 generation receipts for derived search indexes. Each process validates
   the database content on first access and invalidates its cache when the file
   identity or `ctime` changes.
@@ -69,6 +78,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - README, installation guide, roadmap, changelog, plan index, and `llms.txt`
   now distinguish `catalog.sqlite3` from the timestamped `search-v1.sqlite3`
   index.
+- README, installation guide, changelog, roadmap, and `llms.txt` now document
+  data-root precedence, acquisition confirmation, export formats, MCP database
+  variables, explicit backend scope, and the absence of audio transcription.
 - The full-corpus evidence records 3,270 documents, 183,789 passages, a
   48.75-second build, 13.81 ms warm p95, and 258 passing tests on the measured
   development snapshot. Editorial relevance remains unreviewed.

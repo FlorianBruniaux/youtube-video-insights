@@ -6,8 +6,21 @@ import subprocess
 import sys
 import tomllib
 
+from click.testing import CliRunner
+
+from yt_insights.cli import cli
+
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_installed_cli_contract_exposes_agent_facing_commands() -> None:
+    result = CliRunner().invoke(cli, ["--help"])
+
+    assert result.exit_code == 0, result.output
+    for command in ("doctor", "acquire", "export", "index", "search"):
+        assert command in cli.commands
+        assert command in result.output
 
 
 def test_package_version_matches_project_metadata() -> None:
@@ -160,6 +173,28 @@ def test_wheel_smoke_copies_only_current_build_inputs(tmp_path: Path) -> None:
     assert not (copied_source / "build").exists()
     assert not tuple((copied_source / "src").glob("*.egg-info"))
     assert not tuple((copied_source / "src").rglob("__pycache__"))
+
+
+def test_wheel_smoke_rejects_a_working_directory_inside_the_checkout(
+    tmp_path: Path,
+) -> None:
+    script = REPOSITORY_ROOT / "scripts" / "smoke_wheel.py"
+    specification = importlib.util.spec_from_file_location("smoke_wheel", script)
+    assert specification is not None and specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    module._require_outside_checkout(outside)
+
+    inside = REPOSITORY_ROOT / "tests"
+    try:
+        module._require_outside_checkout(inside)
+    except module.SmokeFailure as error:
+        assert "outside the source checkout" in str(error)
+    else:
+        raise AssertionError("the smoke accepted a working directory inside the checkout")
 
 
 def test_install_guide_documents_reproducible_base_and_mcp_setups() -> None:

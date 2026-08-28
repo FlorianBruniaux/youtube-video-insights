@@ -2,7 +2,8 @@
 
 **Mise à jour :** 2026-08-28
 **Statut du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**Statut du lot Claude Code et Codex :** `PLANIFIÉ, NON IMPLÉMENTÉ`.
+**Statut du runtime pour Claude Code et Codex :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
+**Statut des skills, agents et de l'installation globale :** `PLANIFIÉ, NON IMPLÉMENTÉ`.
 **Readiness éditoriale :** `UNKNOWN` ; ce statut bloque la promotion produit, pas l'implémentation autorisée.
 
 La CLI, l'index complet et le MCP sont utilisables localement. Le statut
@@ -96,20 +97,20 @@ preview obligatoire pour channel/playlist
         3 skills + agent     3 skills + agent
 ```
 
-### Lots à construire
+### Suivi des lots
 
-| Vague | Apport concret | Dépendance | Gate |
+| Vague | Statut | Apport concret | Gate |
 |---|---|---|---|
-| A1 | Un `data_root` absolu et stable, utilisable hors du repo | Aucune | Même corpus depuis deux répertoires différents |
-| A2 | `doctor --json` secret-safe | A1 | Aucun secret affiché, corpus et dépendances diagnostiqués |
-| A3 | `acquire` unifié avec preview et confirmation des volumes | A1 | Aucun channel ou playlist sans confirmation explicite |
-| A4 | `export video` en VTT, TXT et Markdown sans LLM | A1 | Sortie déterministe avec URL et timestamps |
-| B1 | MCP étendu de deux à quatre outils read-only | A1, A3 | Aucun outil de mutation ou lecture arbitraire |
-| B2 | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | A3, A4, B1 | Même comportement dans Claude Code et Codex |
-| B3 | Agents chercheurs natifs et routage évalué | B1, B2 | 27/30 positifs minimum, 0/15 négatifs |
-| C1 | Candidats globaux immuables avec diffs expurgés et rollback | B1 à B3 | Trois digests approuvables, aucune écriture globale |
-| C2 | Runtime, config, skills, agents et MCP globaux | Trois approbations exactes | Même corpus depuis deux cwd, parité de cinq requêtes et restauration testée |
-| D1 | Choix explicite Ollama, MLX, cc-bridge ou remote | Hors chemin critique | Backend réellement résolu, canari MLX séparé |
+| A1 | `TERMINÉ` | Un `data_root` absolu et stable, utilisable hors du repo | Même corpus depuis deux répertoires différents |
+| A2 | `TERMINÉ` | `doctor --json` secret-safe | Aucun secret affiché, aucune écriture, diagnostics locaux |
+| A3 | `TERMINÉ` | `acquire` unifié avec preview et confirmation des volumes | Aucun channel, playlist ou batch sans confirmation explicite |
+| A4 | `TERMINÉ` | `export video` en VTT, TXT et Markdown sans LLM | Sortie déterministe avec URL, identité source et timestamps |
+| B1 | `TERMINÉ` | MCP étendu de deux à quatre outils read-only | Smoke réel sur les quatre outils, aucun outil de mutation |
+| B2 | `À FAIRE` | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | Même comportement dans Claude Code et Codex |
+| B3 | `À FAIRE` | Agents chercheurs natifs et routage évalué | 27/30 positifs minimum, 0/15 négatifs |
+| C1 | `À FAIRE` | Candidats globaux immuables avec diffs expurgés et rollback | Trois digests approuvables, aucune écriture globale |
+| C2 | `BLOQUÉ PAR APPROBATION` | Runtime, config, skills, agents et MCP globaux | Même corpus depuis deux cwd, parité de cinq requêtes et restauration testée |
+| D1 | `OPTIONNEL` | Choix explicite Ollama, MLX, cc-bridge ou remote | Backend réellement résolu, canari MLX séparé |
 
 Les détails exécutables sont dans le [plan runtime](plans/2026-08-28-09-agent-ready-runtime.md), le [plan d'intégration globale](plans/2026-08-28-10-claude-codex-global-integration.md) et le [suivi parallèle](plans/PARALLEL-SESSIONS.md).
 
@@ -154,13 +155,12 @@ index dérivés, ouverts uniquement par un corpus de questions en échec.
 
 | Priorité | Décision | Critère de sortie |
 |---:|---|---|
-| 1 | Implémenter la vague A du runtime agentique | Chemins absolus, doctor sûr, acquisition avec preview, export déterministe |
-| 2 | Implémenter B1 à B3 en parallèle | MCP quatre outils, trois skills, deux agents et corpus de routage au vert |
-| 3 | Construire les trois candidats globaux C1 | Runtime, shared et integrations ont chacun diff expurgé, digest, test inerte et rollback |
-| 4 | Installer C2 après approbation explicite | Claude Code et Codex neufs voient les mêmes skills, agent et corpus |
-| 5 | Revoir humainement l'artefact P2 sur un article réel | Statut `PASS` ou `FAIL`, passages conservés et frictions consignées |
-| 6 | Activer ou rejeter le lot hébergé | Au moins un déclencheur du plan H est prouvé |
-| 7 | Étudier hybride, graphe ou Qdrant | Échec mesuré de FTS5 ou limite SQLite reproduite |
+| 1 | Implémenter B2 et B3 en parallèle | Trois skills, deux agents et corpus de routage au vert |
+| 2 | Construire les trois candidats globaux C1 | Runtime, shared et integrations ont chacun diff expurgé, digest, test inerte et rollback |
+| 3 | Installer C2 après approbation explicite | Claude Code et Codex neufs voient les mêmes skills, agent et corpus |
+| 4 | Revoir humainement l'artefact P2 sur un article réel | Statut `PASS` ou `FAIL`, passages conservés et frictions consignées |
+| 5 | Activer ou rejeter le lot hébergé | Au moins un déclencheur du plan H est prouvé |
+| 6 | Étudier hybride, graphe ou Qdrant | Échec mesuré de FTS5 ou limite SQLite reproduite |
 
 ## Documents de référence
 

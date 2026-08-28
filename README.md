@@ -6,8 +6,9 @@
 Turn YouTube channels into a local, searchable research corpus: transcripts,
 structured insights, SQLite/FTS5 search, reports, and Shorts.
 
-The current implementation can index every timestamped VTT passage and expose
-the same search through the CLI or two read-only MCP tools. See the
+The current implementation can acquire YouTube subtitles, export sourced text,
+index every timestamped VTT passage, and expose the corpus through the CLI or
+four read-only MCP tools. See the
 [implementation status, diagram, and test guide](docs/IMPLEMENTATION-STATUS.md).
 
 ![yt-insights workflow: YouTube channels, playlists, and videos become transcripts, structured insights, a deduplicated SQLite/FTS5 index, search results, reports, and Short suggestions.](docs/assets/yt-insights-workflow.jpg)
@@ -18,11 +19,15 @@ the same search through the CLI or two read-only MCP tools. See the
 
 | Goal | Command | Result |
 |---|---|---|
+| Check a local installation | `yt-insights doctor --json` | Secret-safe dependency, corpus, index, catalog, and optional backend status |
+| Preview an acquisition | `yt-insights acquire URL --dry-run --json` | Selected videos and exclusions, with no corpus write |
+| Acquire one channel | `yt-insights acquire URL --slug NAME --yes` | VTT and metadata under the configured data root |
+| Export one transcript | `yt-insights export video VIDEO_ID --format md` | Sourced VTT, text, or timestamped Markdown |
 | Analyze a channel | `yt-insights run https://www.youtube.com/@ChannelName` | Transcripts, structured insights, and an aggregate report |
 | Index an existing corpus | `yt-insights catalog import-corpus ./output` | One deduplicated SQLite catalog with durable import errors |
 | Build the timestamped search index | `yt-insights index --all` | A derived FTS5 index over every VTT passage |
 | Find a sourced passage | `yt-insights search "AI product discovery"` | Ranked excerpts, timestamps, and direct YouTube links |
-| Query from an LLM client | `yt-insights-mcp` | Read-only `search_passages` and `get_passage` tools |
+| Query from an LLM client | `yt-insights-mcp` | Four read-only corpus, video, and passage tools |
 
 Analysis uses a local or cloud LLM. Catalog import, transcript indexing, and
 both search commands do not. Repeated runs reuse analysis caches and avoid
@@ -42,8 +47,14 @@ video, with verbatim text and precise timestamps. After you choose one,
 `yt-dlp` downloads that segment instead of the full video.
 
 Use it for content research, competitive monitoring, editorial analysis, or
-building a searchable source library across several channels. The exported JSON
-and VTT files can also feed downstream RAG or dataset workflows.
+building a searchable source library across several channels. Deterministic
+exports in VTT, text, or Markdown can feed an article, a RAG pipeline, or a
+dataset without asking an LLM to rewrite the source.
+
+yt-insights uses subtitles already exposed as VTT by YouTube. It does not
+download audio for transcription. Audio transcription remains outside the
+runtime because it would add media downloads, compute cost, and a second text
+source without a demonstrated missing-subtitle use case.
 
 ---
 
@@ -180,6 +191,19 @@ For a machine with no local LLM (no Ollama, no GPU), see [INSTALL.md](INSTALL.md
 ## Quick start
 
 ```bash
+# Use one absolute corpus from any working directory
+export YT_INSIGHTS_DATA_ROOT="$HOME/Library/Application Support/yt-insights/corpus"
+
+# Validate the local runtime without changing the corpus or calling an LLM
+yt-insights doctor --json
+
+# Preview first. Channel, playlist, and batch acquisition require --yes.
+yt-insights acquire https://www.youtube.com/@DevWithAIYoutube --dry-run --json
+yt-insights acquire https://www.youtube.com/@DevWithAIYoutube --slug dev-with-ai --yes
+
+# Export source material without an LLM
+yt-insights export video VIDEO_ID --format md
+
 # Full pipeline: download subtitles + analyze + aggregate report
 yt-insights run https://www.youtube.com/@DevWithAIYoutube
 
@@ -220,6 +244,24 @@ Resolved backend: backend=ollama endpoint=http://127.0.0.1:11434/v1 model=qwen3:
   Full       → output/insights/FULL_REPORT.md
 Done.
 ```
+
+`data_root` resolves in this order: command override where available,
+`YT_INSIGHTS_DATA_ROOT`, `~/.config/yt-insights/config.toml`, then `output`
+relative to the current directory. Configure an absolute TOML or environment
+path for use from Claude Code, Codex, cron, or unrelated repositories. Explicit
+`--corpus-root` and `--database` values on index/search commands override the
+derived paths for that invocation.
+
+`acquire` downloads subtitles and metadata. It calls no LLM unless `--analyze`
+is present. A channel, playlist, or batch file exits with code 3 before download
+unless `--yes` is supplied; `--dry-run` always stops before corpus writes. A
+single-video URL does not need `--yes`.
+
+`export video` accepts an exact video ID or supported YouTube URL. `vtt` copies
+the source bytes, `txt` emits cleaned transcript text, and `md` includes source
+identity, language, canonical URL, SHA-256, and timestamped passages. The
+default destination is `<data_root>/exports`; `--output` selects one file and
+`--force` is required to replace it.
 
 ## Local watch catalog (SQLite)
 
@@ -307,6 +349,7 @@ LLM client:
 ```bash
 uv sync --extra mcp --extra dev
 uv run yt-insights index --all
+uv run yt-insights catalog import-corpus "$YT_INSIGHTS_DATA_ROOT"
 ```
 
 ```json
@@ -317,16 +360,18 @@ uv run yt-insights index --all
       "args": ["run", "yt-insights-mcp"],
       "cwd": "/absolute/path/to/youtube-video-insights",
       "env": {
-        "YT_INSIGHTS_SEARCH_DATABASE": "/absolute/path/to/youtube-video-insights/output/.search/search-v1.sqlite3"
+        "YT_INSIGHTS_SEARCH_DATABASE": "/absolute/corpus/.search/search-v1.sqlite3",
+        "YT_INSIGHTS_CATALOG_DATABASE": "/absolute/corpus/catalog.sqlite3"
       }
     }
   }
 }
 ```
 
-The server exposes two read-only tools: `search_passages` and `get_passage`.
-It reads the database selected by `YT_INSIGHTS_SEARCH_DATABASE`, or
-`output/.search/search-v1.sqlite3` by default.
+The server exposes exactly four read-only tools in this order:
+`list_corpora`, `search_videos`, `search_passages`, and `get_passage`. Set both
+database variables to absolute paths for a client launched outside the repo.
+When one is absent, the server derives it from the configured `data_root`.
 
 ---
 
@@ -360,7 +405,9 @@ Automatic detection order when no endpoint was configured:
 | 2 | Ollama | `ollama serve` | exact requested model, or automatic local selection |
 | 3 | Anthropic API | `export ANTHROPIC_API_KEY=sk-...` | `claude-haiku-4-5` |
 
-Override model and endpoint via flags:
+Backend selection matters only for `run`, `report`, `suggest-shorts`, or
+`acquire --analyze`. Acquisition without analysis, indexing, search, export,
+and MCP use no LLM. Override model and endpoint via flags:
 
 ```bash
 yt-insights run <url> --model claude-sonnet-4-6 --base-url https://api.anthropic.com/v1
@@ -374,6 +421,12 @@ selection happens only when no model was requested. Use both
 alone keeps the normal detection order, including cc-bridge before Ollama.
 
 **cc-bridge model ID gotcha**: use the gateway format `anthropic/{provider}/{model}` (e.g. `anthropic/github_copilot/gpt-5-mini`) to route directly to the named provider via cc-bridge's stored credentials. A plain model ID (e.g. `claude-haiku-4-5`) uses cc-bridge's `active_route`. The probe requires `/health` to return 200 and the minimal completion to return 2xx or 3xx. A 4xx, 429, or 5xx response falls back to Ollama, then Anthropic when its API key is available.
+
+Set `--base-url http://127.0.0.1:4141/v1` with the gateway model ID to force
+cc-bridge as an explicit compatible endpoint. The current resolver has no named
+`--backend anthropic` switch: default Anthropic remains the last automatic
+choice, while a non-default compatible cloud endpoint can be forced with
+`--base-url`, `--model`, and its API key.
 
 **MLX status**: `MLXBackend` (`backends/mlx.py`) is not currently wired into the auto-detection logic in `backends/__init__.py`. `--base-url mlx` does not select it. Installing the `mlx` extra does not change that limitation.
 
@@ -437,6 +490,20 @@ yt-insights config init
 
   Create ~/.config/yt-insights/config.toml with all defaults commented.
 
+yt-insights doctor [--json] [--probe-backends]
+
+  Inspect dependencies and local corpus state without writes or completion calls.
+  Backend probes, when requested, are limited to localhost cc-bridge and Ollama.
+
+yt-insights acquire SOURCE [--dry-run] [--yes] [--slug NAME] [--years LIST]
+
+  Preview or acquire a video, channel, playlist, or bounded batch file.
+  Channel, playlist, and batch execution require --yes.
+
+yt-insights export video VIDEO_OR_URL [--format vtt|txt|md] [--lang CODE]
+
+  Export one source transcript. Existing targets require --force.
+
 yt-insights index [--dry-run|--status|--all]
 
   Build or validate the timestamped SQLite transcript index.
@@ -471,6 +538,8 @@ output/
     INDEX.md                                  # table sorted across talks
   clips/
     talk-title_000510.mp4                     # downloaded segment
+  exports/
+    VIDEO_ID.en.md                            # sourced, timestamped transcript export
   catalog.sqlite3                             # inventory database
   .search/search-v1.sqlite3                   # timestamped passage index
 ```
@@ -585,7 +654,10 @@ All keys are optional. CLI flags and `YT_INSIGHTS_*` env vars take precedence ov
 | Local catalog | SQLite storage for canonical videos, sources, transcripts, insights, runs, and errors |
 | Full-text search | FTS5 across titles, sources, insight text, and cleaned transcripts |
 | Timestamped passage index | Full VTT corpus in `search-v1.sqlite3`, with deterministic excerpts and YouTube links |
-| MCP access | Read-only `search_passages` and `get_passage` tools over the same search service as the CLI |
+| Safe acquisition | Dry-run plan plus explicit confirmation for channel, playlist, and batch writes |
+| Deterministic export | VTT, cleaned text, or sourced Markdown without an LLM |
+| Runtime doctor | Secret-safe, no-write diagnostics with optional localhost-only probes |
+| MCP access | Exactly four read-only corpus, video, search, and passage tools |
 | Index integrity | Generation receipt bound to the database SHA-256; cached validation invalidated by file identity and `ctime` |
 | Backend identity | CLI reports the resolved backend, endpoint, and exact model without exposing URL credentials |
 | LLM input visibility | CLI reports used and total transcript characters before each real generation call |
@@ -601,13 +673,13 @@ The architecture rationale and implementation sequence live under
 The [implementation status](docs/IMPLEMENTATION-STATUS.md) separates delivered
 features, conditional work, and reproducible validation commands.
 
-### Planned portable agent integration
+### Portable agent integration status
 
-The current project contains Claude Code wrappers, but they still assume the
-repository workflow and do not provide equivalent Codex integration. The next
-implementation lot will add one absolute data root, safe acquisition and export
-commands, four read-only MCP tools, three shared skills, and one native
-researcher agent for each host.
+The packaged runtime now provides one configurable absolute data root,
+secret-safe diagnostics, safe acquisition, deterministic export, and four
+read-only MCP tools. The repository still needs the portable shared skills,
+native Claude Code and Codex agents, routing evaluation, and separately
+approved global installation described by the next plan.
 
 | Document | Purpose |
 |---|---|
@@ -616,8 +688,9 @@ researcher agent for each host.
 | [Claude Code and Codex integration plan](plans/2026-08-28-10-claude-codex-global-integration.md) | Portable skills, native agents, routing evaluation and digest-bound global installation |
 | [Hosted service and extension plan](plans/2026-08-28-11-hosted-extension.md) | Conditional browser and remote-access path |
 
-These features are planned, not delivered. No global Claude Code or Codex
-configuration is installed by the current repository setup.
+The runtime plan is implemented through the package smoke gate. No global
+Claude Code or Codex configuration is installed by the current repository
+setup.
 
 ---
 

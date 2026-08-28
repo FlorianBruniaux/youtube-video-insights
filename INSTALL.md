@@ -13,7 +13,8 @@ des outils de développement.
 - `yt-dlp`, installé par le package Python
 
 Les fonctions d’analyse demandent un backend LLM. L’indexation et la recherche
-SQLite n’en demandent aucun.
+SQLite, l’export, le diagnostic et le MCP n’en demandent aucun. Le runtime lit
+les VTT fournis par YouTube et ne transcrit pas l’audio.
 
 ## Installation avec uv
 
@@ -34,6 +35,75 @@ uv run yt-insights-mcp
 La seconde commande démarre un serveur stdio. Elle attend qu’un client MCP
 ouvre et pilote le flux. Sans l’extra, `yt-insights-mcp` s’arrête avec une
 instruction d’installation courte et sans traceback.
+
+## Fixer le corpus pour tous les répertoires
+
+Un agent lancé depuis un autre projet ne doit pas dépendre de son répertoire
+courant. Placez donc un chemin absolu dans
+`~/.config/yt-insights/config.toml` :
+
+```toml
+data_root = "/Users/vous/Library/Application Support/yt-insights/corpus"
+```
+
+Une variable convient aussi à une session ou un service :
+
+```bash
+export YT_INSIGHTS_DATA_ROOT="/chemin/absolu/vers/le/corpus"
+```
+
+La priorité est la suivante : option CLI lorsqu’elle existe, variable
+`YT_INSIGHTS_DATA_ROOT`, fichier TOML, puis `output` relatif au répertoire
+courant. `index --corpus-root`, `index --database`, `search --database` et les
+deux variables MCP restent des remplacements explicites pour une commande.
+
+Vérifiez la résolution sans créer de répertoire ni appeler un LLM :
+
+```bash
+uv run yt-insights doctor --json
+```
+
+`--probe-backends` ajoute uniquement deux requêtes de santé vers cc-bridge et
+Ollama sur localhost. Il n’envoie aucune complétion et n’affiche aucune clé.
+
+## Acquérir et exporter pour un agent
+
+Prévisualisez toujours une source multiple :
+
+```bash
+uv run yt-insights acquire \
+  https://www.youtube.com/@DevWithAIYoutube \
+  --slug dev-with-ai \
+  --dry-run \
+  --json
+```
+
+Une chaîne, une playlist ou un fichier batch s’arrête avant téléchargement si
+`--yes` manque. Après vérification du volume et des exclusions :
+
+```bash
+uv run yt-insights acquire \
+  https://www.youtube.com/@DevWithAIYoutube \
+  --slug dev-with-ai \
+  --yes
+```
+
+La commande récupère les sous-titres et métadonnées. Elle n’analyse le texte
+avec un LLM que si `--analyze` est fourni. Une vidéo seule ne demande pas
+`--yes`; `--dry-run` n’écrit jamais dans le corpus.
+
+Exporter une source existante n’appelle aucun LLM :
+
+```bash
+uv run yt-insights export video VIDEO_ID --format vtt
+uv run yt-insights export video VIDEO_ID --format txt
+uv run yt-insights export video VIDEO_ID --format md
+```
+
+`vtt` conserve les octets source, `txt` nettoie le texte et `md` ajoute le titre,
+la chaîne, l’identifiant, la langue, l’URL canonique, le SHA-256 source et les
+timestamps. Les fichiers vont dans `<data_root>/exports`. Utilisez `--output`
+pour une destination précise et `--force` pour remplacer un fichier existant.
 
 ## Alternative avec venv et pip
 
@@ -92,8 +162,9 @@ uv run yt-insights search "context engineering" --limit 5 --json
 ## Connecter un client MCP
 
 Le serveur MCP donne un accès local et en lecture seule aux outils
-`search_passages` et `get_passage`. Configurez un chemin absolu pour éviter
-qu’un client lancé depuis un autre répertoire lise la mauvaise base.
+`list_corpora`, `search_videos`, `search_passages` et `get_passage`, dans cet
+ordre. Configurez deux chemins absolus pour éviter qu’un client lancé depuis un
+autre répertoire lise les mauvaises bases.
 
 ```json
 {
@@ -103,21 +174,24 @@ qu’un client lancé depuis un autre répertoire lise la mauvaise base.
       "args": ["run", "yt-insights-mcp"],
       "cwd": "/chemin/absolu/vers/youtube-video-insights",
       "env": {
-        "YT_INSIGHTS_SEARCH_DATABASE": "/chemin/absolu/vers/youtube-video-insights/output/.search/search-v1.sqlite3"
+        "YT_INSIGHTS_SEARCH_DATABASE": "/chemin/absolu/vers/le/corpus/.search/search-v1.sqlite3",
+        "YT_INSIGHTS_CATALOG_DATABASE": "/chemin/absolu/vers/le/corpus/catalog.sqlite3"
       }
     }
   }
 }
 ```
 
-`YT_INSIGHTS_SEARCH_DATABASE` est optionnelle si le client utilise le dépôt
-comme répertoire de travail et si l’index occupe son emplacement par défaut.
+Si une variable manque, le serveur dérive la base correspondante depuis
+`data_root`. Définir les deux variables supprime cette dépendance au fichier de
+configuration du compte qui lance le client.
 
 ## Choisir le backend LLM
 
 La résolution suit cet ordre : endpoint explicite, cc-bridge, Ollama, puis API
 Anthropic. La CLI affiche le backend, l’endpoint et le modèle réellement choisis
-avant une analyse.
+avant une analyse. Ce choix ne concerne que `run`, `report`, `suggest-shorts` et
+`acquire --analyze`.
 
 ### Ollama
 
@@ -162,8 +236,13 @@ Le format du modèle dépend de la configuration de cc-bridge, par exemple
 
 ```bash
 uv run yt-insights run URL_YOUTUBE \
+  --base-url http://127.0.0.1:4141/v1 \
   --model anthropic/github_copilot/gpt-5-mini
 ```
+
+Avec `--base-url`, cette commande force le chemin compatible OpenAI de
+cc-bridge et court-circuite la détection. Sans cette option, le même modèle suit
+l’ordre automatique.
 
 ### API Anthropic
 
@@ -174,6 +253,12 @@ uv run yt-insights run URL_YOUTUBE --model claude-haiku-4-5
 
 L’API Anthropic sert de repli lorsque cc-bridge et Ollama ne répondent pas et
 que `ANTHROPIC_API_KEY` existe.
+
+Le résolveur actuel ne fournit pas encore d’option `--backend anthropic` pour
+court-circuiter cc-bridge et Ollama tout en gardant l’endpoint Anthropic par
+défaut. Pour une sélection distante strictement explicite, utilisez un endpoint
+compatible OpenAI configuré comme ci-dessous. L’ajout d’un sélecteur de backend
+nommé reste un lot séparé.
 
 ### Endpoint compatible OpenAI
 
@@ -201,6 +286,14 @@ cache hit ne déclenche ni appel ni message. L'index FTS conserve, lui, tous les
 passages horodatés du VTT. Le découpage multi-appels des longues transcriptions
 n'est pas encore implémenté.
 
+### Absence de transcription audio
+
+yt-insights consomme les sous-titres VTT déjà exposés par YouTube. Aucun chemin
+de ce runtime ne télécharge une piste audio pour la transcrire. Une telle voie
+ajouterait un coût média et calcul ainsi qu’une seconde source textuelle; elle
+reste exclue tant qu’un corpus réel de vidéos sans sous-titres ne la justifie
+pas.
+
 ## Vérifications locales
 
 Les commandes suivantes ne téléchargent aucune vidéo et ne contactent aucun
@@ -214,15 +307,16 @@ uv run yt-insights index --dry-run
 .venv/bin/python scripts/smoke_wheel.py --offline
 ```
 
-Le snapshot livré au commit `4124f42` compte 258 tests réussis. Le guide
-[État d'implémentation](docs/IMPLEMENTATION-STATUS.md) ajoute les scénarios de
-tranche 50 VTT, corpus complet, benchmark et MCP.
+Le guide [État d'implémentation](docs/IMPLEMENTATION-STATUS.md) ajoute les
+scénarios de tranche 50 VTT, corpus complet, benchmark et MCP.
 
-Le smoke wheel crée deux environnements temporaires hors checkout. Il vérifie
-l’installation minimale, puis l’extra MCP. En mode `--offline`, uv ne télécharge
-rien et le test exige que les wheels nécessaires à la version Python active
-soient déjà dans son cache. Retirez `--offline` pour remplir ce cache lors d’une
-première exécution autorisée à accéder au registre Python.
+Le smoke wheel crée deux environnements temporaires hors checkout. L’installation
+minimale exécute `doctor`, `acquire --dry-run`, `export`, `index` et `search`.
+L’installation avec l’extra MCP vérifie l’ordre exact des quatre outils et les
+appelle sur un petit corpus. En mode `--offline`, uv ne télécharge rien et le
+test exige que les wheels nécessaires à la version Python active soient déjà
+dans son cache. Retirez `--offline` pour remplir ce cache lors d’une première
+exécution autorisée à accéder au registre Python.
 
 Pour vérifier une installation avec un petit corpus réel, placez quelques VTT
 dans un répertoire temporaire, puis lancez :
@@ -245,3 +339,6 @@ uv run yt-insights search "terme présent" \
   `.venv` dans une installation pip.
 - Index MCP indisponible : construisez-le avec `yt-insights index --all` et
   vérifiez `YT_INSIGHTS_SEARCH_DATABASE`.
+- Catalogue MCP indisponible : importez le corpus avec
+  `yt-insights catalog import-corpus CORPUS` et vérifiez
+  `YT_INSIGHTS_CATALOG_DATABASE`.

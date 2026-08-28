@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -18,6 +19,12 @@ from zipfile import ZipFile
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_VERSION = "0.2.0"
+MCP_TOOLS = (
+    "list_corpora",
+    "search_videos",
+    "search_passages",
+    "get_passage",
+)
 
 
 class SmokeFailure(RuntimeError):
@@ -79,6 +86,47 @@ def _create_environment(
 
 def _script(venv: Path, name: str) -> Path:
     return venv / "bin" / name
+
+
+def _require_outside_checkout(directory: Path) -> None:
+    """Fail unless commands will run from a directory outside the checkout."""
+    resolved = directory.resolve()
+    repository = REPOSITORY_ROOT.resolve()
+    if resolved == repository or repository in resolved.parents:
+        raise SmokeFailure("Smoke commands must run outside the source checkout.")
+
+
+def _snapshot_tree(root: Path) -> tuple[tuple[str, str, str], ...]:
+    """Return a content-sensitive snapshot suitable for no-write assertions."""
+    if not root.exists():
+        return ()
+    snapshot: list[tuple[str, str, str]] = []
+    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+        relative = path.relative_to(root).as_posix()
+        if path.is_symlink():
+            snapshot.append((relative, "symlink", os.readlink(path)))
+        elif path.is_dir():
+            snapshot.append((relative, "directory", ""))
+        elif path.is_file():
+            snapshot.append((relative, "file", sha256(path.read_bytes()).hexdigest()))
+        else:
+            snapshot.append((relative, "other", ""))
+    return tuple(snapshot)
+
+
+def _write_fake_yt_dlp(directory: Path) -> Path:
+    """Create a deterministic discovery-only yt-dlp stand-in for dry-run."""
+    directory.mkdir()
+    executable = directory / "yt-dlp"
+    executable.write_text(
+        "#!/bin/sh\n"
+        "printf '%s\\n' "
+        "'{\"id\":\"nfupYzLjFGc\",\"title\":\"Reliable agents\","
+        "\"upload_date\":\"20260101\"}'\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o755)
+    return executable
 
 
 def _copy_build_source(workspace: Path) -> Path:
@@ -160,6 +208,7 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
 
     with tempfile.TemporaryDirectory(prefix="yt-insights-wheel-smoke-") as temporary:
         workspace = Path(temporary)
+        _require_outside_checkout(workspace)
         build_source = _copy_build_source(workspace)
         distribution = workspace / "dist"
         build = _uv_command(uv, "build", offline=offline)
@@ -175,13 +224,30 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
             wheel, build_source, stale_sentinel=stale_sentinel
         )
 
-        corpus = workspace / "corpus" / "channel-a" / "transcripts"
-        corpus.mkdir(parents=True)
+        data_root = workspace / "corpus"
+        transcripts = data_root / "channel-a" / "transcripts"
+        transcripts.mkdir(parents=True)
+        transcript = transcripts / "20260101 - Reliable agents [nfupYzLjFGc].en.vtt"
         shutil.copyfile(
             REPOSITORY_ROOT / "tests" / "fixtures" / "sample.en.vtt",
-            corpus / "20260101 - Reliable agents [VideoId_123].en.vtt",
+            transcript,
         )
-        database = workspace / "search.sqlite3"
+        transcript.with_name(
+            "20260101 - Reliable agents [nfupYzLjFGc].info.json"
+        ).write_text(
+            json.dumps(
+                {
+                    "id": "nfupYzLjFGc",
+                    "title": "Reliable agents",
+                    "channel": "Channel A",
+                    "channel_id": "channel-a",
+                    "upload_date": "20260101",
+                }
+            ),
+            encoding="utf-8",
+        )
+        search_database = data_root / ".search" / "search-v1.sqlite3"
+        catalog_database = data_root / "catalog.sqlite3"
 
         base_venv = workspace / "base-venv"
         base_python = _create_environment(
@@ -194,7 +260,14 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
         base_cli = _script(base_venv, "yt-insights")
         base_mcp = _script(base_venv, "yt-insights-mcp")
 
-        _run([str(base_cli), "--help"], cwd=workspace, environment=clean_environment)
+        help_result = _run(
+            [str(base_cli), "--help"], cwd=workspace, environment=clean_environment
+        )
+        for command_name in ("doctor", "acquire", "export", "index", "search"):
+            if command_name not in help_result.stdout:
+                raise SmokeFailure(
+                    f"Installed CLI help is missing the {command_name!r} command."
+                )
         _run(
             [
                 str(base_python),
@@ -208,14 +281,92 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
             cwd=workspace,
             environment=clean_environment,
         )
+
+        runtime_environment = clean_environment | {
+            "YT_INSIGHTS_DATA_ROOT": str(data_root),
+            "YT_INSIGHTS_API_KEY": "wheel-smoke-secret-must-not-leak",
+            "PATH": (
+                f"{base_venv / 'bin'}{os.pathsep}"
+                f"{clean_environment.get('PATH', '')}"
+            ),
+        }
+        before_doctor = _snapshot_tree(data_root)
+        doctor = _run(
+            [str(base_cli), "doctor", "--json"],
+            cwd=workspace,
+            environment=runtime_environment,
+        )
+        if "wheel-smoke-secret-must-not-leak" in doctor.stdout + doctor.stderr:
+            raise SmokeFailure("doctor --json exposed a configured secret value.")
+        if _snapshot_tree(data_root) != before_doctor:
+            raise SmokeFailure("doctor --json modified the configured corpus.")
+
+        fake_bin = workspace / "fake-bin"
+        _write_fake_yt_dlp(fake_bin)
+        acquisition_environment = runtime_environment | {
+            "PATH": f"{fake_bin}{os.pathsep}{runtime_environment['PATH']}",
+        }
+        before_acquire = _snapshot_tree(data_root)
+        acquisition = _run(
+            [
+                str(base_cli),
+                "acquire",
+                "https://youtu.be/nfupYzLjFGc",
+                "--data-root",
+                str(data_root),
+                "--dry-run",
+                "--json",
+            ],
+            cwd=workspace,
+            environment=acquisition_environment,
+        )
+        acquisition_payload = json.loads(acquisition.stdout)
+        if acquisition_payload.get("selected_count") != 1:
+            raise SmokeFailure("Installed acquire dry-run did not return one video.")
+        if _snapshot_tree(data_root) != before_acquire:
+            raise SmokeFailure("Installed acquire --dry-run modified the corpus.")
+
+        exported = workspace / "reliable-agents.md"
+        export = _run(
+            [
+                str(base_cli),
+                "export",
+                "video",
+                "nfupYzLjFGc",
+                "--data-root",
+                str(data_root),
+                "--lang",
+                "en",
+                "--format",
+                "md",
+                "--output",
+                str(exported),
+                "--json",
+            ],
+            cwd=workspace,
+            environment=clean_environment,
+        )
+        export_payload = json.loads(export.stdout)
+        exported_markdown = exported.read_text(encoding="utf-8")
+        required_export_markers = (
+            "nfupYzLjFGc",
+            "https://www.youtube.com/watch?v=nfupYzLjFGc",
+            "00:00:00",
+        )
+        if export_payload.get("format") != "md" or not all(
+            marker in exported_markdown for marker in required_export_markers
+        ):
+            raise SmokeFailure("Installed export omitted source identity or timestamps.")
+
         _run(
             [
                 str(base_cli),
                 "index",
                 "--corpus-root",
-                str(workspace / "corpus"),
+                str(data_root),
                 "--database",
-                str(database),
+                str(search_database),
+                "--all",
             ],
             cwd=workspace,
             environment=clean_environment,
@@ -226,7 +377,7 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
                 "search",
                 "reliable",
                 "--database",
-                str(database),
+                str(search_database),
                 "--limit",
                 "1",
                 "--json",
@@ -237,6 +388,19 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
         search_payload = json.loads(search.stdout)
         if len(search_payload.get("hits", [])) != 1:
             raise SmokeFailure("Installed CLI search did not return the fixture passage.")
+
+        _run(
+            [
+                str(base_cli),
+                "catalog",
+                "import-corpus",
+                str(data_root),
+                "--db",
+                str(catalog_database),
+            ],
+            cwd=workspace,
+            environment=clean_environment,
+        )
 
         missing_mcp = _run(
             [str(base_mcp)],
@@ -265,15 +429,26 @@ from mcp import Client
 from yt_insights.mcp_server import create_server
 
 async def check():
-    async with Client(create_server(DATABASE)) as client:
+    async with Client(create_server(SEARCH_DATABASE, CATALOG_DATABASE)) as client:
         tools = await client.list_tools()
-        assert [tool.name for tool in tools.tools] == ["search_passages", "get_passage"]
-        result = await client.call_tool("search_passages", {"query": "reliable", "limit": 1})
-        assert result.is_error is False
-        assert result.structured_content["returned"] == 1
+        assert [tool.name for tool in tools.tools] == list(MCP_TOOLS)
+        corpora = await client.call_tool("list_corpora", {})
+        assert corpora.is_error is False
+        assert corpora.structured_content["returned"] == 1
+        videos = await client.call_tool("search_videos", {"query": "Reliable", "limit": 1})
+        assert videos.is_error is False
+        assert videos.structured_content["videos"][0]["video_id"] == "nfupYzLjFGc"
+        passages = await client.call_tool("search_passages", {"query": "reliable", "limit": 1})
+        assert passages.is_error is False
+        passage_id = passages.structured_content["hits"][0]["passage_id"]
+        passage = await client.call_tool("get_passage", {"passage_id": passage_id})
+        assert passage.is_error is False
+        assert passage.structured_content["video_id"] == "nfupYzLjFGc"
 
 asyncio.run(check())
-""".replace("DATABASE", repr(str(database)))
+""".replace("SEARCH_DATABASE", repr(str(search_database))).replace(
+            "CATALOG_DATABASE", repr(str(catalog_database))
+        ).replace("MCP_TOOLS", repr(MCP_TOOLS))
         _run(
             [str(mcp_python), "-c", mcp_program],
             cwd=workspace,
@@ -281,7 +456,8 @@ asyncio.run(check())
         )
 
         stdio_environment = clean_environment | {
-            "YT_INSIGHTS_SEARCH_DATABASE": str(database)
+            "YT_INSIGHTS_SEARCH_DATABASE": str(search_database),
+            "YT_INSIGHTS_CATALOG_DATABASE": str(catalog_database),
         }
         _run(
             [str(_script(mcp_venv, "yt-insights-mcp"))],
@@ -303,7 +479,8 @@ asyncio.run(check())
             "wheel": wheel.name,
             "version": PACKAGE_VERSION,
             "minimal_mcp_exit": 2,
-            "tools": ["search_passages", "get_passage"],
+            "commands": ["doctor", "acquire", "export", "index", "search"],
+            "tools": list(MCP_TOOLS),
             "verified_modules": verified_modules,
             "offline": offline,
         }
