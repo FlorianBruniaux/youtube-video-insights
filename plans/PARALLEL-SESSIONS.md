@@ -3,7 +3,9 @@
 **Mise à jour :** 2026-08-28
 **État du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **État du runtime et des assets agentiques projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**État du routeur réel et de l'installation globale :** `NON IMPLÉMENTÉ`.
+**État du candidat global :** `CONSTRUIT ET VALIDÉ EN ENVIRONNEMENT INERTE`.
+**État du routeur réel :** `FAIL`, 20/30 positifs et 0/15 activations interdites.
+**État de l'installation globale :** `NON INSTALLÉE`, approbations exactes requises.
 **Règle :** `UNKNOWN` bloque promotion/readiness produit, pas l'implémentation P3 à P5 autorisée.
 
 **Références :** [architecture agentique](specs/AGENT-PLATFORM.md), [runtime](2026-08-28-09-agent-ready-runtime.md), [intégration globale](2026-08-28-10-claude-codex-global-integration.md), [plan consolidé V2](2026-08-27-CONSOLIDATED-v2.md) et [roadmap](../ROADMAP.md).

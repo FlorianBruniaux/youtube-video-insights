@@ -4,7 +4,9 @@
 **Statut du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **Statut du runtime pour Claude Code et Codex :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **Statut des skills et agents projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**Statut du routage réel et de l'installation globale :** `NON IMPLÉMENTÉ`.
+**Statut du candidat global :** `CONSTRUIT ET VALIDÉ EN ENVIRONNEMENT INERTE`.
+**Statut du routage implicite :** `FAIL`, 20/30 positifs et 0/15 activations interdites.
+**Statut de l'installation globale :** `NON INSTALLÉE`, approbations exactes requises.
 **Readiness éditoriale :** `UNKNOWN` ; ce statut bloque la promotion produit, pas l'implémentation autorisée.
 
 La CLI, l'index complet et le MCP sont utilisables localement. Le statut
@@ -108,8 +110,8 @@ preview obligatoire pour channel/playlist
 | A4 | `TERMINÉ` | `export video` en VTT, TXT et Markdown sans LLM | Sortie déterministe avec URL, identité source et timestamps |
 | B1 | `TERMINÉ` | MCP étendu de deux à quatre outils read-only | Smoke réel sur les quatre outils, aucun outil de mutation |
 | B2 | `TERMINÉ` | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | Trois validateurs officiels et tests de portabilité au vert |
-| B3 | `PARTIEL` | Agents chercheurs natifs terminés; fixture de 45 prompts terminée | Routeur réel encore à mesurer: 27/30 positifs minimum, 0/15 négatifs |
-| C1 | `À FAIRE` | Candidats globaux immuables avec diffs expurgés et rollback | Trois digests approuvables, aucune écriture globale |
+| B3 | `FAIL` | Agents natifs et fixture terminés; benchmark réel à 20/30 positifs, 0/15 interdits, p95 0,709 ms | Atteindre 27/30 sans baisser le seuil global ni ajouter un second hook |
+| C1 | `PARTIEL` | Source de release et transactions runtime/intégrations construites dans une copie inerte; 108/108 tests | Contre-revue finale, intégration dans le dépôt global puis trois digests liés aux préimages live |
 | C2 | `BLOQUÉ PAR APPROBATION` | Runtime, config, skills, agents et MCP globaux | Même corpus depuis deux cwd, parité de cinq requêtes et restauration testée |
 | D1 | `OPTIONNEL` | Choix explicite Ollama, MLX, cc-bridge ou remote | Backend réellement résolu, canari MLX séparé |
 

@@ -301,7 +301,7 @@ rtk git commit -m "test: define YouTube agent routing cases"
 - Consumes: exact tracked files and Git SHA from the yt-insights repository
 - Produces: release-contained skill and agent projections with provenance hashes
 
-- [ ] **Step 1: Verify both repositories before copying**
+- [x] **Step 1: Verify both repositories before copying**
 
 ```bash
 rtk git status --short --branch
@@ -310,7 +310,7 @@ rtk git rev-parse HEAD
 
 Run once in each repository. The yt-insights asset files must be committed. The global-config worktree may contain unrelated changes, but the named target paths must be clean.
 
-- [ ] **Step 2: Add failing release projection tests**
+- [x] **Step 2: Add failing release projection tests**
 
 Assert a rendered release contains:
 
@@ -325,15 +325,15 @@ agents/claude/youtube-corpus-researcher.md
 agents/codex/youtube-corpus-researcher.toml
 ```
 
-- [ ] **Step 3: Vendor exact asset bytes and record provenance**
+- [x] **Step 3: Vendor exact asset bytes and record provenance**
 
 `src/upstreams/yt-insights.json` records repository path, source Git SHA and SHA256 for every imported file. The test recomputes hashes when the source checkout is available and otherwise validates the vendored hashes internally.
 
-- [ ] **Step 4: Extend release rendering**
+- [x] **Step 4: Extend release rendering**
 
 `scripts/render.mjs` copies the two agent projections into the immutable release and includes their hashes in `artifact-manifest.json`. `scripts/check.mjs` rejects missing, malformed or extra agent files.
 
-- [ ] **Step 5: Run global configuration tests**
+- [x] **Step 5: Run global configuration tests**
 
 ```bash
 rtk npm test
@@ -343,7 +343,7 @@ node scripts/check.mjs --release /private/tmp/ai-agents-yt-releases/RELEASE_ID -
 
 Replace `RELEASE_ID` with the exact directory printed by the renderer, not a guessed value.
 
-- [ ] **Step 6: Commit the inert release source**
+- [x] **Step 6: Commit the inert release source**
 
 ```bash
 rtk git add src/skills/common/youtube-acquire src/skills/common/youtube-research src/skills/common/youtube-export src/agents src/upstreams/yt-insights.json scripts/render.mjs scripts/check.mjs tests/render.test.mjs tests/yt-insights-upstream.test.mjs
@@ -369,7 +369,7 @@ rtk git commit -m "feat: package yt-insights agent integrations"
 - Consumes: verified wheel, resolved uv tool paths, absolute data root, release agents, two database paths and live global preimages
 - Produces: approval kinds `yt-runtime` and `yt-integrations` with confirmations `GO INSTALL YT RUNTIME <digest>` and `GO INSTALL YT INTEGRATIONS <digest>`
 
-- [ ] **Step 1: Add failing allowlist and stale-preimage tests**
+- [x] **Step 1: Add failing allowlist and stale-preimage tests**
 
 The `yt-runtime` transaction may touch only the exact uv tool directory resolved
 during preparation, the two exact uv bin entrypoints and the user runtime config:
@@ -399,7 +399,7 @@ Reject any extra operation, target outside the resolved narrow roots, relative
 target, different agent filename, MCP name other than `yt-insights`, changed
 preimage, wheel hash mismatch, wrong digest or generic `GO`.
 
-- [ ] **Step 2: Build MCP candidates with structured parsers**
+- [x] **Step 2: Build MCP candidates with structured parsers**
 
 Copy the live Claude JSON and Codex TOML into a mode-`700` candidate directory.
 Use JSON and TOML parsers to replace only the semantic `yt-insights` MCP entry,
@@ -420,11 +420,11 @@ Before installation, validate the standalone Claude MCP candidate with
 candidate through the TOML schema tests in `mcp-candidate.test.mjs`; final Codex
 parsing is a mandatory fresh-session gate after installation.
 
-- [ ] **Step 3: Produce an exact redacted diff**
+- [x] **Step 3: Produce an exact redacted diff**
 
 The candidate builder prints operation IDs, target paths, preimage hashes, candidate hashes and semantic MCP fields. It never prints unrelated JSON values, TOML values, headers, tokens or environment secrets.
 
-- [ ] **Step 4: Implement runtime install, atomic config writes and rollback**
+- [x] **Step 4: Implement runtime install, atomic config writes and rollback**
 
 Before each write, compare the live preimage with the approved state. Snapshot
 the exact previous uv tool tree and entrypoints before invoking `uv tool
@@ -433,7 +433,7 @@ install` with the approved wheel. Snapshot modes are `700` for directories and
 fails, restore already changed targets and return exit code `5`; return `6`
 when restoration cannot be proved.
 
-- [ ] **Step 5: Run hostile transaction tests**
+- [x] **Step 5: Run hostile transaction tests**
 
 ```bash
 rtk npm test
@@ -444,7 +444,7 @@ config edits, missing agent sources, wheel hash mismatch, partial uv tool
 replacement, partial config write failure and rollback after a third-party
 post-install edit.
 
-- [ ] **Step 6: Commit the transaction code**
+- [x] **Step 6: Commit the transaction code**
 
 ```bash
 rtk git add scripts/inventory.mjs scripts/prepare-approval.mjs scripts/install.mjs lib/mcp-candidate.mjs tests/prepare-approval.test.mjs tests/install.test.mjs tests/mcp-candidate.test.mjs tests/runtime-install.test.mjs README.md
@@ -468,13 +468,17 @@ rtk git commit -m "feat: add yt-insights runtime and integration transactions"
 
 Preserve the expected labels. Map `none` to the router's forbidden-hit contract.
 
-- [ ] **Step 2: Run the router before changing thresholds**
+- [x] **Step 2: Run the router before changing thresholds**
 
 ```bash
 node /Users/florianbruniaux/.codex/hooks/skill-router/routing/benchmark.js
 ```
 
 Record precision, recall, F1, forbidden hits and warm p95.
+
+Résultat du 2026-08-28 : `FAIL`, 20/30 routes positives correctes,
+17 confusions inter-skills, 0/15 activations interdites, p95 0,709 ms. Aucun
+seuil global, hook ou fichier live n'a été modifié.
 
 - [ ] **Step 3: Change only skill descriptions or per-skill thresholds supported by misses**
 

@@ -4,7 +4,9 @@
 **État du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **État du runtime agentique :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **État des skills et agents projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**État du routeur réel et de l'installation globale :** `NON IMPLÉMENTÉ`.
+**État du candidat global :** `CONSTRUIT ET VALIDÉ EN ENVIRONNEMENT INERTE`.
+**État du routeur réel :** `FAIL`, 20/30 positifs et 0/15 activations interdites.
+**État de l'installation globale :** `NON INSTALLÉE`, approbations exactes requises.
 **Readiness produit :** `UNKNOWN` jusqu'à la revue humaine P2 ; ce n'est pas un veto de développement.
 
 ## À lire maintenant
@@ -27,9 +29,9 @@ répertoire par Claude Code et Codex, sans dupliquer la logique métier :
 
 | Vague | Résultat | État |
 |---|---|---|
-| A | Runtime indépendant du répertoire courant, `doctor`, acquisition avec preview, export et MCP quatre outils | `TERMINÉ`, 394 tests plus 10 sous-tests et smoke wheel offline |
-| B | Trois skills communs, deux agents natifs et corpus de routage | `PARTIEL`: assets et fixture terminés; benchmark du routeur réel restant |
-| C | Trois candidats globaux immuables pour runtime, skills et intégrations, avec diffs expurgés, digests, rollback et tests en sessions neuves | `BLOQUÉ` jusqu'à validation A et B puis trois approbations explicites |
+| A | Runtime indépendant du répertoire courant, `doctor`, acquisition avec preview, export et MCP quatre outils | `TERMINÉ`, 428 tests plus 10 sous-tests et smoke wheel offline |
+| B | Trois skills communs, deux agents natifs et corpus de routage | `FAIL`: benchmark réel à 20/30 positifs, sous le gate de 27/30; 0/15 activations interdites |
+| C | Trois candidats globaux immuables pour runtime, skills et intégrations, avec diffs expurgés, digests, rollback et tests en sessions neuves | `PARTIEL`: code inerte à 108/108 tests; intégration globale, digests live et sessions neuves non réalisés |
 | H | API hébergée, worker, extension et MCP distant | `CONDITIONNEL` aux déclencheurs d'usage |
 
 Aucune modification de `~/.claude`, `~/.codex` ou `~/.config/ai-agents` ne fait

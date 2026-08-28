@@ -2,8 +2,10 @@
 
 - **Mise à jour :** 2026-08-28
 - **Candidat runtime :** `ba35104`
-- **Validation locale :** 394 tests et 10 sous-tests réussis
+- **Validation locale :** 428 tests et 10 sous-tests réussis
 - **Wheel :** installation minimale et extra MCP validés hors checkout, offline
+- **Candidat global inerte :** trois commits au-dessus de `f666596`, 108 tests réussis, aucune écriture live
+- **Routage implicite :** `FAIL`, 20/30 positifs, 0/15 activations interdites, p95 0,709 ms
 
 YT Insights sait maintenant collecter des sous-titres YouTube, produire des
 analyses avec un LLM, indexer tous les passages horodatés dans SQLite et rendre
@@ -68,8 +70,8 @@ directement des VTT et conserve les passages horodatés. Aucun des deux ne doit
 | Évolution | Pourquoi elle n'est pas active | Gate avant développement |
 |---|---|---|
 | Revue humaine de la pertinence | La technique est validée, pas la qualité éditoriale des résultats | Juger les requêtes de l'artefact P2 et enregistrer `PASS` ou `FAIL` |
-| Routage global Claude Code/Codex | Trois skills, deux agents read-only et une fixture 45 prompts sont versionnés | Mesurer le routeur réel avant installation globale |
-| Installation globale | Aucune release yt-insights n'est installée globalement | Construire trois candidats inertes pour runtime, skills et intégrations, puis attendre les approbations exactes |
+| Routage global Claude Code/Codex | Le benchmark réel atteint 20/30 positifs et 0/15 activations interdites | Corriger les confusions inter-skills et atteindre 27/30 sans baisser le seuil global |
+| Installation globale | Le candidat inerte passe 108 tests, mais aucune release yt-insights n'est installée globalement | Terminer la contre-revue, intégrer le candidat global, générer les trois digests live puis attendre les approbations exactes |
 | Découpage LLM des longs transcripts | Insights et Shorts utilisent actuellement les 10 000 premiers caractères | Mesurer les pertes sur des articles réels, puis définir chunking et fusion |
 | MLX direct | `MLXBackend` existe mais le résolveur ne le sélectionne pas | Ajouter une option explicite et des tests sur Apple Silicon |
 | UI locale | CLI et MCP couvrent déjà la recherche locale | Documenter une friction répétée lors de recherches réelles |
