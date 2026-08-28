@@ -6,11 +6,13 @@ from pathlib import Path
 
 import pytest
 
+import yt_insights.exporter as exporter
 from yt_insights.cleaner import clean_vtt
 from yt_insights.exporter import (
     AmbiguousTranscriptLanguage,
     CorruptTranscriptMetadata,
     DuplicateTranscript,
+    ExportError,
     ExportTargetExists,
     InvalidVideoReference,
     TranscriptNotFound,
@@ -179,6 +181,30 @@ def test_symlinked_vtt_is_not_exported(tmp_path: Path) -> None:
         resolve_transcript(tmp_path, VIDEO_ID, language="fr")
 
 
+def test_vtt_replaced_by_symlink_after_resolution_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = _write_transcript(tmp_path)
+    outside = tmp_path / "outside.vtt"
+    outside.write_bytes(_vtt_bytes("hostile replacement"))
+    original_resolve = exporter.resolve_transcript
+
+    def resolve_then_swap(*args: object, **kwargs: object):
+        resolved = original_resolve(*args, **kwargs)
+        source.unlink()
+        source.symlink_to(outside)
+        return resolved
+
+    monkeypatch.setattr(exporter, "resolve_transcript", resolve_then_swap)
+
+    with pytest.raises(ExportError):
+        export_video(
+            VideoExportRequest(VIDEO_ID, "vtt", "fr", tmp_path / "escaped.vtt"),
+            DataPaths.from_root(tmp_path),
+        )
+    assert not (tmp_path / "escaped.vtt").exists()
+
+
 def test_nested_historical_layout_can_derive_metadata_without_sidecar(tmp_path: Path) -> None:
     source = _write_transcript(tmp_path, source=None)
 
@@ -272,4 +298,79 @@ def test_existing_target_requires_force(tmp_path: Path) -> None:
         DataPaths.from_root(tmp_path),
     )
     assert target.read_text(encoding="utf-8").startswith("# Build reliable agents")
+    assert not target.with_name(f"{target.name}.tmp").exists()
+
+
+def test_force_rejects_a_symlink_output_instead_of_replacing_it(tmp_path: Path) -> None:
+    _write_transcript(tmp_path)
+    outside = tmp_path / "outside.md"
+    outside.write_text("outside", encoding="utf-8")
+    target = tmp_path / "source.md"
+    target.symlink_to(outside)
+
+    with pytest.raises(ExportError):
+        export_video(
+            VideoExportRequest(VIDEO_ID, "md", "fr", target, force=True),
+            DataPaths.from_root(tmp_path),
+        )
+
+    assert target.is_symlink()
+    assert outside.read_text(encoding="utf-8") == "outside"
+
+
+def test_default_exports_directory_must_not_be_a_symlink(tmp_path: Path) -> None:
+    _write_transcript(tmp_path)
+    paths = DataPaths.from_root(tmp_path)
+    outside = tmp_path / "outside-exports"
+    outside.mkdir()
+    paths.exports.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ExportError):
+        export_video(VideoExportRequest(VIDEO_ID, "md", "fr"), paths)
+
+    assert list(outside.iterdir()) == []
+
+
+def test_default_exports_directory_replaced_after_validation_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_transcript(tmp_path)
+    paths = DataPaths.from_root(tmp_path)
+    outside = tmp_path / "outside-exports"
+    outside.mkdir()
+    real_prepare = exporter._prepare_default_exports_directory
+
+    def prepare_then_swap(exports: Path) -> None:
+        real_prepare(exports)
+        exports.rmdir()
+        exports.symlink_to(outside, target_is_directory=True)
+
+    monkeypatch.setattr(exporter, "_prepare_default_exports_directory", prepare_then_swap)
+
+    with pytest.raises(ExportError):
+        export_video(VideoExportRequest(VIDEO_ID, "md", "fr"), paths)
+
+    assert list(outside.iterdir()) == []
+
+
+def test_non_force_export_never_overwrites_target_created_during_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_transcript(tmp_path)
+    target = tmp_path / "source.md"
+    real_link = exporter.os.link
+
+    def competing_link(source: Path, destination: Path) -> None:
+        destination.write_text("won the race", encoding="utf-8")
+        real_link(source, destination)
+
+    monkeypatch.setattr(exporter.os, "link", competing_link)
+
+    with pytest.raises(ExportTargetExists):
+        export_video(
+            VideoExportRequest(VIDEO_ID, "md", "fr", target),
+            DataPaths.from_root(tmp_path),
+        )
+
+    assert target.read_text(encoding="utf-8") == "won the race"
     assert not target.with_name(f"{target.name}.tmp").exists()
