@@ -41,7 +41,7 @@
 - Consumes: CLI override, `YT_INSIGHTS_DATA_ROOT`, TOML `data_root`, legacy path overrides
 - Produces: `DataPaths.from_root(root: Path) -> DataPaths` and `Config.data_paths -> DataPaths`
 
-- [ ] **Step 1: Add failing precedence and derivation tests**
+- [x] **Step 1: Add failing precedence and derivation tests**
 
 ```python
 def test_data_paths_derive_every_database_and_artifact_directory(tmp_path: Path) -> None:
@@ -62,7 +62,7 @@ explicit override > environment > TOML > output/
 
 Keep a regression test proving `YT_INSIGHTS_TRANSCRIPTS_DIR` still overrides only the transcript directory.
 
-- [ ] **Step 2: Run the focused tests and record the expected failure**
+- [x] **Step 2: Run the focused tests and record the expected failure**
 
 ```bash
 rtk pytest tests/test_paths.py tests/test_config.py -q
@@ -70,7 +70,7 @@ rtk pytest tests/test_paths.py tests/test_config.py -q
 
 Expected: import failure for `yt_insights.paths`.
 
-- [ ] **Step 3: Implement the immutable path contract**
+- [x] **Step 3: Implement the immutable path contract**
 
 ```python
 @dataclass(frozen=True)
@@ -101,11 +101,11 @@ class DataPaths:
 
 Add `data_root` and `exports_dir` to `Config`. Derive default artifact paths after the four configuration layers merge, then apply legacy path overrides only to their named field.
 
-- [ ] **Step 4: Replace adapter defaults with `Config.data_paths`**
+- [x] **Step 4: Replace adapter defaults with `Config.data_paths`**
 
 `cli_search.py` and `mcp_server.py` must no longer derive an operational database from `Path("output")` after configuration has loaded. Keep the constants only as documented compatibility defaults.
 
-- [ ] **Step 5: Verify paths from an unrelated current directory**
+- [x] **Step 5: Verify paths from an unrelated current directory**
 
 ```bash
 rtk pytest tests/test_paths.py tests/test_config.py tests/search/test_cli_search.py tests/test_mcp_server.py -q
@@ -116,7 +116,7 @@ Add an integration test that creates a user TOML with one absolute `data_root`,
 runs search from two distinct current directories, and proves both runs resolve
 the same catalog and search database without an environment override.
 
-- [ ] **Step 6: Commit the path contract**
+- [x] **Step 6: Commit the path contract**
 
 ```bash
 rtk git add src/yt_insights/paths.py src/yt_insights/config.py src/yt_insights/cli_search.py src/yt_insights/mcp_server.py tests/test_paths.py tests/test_config.py tests/search/test_cli_search.py tests/test_mcp_server.py
@@ -135,7 +135,7 @@ rtk git commit -m "feat: resolve a global corpus data root"
 - Consumes: `Config`, resolved paths, executable discovery and optional local backend probes
 - Produces: `DoctorReport` and `yt-insights doctor [--json] [--probe-backends]`
 
-- [ ] **Step 1: Write failing report tests**
+- [x] **Step 1: Write failing report tests**
 
 ```python
 def test_doctor_json_contains_no_secret_values(tmp_path: Path, monkeypatch) -> None:
@@ -150,7 +150,7 @@ def test_doctor_json_contains_no_secret_values(tmp_path: Path, monkeypatch) -> N
 
 Cover missing `yt-dlp`, missing `ffmpeg`, absent index, valid index, configured cloud credential presence and unreachable local backend. Credential status is a boolean, never a value.
 
-- [ ] **Step 2: Verify the command is absent**
+- [x] **Step 2: Verify the command is absent**
 
 ```bash
 rtk pytest tests/test_doctor.py tests/test_cli_doctor.py -q
@@ -158,7 +158,7 @@ rtk pytest tests/test_doctor.py tests/test_cli_doctor.py -q
 
 Expected: import or Click command failure.
 
-- [ ] **Step 3: Implement stable status objects**
+- [x] **Step 3: Implement stable status objects**
 
 ```python
 @dataclass(frozen=True)
@@ -177,7 +177,7 @@ Use `shutil.which()` for executables and never expose resolved executable paths.
 
 `--probe-backends` is strictly bounded to `GET` requests against the hard-coded localhost cc-bridge and Ollama health endpoints. It must not call `resolve_backend()`, submit a completion request or contact a paid remote API.
 
-- [ ] **Step 4: Implement an unregistered Click command with deterministic JSON and readable text output**
+- [x] **Step 4: Implement an unregistered Click command with deterministic JSON and readable text output**
 
 ```json
 {
@@ -191,14 +191,14 @@ Use `shutil.which()` for executables and never expose resolved executable paths.
 
 Exit `0` for `pass` or `warn`, `1` when a required local component fails, and `2` for invalid CLI input.
 
-- [ ] **Step 5: Run focused and full tests**
+- [x] **Step 5: Run focused and full tests**
 
 ```bash
 rtk pytest tests/test_doctor.py tests/test_cli_doctor.py -q
 rtk pytest -q
 ```
 
-- [ ] **Step 6: Commit diagnostics without editing the root CLI**
+- [x] **Step 6: Commit diagnostics without editing the root CLI**
 
 ```bash
 rtk git add src/yt_insights/doctor.py src/yt_insights/cli_doctor.py tests/test_doctor.py tests/test_cli_doctor.py
@@ -315,7 +315,7 @@ rtk git commit -m "feat: select local and cloud backends explicitly"
 - Consumes: URL or batch path, optional channel slug, years, language and analysis flag
 - Produces: `build_acquisition_plan(...) -> AcquisitionPlan` and `execute_acquisition(plan, ...) -> AcquisitionReport`
 
-- [ ] **Step 1: Define failing source classification tests**
+- [x] **Step 1: Define failing source classification tests**
 
 ```python
 @pytest.mark.parametrize(
@@ -333,7 +333,7 @@ def test_classify_source(source: str, kind: str) -> None:
 
 Add `batch` for an existing regular file and reject unsupported hosts, missing files, NUL bytes and ambiguous YouTube URLs.
 
-- [ ] **Step 2: Define failing plan tests**
+- [x] **Step 2: Define failing plan tests**
 
 ```python
 def test_channel_plan_requires_confirmation(tmp_path: Path) -> None:
@@ -352,13 +352,13 @@ def test_channel_plan_requires_confirmation(tmp_path: Path) -> None:
 
 Single video plans use the configured inbox directories and do not require a second confirmation.
 
-- [ ] **Step 3: Verify failures**
+- [x] **Step 3: Verify failures**
 
 ```bash
 rtk pytest tests/test_acquisition.py tests/test_cli_acquire.py tests/test_downloader.py -q
 ```
 
-- [ ] **Step 4: Implement immutable plans and reports**
+- [x] **Step 4: Implement immutable plans and reports**
 
 ```python
 @dataclass(frozen=True)
@@ -382,7 +382,7 @@ class AcquisitionReport:
 
 For year filtering, use metadata discovery that returns exact `upload_date`. Do not pretend a missing date matched the filter. Report it as excluded with reason `missing_upload_date`.
 
-- [ ] **Step 5: Implement the Click contract**
+- [x] **Step 5: Implement the Click contract**
 
 ```text
 yt-insights acquire SOURCE
@@ -399,22 +399,22 @@ yt-insights acquire SOURCE
 
 In this milestone, `--analyze` uses the existing automatic backend resolver. Explicit `--backend` selection belongs to optional Task D1 and must not be exposed before that task is implemented and tested.
 
-- [ ] **Step 6: Reuse Python services instead of invoking the old CLI**
+- [x] **Step 6: Reuse Python services instead of invoking the old CLI**
 
 Call `download_subtitles()`, `analyze_all()`, `Catalog.import_corpus()` and `SQLiteFtsIndex.rebuild()` through Python. Do not spawn `yt-insights run` or `runbook/run-channel.sh` from the new service. Extend `Catalog.import_corpus()` so the configured flat single-video inbox is imported alongside nested channel corpora, without double-counting either layout.
 
-- [ ] **Step 7: Add idempotency and failure accounting**
+- [x] **Step 7: Add idempotency and failure accounting**
 
 Count cached VTT and insight files as ready. Preserve external errors with video identity. Exit `1` when every selected item fails, `4` for a partial run, and `0` for complete or cache-complete runs.
 
-- [ ] **Step 8: Run focused and complete tests**
+- [x] **Step 8: Run focused and complete tests**
 
 ```bash
 rtk pytest tests/test_acquisition.py tests/test_cli_acquire.py tests/test_downloader.py tests/test_catalog.py -q
 rtk pytest -q
 ```
 
-- [ ] **Step 9: Commit acquisition**
+- [x] **Step 9: Commit acquisition**
 
 ```bash
 rtk git add src/yt_insights/acquisition.py src/yt_insights/cli_acquire.py src/yt_insights/downloader.py src/yt_insights/catalog.py tests/test_acquisition.py tests/test_cli_acquire.py tests/test_downloader.py tests/test_catalog.py
@@ -433,7 +433,7 @@ rtk git commit -m "feat: add safe corpus acquisition command"
 - Consumes: video ID or YouTube URL, optional language and output format
 - Produces: `export_video(request: VideoExportRequest, paths: DataPaths) -> ExportResult`
 
-- [ ] **Step 1: Write failing source resolution tests**
+- [x] **Step 1: Write failing source resolution tests**
 
 Cover exact ID matching, `watch?v=`, `youtu.be`, one language, multiple languages without `--lang`, missing VTT, and a corrupt sidecar. Never select by title substring.
 
@@ -447,7 +447,7 @@ def test_ambiguous_languages_require_an_explicit_choice(corpus) -> None:
     assert error.value.languages == ("en", "fr")
 ```
 
-- [ ] **Step 2: Write failing format tests**
+- [x] **Step 2: Write failing format tests**
 
 ```python
 def test_markdown_export_keeps_provenance_and_timestamps(sample_vtt, tmp_path) -> None:
@@ -462,13 +462,13 @@ def test_markdown_export_keeps_provenance_and_timestamps(sample_vtt, tmp_path) -
     assert result.source_sha256 == hashlib.sha256(sample_vtt.bytes).hexdigest()
 ```
 
-- [ ] **Step 3: Verify failures**
+- [x] **Step 3: Verify failures**
 
 ```bash
 rtk pytest tests/test_exporter.py tests/test_cli_export.py -q
 ```
 
-- [ ] **Step 4: Implement three renderers**
+- [x] **Step 4: Implement three renderers**
 
 - `vtt` copies the original bytes after hash calculation.
 - `txt` uses `clean_vtt()` and writes normalized UTF-8 text.
@@ -476,7 +476,7 @@ rtk pytest tests/test_exporter.py tests/test_cli_export.py -q
 
 Publish through `<target>.tmp` and `os.replace()`. Refuse to overwrite an existing target unless `--force` is explicit.
 
-- [ ] **Step 5: Implement the CLI**
+- [x] **Step 5: Implement the CLI**
 
 ```text
 yt-insights export video VIDEO_OR_URL --format md --lang fr --output article-source.md
@@ -484,7 +484,7 @@ yt-insights export video VIDEO_OR_URL --format md --lang fr --output article-sou
 
 When `--output` is absent, write under `data_root/exports/` as `<video_id>.<language>.<format>`. Metadata uses the canonical URL `https://www.youtube.com/watch?v=<video_id>`. `--json` returns the absolute export path, source hash, video ID, language and format.
 
-- [ ] **Step 6: Run tests and commit**
+- [x] **Step 6: Run tests and commit**
 
 ```bash
 rtk pytest tests/test_exporter.py tests/test_cli_export.py -q
@@ -506,7 +506,7 @@ rtk git commit -m "feat: export source-backed video transcripts"
 - Consumes: absolute catalog database and search database
 - Produces: `create_server(search_database, catalog_database)` with four closed-world tools
 
-- [ ] **Step 1: Write failing tool-list and annotation tests**
+- [x] **Step 1: Write failing tool-list and annotation tests**
 
 ```python
 assert set(tool_names(server)) == {
@@ -519,17 +519,17 @@ assert set(tool_names(server)) == {
 
 Assert all four tools declare `readOnlyHint=True`, `destructiveHint=False`, `idempotentHint=True` and `openWorldHint=False`.
 
-- [ ] **Step 2: Write failing result-bound tests**
+- [x] **Step 2: Write failing result-bound tests**
 
 `list_corpora` returns at most 100 entries. `search_videos` accepts only `query`, `source` and `limit`, with `1 <= limit <= 20`. Neither returns absolute paths, SQL, exception repr or transcript bodies.
 
-- [ ] **Step 3: Verify failures**
+- [x] **Step 3: Verify failures**
 
 ```bash
 rtk pytest tests/test_mcp_server.py tests/test_catalog.py -q
 ```
 
-- [ ] **Step 4: Add deterministic catalog queries**
+- [x] **Step 4: Add deterministic catalog queries**
 
 ```python
 def list_corpora(self, *, limit: int = 100) -> tuple[CorpusSummary, ...]: ...
@@ -545,18 +545,18 @@ def search_videos(
 
 Sort corpus summaries by stable source slug and videos by existing FTS rank plus video ID as tie-breaker.
 
-- [ ] **Step 5: Require both database paths at startup**
+- [x] **Step 5: Require both database paths at startup**
 
 Support `YT_INSIGHTS_SEARCH_DATABASE` and `YT_INSIGHTS_CATALOG_DATABASE`. Missing or invalid databases produce one actionable startup error without falling back to a relative path when an environment variable is set.
 
-- [ ] **Step 6: Run MCP behavior tests**
+- [x] **Step 6: Run MCP behavior tests**
 
 ```bash
 rtk pytest tests/test_mcp_server.py tests/test_catalog.py -q
 rtk pytest -q
 ```
 
-- [ ] **Step 7: Commit the expanded read-only surface**
+- [x] **Step 7: Commit the expanded read-only surface**
 
 ```bash
 rtk git add src/yt_insights/mcp_server.py src/yt_insights/mcp_entrypoint.py src/yt_insights/catalog.py tests/test_mcp_server.py tests/test_catalog.py
@@ -575,11 +575,11 @@ rtk git commit -m "feat: expose corpus discovery through MCP"
 - Consumes: `doctor`, `acquire` and `export` Click command objects
 - Produces: one root CLI with stable names and unchanged existing commands
 
-- [ ] Add a failing command-list test covering every legacy and new command.
-- [ ] Register the three command modules without moving their business logic into `cli.py`.
-- [ ] Run one behavior test for each new command through the root Click runner.
-- [ ] Run the complete suite and `rtk git diff --check`.
-- [ ] Commit only `cli.py` and the coordinator-owned integration test.
+- [x] Add a failing command-list test covering every legacy and new command.
+- [x] Register the three command modules without moving their business logic into `cli.py`.
+- [x] Run one behavior test for each new command through the root Click runner.
+- [x] Run the complete suite and `rtk git diff --check`.
+- [x] Commit only `cli.py` and the coordinator-owned integration test.
 
 ```bash
 rtk pytest tests/test_cli_agent_commands.py tests/test_cli_doctor.py tests/test_cli_acquire.py tests/test_cli_export.py -q
@@ -603,11 +603,11 @@ rtk git commit -m "feat: register agent-facing CLI commands"
 - Consumes: clean source copy and wheel extras
 - Produces: `yt-insights`, `yt-insights-mcp` and the four agent-facing commands from any directory
 
-- [ ] **Step 1: Extend packaging tests**
+- [x] **Step 1: Extend packaging tests**
 
 Assert the wheel exposes `doctor`, `acquire`, `export`, `index`, `search` and `yt-insights-mcp`. Add a smoke invocation from a temporary directory whose parent is not the checkout.
 
-- [ ] **Step 2: Build and install an inert wheel**
+- [x] **Step 2: Build and install an inert wheel**
 
 ```bash
 UV_CACHE_DIR=/private/tmp/yt-insights-uv-cache .venv/bin/python scripts/smoke_wheel.py --offline
@@ -615,7 +615,7 @@ UV_CACHE_DIR=/private/tmp/yt-insights-uv-cache .venv/bin/python scripts/smoke_wh
 
 Expected: the minimal wheel and `wheel[mcp]` pass, and the MCP lists exactly four tools.
 
-- [ ] **Step 3: Run the complete verification matrix**
+- [x] **Step 3: Run the complete verification matrix**
 
 ```bash
 rtk pytest -q
@@ -624,11 +624,11 @@ UV_CACHE_DIR=/private/tmp/yt-insights-uv-cache .venv/bin/python scripts/smoke_wh
 rtk git diff --check
 ```
 
-- [ ] **Step 4: Document the operational contract**
+- [x] **Step 4: Document the operational contract**
 
 Document the precedence of `data_root`, the acquisition confirmation rule, explicit backend choices, MCP environment variables, export formats and the absence of audio transcription.
 
-- [ ] **Step 5: Commit packaging and documentation**
+- [x] **Step 5: Commit packaging and documentation**
 
 ```bash
 rtk git add pyproject.toml scripts/smoke_wheel.py tests/test_packaging.py INSTALL.md README.md CHANGELOG.md llms.txt

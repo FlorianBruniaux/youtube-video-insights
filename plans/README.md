@@ -2,7 +2,8 @@
 
 **Dernière mise à jour :** 2026-08-28
 **État du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**État du lot agentique :** `PLANIFIÉ, NON IMPLÉMENTÉ`.
+**État du runtime agentique :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
+**État des skills et agents :** `EN COURS DE VALIDATION`.
 **Readiness produit :** `UNKNOWN` jusqu'à la revue humaine P2 ; ce n'est pas un veto de développement.
 
 ## À lire maintenant
@@ -25,8 +26,8 @@ répertoire par Claude Code et Codex, sans dupliquer la logique métier :
 
 | Vague | Résultat | État |
 |---|---|---|
-| A | Runtime indépendant du répertoire courant, `doctor`, backends explicites, acquisition avec preview, export et MCP quatre outils | `PLANIFIÉ` |
-| B | Trois skills communs, deux agents natifs, corpus de routage et packaging | `PLANIFIÉ`, parallélisable après gel des contrats A |
+| A | Runtime indépendant du répertoire courant, `doctor`, acquisition avec preview, export et MCP quatre outils | `TERMINÉ`, 394 tests plus 10 sous-tests et smoke wheel offline |
+| B | Trois skills communs, deux agents natifs et corpus de routage | `EN COURS`; packaging runtime déjà terminé |
 | C | Trois candidats globaux immuables pour runtime, skills et intégrations, avec diffs expurgés, digests, rollback et tests en sessions neuves | `BLOQUÉ` jusqu'à validation A et B puis trois approbations explicites |
 | H | API hébergée, worker, extension et MCP distant | `CONDITIONNEL` aux déclencheurs d'usage |
 
@@ -79,7 +80,7 @@ actif ci-dessus.
 | P1 resolver Ollama | `TERMINÉE` | Génération LLM réelle non rejouée |
 | P2 recherche 50 VTT | `TERMINÉE TECHNIQUEMENT` | `UNKNOWN` sans jugements humains dans l'artefact P2 |
 | P3 corpus complet | `TERMINÉE TECHNIQUEMENT` | Référence produit full-corpus bloquée par P2 `UNKNOWN` |
-| P4 MCP minimal : `search_passages`, `get_passage` | `TERMINÉE TECHNIQUEMENT` | Accès produit prêt bloqué par P2 `UNKNOWN` |
+| P4 MCP : catalogue, vidéos et passages, quatre outils read-only | `TERMINÉE TECHNIQUEMENT` | Accès produit prêt bloqué par P2 `UNKNOWN` |
 | P5 installation locale | `TERMINÉE TECHNIQUEMENT` | Promotion/recommandation produit bloquée par P2 `UNKNOWN` |
 
 ## Contrat des bases

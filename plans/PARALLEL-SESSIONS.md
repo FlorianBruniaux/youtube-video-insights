@@ -121,11 +121,11 @@ utilisateur déjà modifiés dans le checkout principal : `.claude/skills/yt-add
 
 | Session | Propriété exclusive | Dépendance | Gate de fusion |
 |---|---|---|---|
-| A1 `codex/agent-paths` | `config.py`, nouveau `paths.py`, adaptateurs de chemins et tests associés | A0 contrat `DataPaths` relu | Priorité CLI > env > TOML > défaut, même corpus depuis deux cwd |
-| A2 `codex/agent-doctor` | `doctor.py`, `cli_doctor.py` non enregistré et tests associés | A1 fusionné | Aucune valeur de secret affichée |
-| A3 `codex/agent-acquire` | façade `acquire`, module Click non enregistré, preview, downloader et tests associés | A1 fusionné | vidéo unitaire immédiate, channel/playlist bloqués sans `--yes`, aucun cookie automatique |
-| A4 `codex/agent-export` | exporteur, module Click non enregistré, formats VTT/TXT/Markdown et tests associés | A1 fusionné | export déterministe, sourcé, sans appel LLM |
-| A5 coordinateur | `cli.py` et test d'intégration des commandes | A2 à A4 fusionnés | Tous les anciens et nouveaux noms de commande restent stables |
+| A1 `codex/agent-paths` | `config.py`, nouveau `paths.py`, adaptateurs de chemins et tests associés | `TERMINÉ` | Priorité CLI > env > TOML > défaut, même corpus depuis deux cwd |
+| A2 `codex/agent-doctor` | `doctor.py`, `cli_doctor.py` et tests associés | `TERMINÉ` | Aucune valeur de secret affichée |
+| A3 `codex/agent-acquire` | façade `acquire`, preview, downloader et tests associés | `TERMINÉ` | vidéo unitaire immédiate, channel/playlist bloqués sans `--yes`, aucun cookie automatique |
+| A4 `codex/agent-export` | exporteur, formats VTT/TXT/Markdown et tests associés | `TERMINÉ` | export déterministe, sourcé, sans appel LLM |
+| A5 coordinateur | `cli.py` et test d'intégration des commandes | `TERMINÉ` | Treize noms de commande stables et tests de comportement |
 
 Le coordinateur possède les contrats partagés et `cli.py`. Les sessions
 proposent leurs ajouts sous forme de fonctions isolées. Le coordinateur intègre
@@ -138,10 +138,10 @@ existant, mais pas des backends LLM.
 
 | Session | Propriété exclusive | Peut démarrer en parallèle avec | Gate de fusion |
 |---|---|---|---|
-| B1 `codex/agent-mcp-four-tools` | serveur MCP, quatre contrats read-only et tests | B2, B3 | exactement quatre outils, chemins absolus, aucune mutation |
-| B2 `codex/agent-portable-skills` | trois dossiers `.agents/skills/youtube-*` et fixtures de skills | B1, B3 | mêmes commandes sur Claude Code et Codex, aucune dépendance au cwd |
-| B3 `codex/agent-native-adapters` | agent Claude, agent Codex, corpus 45 prompts et évaluation | B1, B2 | au moins 27/30 positifs, 0/15 négatifs, p95 chaud inférieur ou égal à 10 ms |
-| B4 `codex/agent-packaging-docs` | scripts d'installation locale, smoke tests et docs repo | après première fusion B1-B3 | installation en répertoire temporaire, cinq requêtes de parité |
+| B1 `codex/agent-mcp-four-tools` | serveur MCP, quatre contrats read-only et tests | `TERMINÉ` | exactement quatre outils, chemins absolus, aucune mutation |
+| B2 `codex/agent-portable-skills` | trois dossiers `.agents/skills/youtube-*` et fixtures de skills | `EN COURS` | mêmes commandes sur Claude Code et Codex, aucune dépendance au cwd |
+| B3 `codex/agent-native-adapters` | agent Claude, agent Codex, corpus 45 prompts et évaluation | `EN COURS` | au moins 27/30 positifs, 0/15 négatifs, p95 chaud inférieur ou égal à 10 ms |
+| B4 `codex/agent-packaging-docs` | smoke wheel et docs repo | `TERMINÉ` | installation minimale et MCP hors checkout, cinq commandes agent testées |
 
 ### Vague C : préparer puis installer la configuration globale
 
