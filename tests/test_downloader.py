@@ -79,15 +79,20 @@ def test_download_subtitles_returns_logged_vtt_and_preserves_argument_vector(
     output_dir = tmp_path / "transcripts"
     output_dir.mkdir()
     vtt_path = output_dir / "20260223 - Build reliable agents [nfupYzLjFGc].fr.vtt"
-    vtt_path.write_text("WEBVTT\n", encoding="utf-8")
+    cached = "already exists" in log_template
+    if cached:
+        vtt_path.write_text("WEBVTT\n", encoding="utf-8")
     calls: list[tuple[list[str], dict]] = []
 
     def fake_run(args: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
         calls.append((args, kwargs))
+        staged_vtt = Path(args[args.index("--output") + 1]).parent / vtt_path.name
+        if not cached:
+            staged_vtt.write_text("WEBVTT\n", encoding="utf-8")
         return subprocess.CompletedProcess(
             args=args,
             returncode=0,
-            stdout=log_template.format(path=vtt_path) + "\n",
+            stdout=log_template.format(path=staged_vtt) + "\n",
             stderr="",
         )
 
@@ -103,7 +108,7 @@ def test_download_subtitles_returns_logged_vtt_and_preserves_argument_vector(
 
     assert result.vtt_files == [vtt_path]
     assert result.errors == []
-    assert result.skipped_count == int("already exists" in log_template)
+    assert result.skipped_count == int(cached)
     assert result.returncode == 0
     assert len(calls) == 1
     actual_args, actual_kwargs = calls[0]
@@ -255,6 +260,58 @@ def test_download_subtitles_exposes_nonzero_exit_without_error_line(
 
     assert result.returncode == 2
     assert result.errors == ["yt-dlp exited with status 2: connection refused"]
+
+
+def test_download_subtitles_preseeds_cached_vtt_and_sidecar_without_counting_sidecar(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "transcripts"
+    output_dir.mkdir()
+    stem = "20260820 - Cached [nfupYzLjFGc]"
+    vtt = output_dir / f"{stem}.fr.vtt"
+    info = output_dir / f"{stem}.info.json"
+    vtt.write_text("WEBVTT\n", encoding="utf-8")
+    info.write_text('{"id":"nfupYzLjFGc"}', encoding="utf-8")
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        staging = Path(args[args.index("--output") + 1]).parent
+        assert (staging / vtt.name).read_bytes() == b"WEBVTT\n"
+        assert (staging / info.name).read_bytes() == b'{"id":"nfupYzLjFGc"}'
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    result = download_subtitles("https://youtu.be/nfupYzLjFGc", output_dir)
+
+    assert result.vtt_files == [vtt]
+    assert result.skipped_count == 1
+    assert result.errors == []
+    assert result.returncode == 0
+
+
+def test_download_subtitles_returns_cached_vtt_with_network_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "transcripts"
+    output_dir.mkdir()
+    vtt = output_dir / "20260820 - Cached [nfupYzLjFGc].fr.vtt"
+    vtt.write_text("WEBVTT\n", encoding="utf-8")
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        staging = Path(args[args.index("--output") + 1]).parent
+        assert (staging / vtt.name).read_bytes() == b"WEBVTT\n"
+        return subprocess.CompletedProcess(
+            args=args, returncode=2, stdout="", stderr="connection refused"
+        )
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    result = download_subtitles("https://youtu.be/nfupYzLjFGc", output_dir)
+
+    assert result.vtt_files == [vtt]
+    assert result.skipped_count == 1
+    assert result.errors == ["yt-dlp exited with status 2: connection refused"]
+    assert result.returncode == 2
 
 
 def test_download_subtitles_rejects_symlink_output_before_subprocess(

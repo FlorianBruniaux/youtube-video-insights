@@ -420,6 +420,228 @@ def test_execute_rebuilds_full_index_beyond_default_fifty(tmp_path: Path) -> Non
     assert SQLiteFtsIndex(paths.search_database).status().documents_indexed == 52
 
 
+def test_execute_refreshes_private_staging_and_preserves_discovery_only_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+
+    from yt_insights.catalog import Catalog
+    from yt_insights.downloader import VideoListResult
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.root.mkdir(parents=True)
+    discovered = VideoInfo("disc123ABCD", "Discovery only", "20260819")
+    with Catalog(paths.catalog_database) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@stable/videos",
+            VideoListResult(videos=[discovered]),
+        )
+
+    selected = VideoInfo("aaa123DEF45", "Imported", "20260820")
+    plan = build_acquisition_plan(
+        source=selected.watch_url,
+        data_paths=paths,
+        discovered=[selected],
+    )
+
+    def fake_download(source: str, output_dir: Path, **_: object) -> DownloadResult:
+        output_dir.mkdir(parents=True)
+        vtt = output_dir / "20260820 - Imported [aaa123DEF45].fr.vtt"
+        vtt.write_text("WEBVTT\nEvidence\n", encoding="utf-8")
+        return DownloadResult(vtt_files=[vtt])
+
+    original_connect = sqlite3.connect
+
+    def guarded_connect(database: object, *args: object, **kwargs: object):
+        if not kwargs.get("uri") and Path(database) in {
+            paths.catalog_database,
+            paths.search_database,
+        }:
+            raise AssertionError("public database path was opened")
+        return original_connect(database, *args, **kwargs)
+
+    monkeypatch.setattr(sqlite3, "connect", guarded_connect)
+    report = execute_acquisition(plan, download=fake_download)
+
+    assert report.exit_code == 0
+    with original_connect(paths.catalog_database) as connection:
+        assert connection.execute(
+            "SELECT title FROM videos WHERE video_id = ?", (discovered.video_id,)
+        ).fetchone() == ("Discovery only",)
+        assert connection.execute(
+            "SELECT title FROM videos WHERE video_id = ?", (selected.video_id,)
+        ).fetchone() == ("Imported",)
+
+
+def test_execute_refuses_nonempty_catalog_wal_without_replacing_catalog(
+    tmp_path: Path,
+) -> None:
+    from yt_insights.catalog import Catalog
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.root.mkdir(parents=True)
+    with Catalog(paths.catalog_database):
+        pass
+    original = paths.catalog_database.read_bytes()
+    paths.catalog_database.with_name(paths.catalog_database.name + "-wal").write_bytes(
+        b"uncheckpointed"
+    )
+    paths.transcripts.mkdir()
+    cached = paths.transcripts / "20260820 - Cached [aaa123DEF45].fr.vtt"
+    cached.write_text("WEBVTT\n", encoding="utf-8")
+    video = VideoInfo("aaa123DEF45", "Cached", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url, data_paths=paths, discovered=[video]
+    )
+
+    report = execute_acquisition(plan)
+
+    assert report.exit_code == 4
+    assert any("non-empty catalog WAL" in failure for failure in report.failures)
+    assert paths.catalog_database.read_bytes() == original
+
+
+def test_execute_rechecks_catalog_wal_before_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from yt_insights.catalog import Catalog
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.root.mkdir(parents=True)
+    with Catalog(paths.catalog_database):
+        pass
+    original = paths.catalog_database.read_bytes()
+    wal = paths.catalog_database.with_name(paths.catalog_database.name + "-wal")
+    original_import = Catalog.import_corpus
+
+    def racing_import(self: Catalog, root: Path):
+        summary = original_import(self, root)
+        wal.write_bytes(b"concurrent frames")
+        return summary
+
+    monkeypatch.setattr(Catalog, "import_corpus", racing_import)
+    paths.transcripts.mkdir()
+    (paths.transcripts / "20260820 - Cached [aaa123DEF45].fr.vtt").write_text(
+        "WEBVTT\n", encoding="utf-8"
+    )
+    video = VideoInfo("aaa123DEF45", "Cached", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url, data_paths=paths, discovered=[video]
+    )
+
+    report = execute_acquisition(plan)
+
+    assert report.exit_code == 4
+    assert any("non-empty catalog WAL" in failure for failure in report.failures)
+    assert paths.catalog_database.read_bytes() == original
+
+
+def test_execute_replaces_raced_catalog_symlink_without_writing_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from yt_insights.catalog import Catalog
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.root.mkdir(parents=True)
+    with Catalog(paths.catalog_database):
+        pass
+    outside = tmp_path / "outside.sqlite3"
+    outside.write_bytes(b"outside sentinel")
+    original_import = Catalog.import_corpus
+    swapped = False
+
+    def swapping_import(self: Catalog, root: Path):
+        nonlocal swapped
+        if not swapped:
+            swapped = True
+            paths.catalog_database.rename(paths.root / "raced-catalog.sqlite3")
+            paths.catalog_database.symlink_to(outside)
+        return original_import(self, root)
+
+    monkeypatch.setattr(Catalog, "import_corpus", swapping_import)
+    paths.transcripts.mkdir()
+    (paths.transcripts / "20260820 - Cached [aaa123DEF45].fr.vtt").write_text(
+        "WEBVTT\n", encoding="utf-8"
+    )
+    video = VideoInfo("aaa123DEF45", "Cached", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url, data_paths=paths, discovered=[video]
+    )
+
+    report = execute_acquisition(plan)
+
+    assert report.exit_code == 0
+    assert paths.catalog_database.is_file()
+    assert not paths.catalog_database.is_symlink()
+    assert outside.read_bytes() == b"outside sentinel"
+
+
+def test_execute_refuses_search_parent_swap_without_writing_outside(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from yt_insights.search.sqlite_fts import SQLiteFtsIndex
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.transcripts.mkdir(parents=True)
+    (paths.transcripts / "20260820 - Cached [aaa123DEF45].fr.vtt").write_text(
+        "WEBVTT\n", encoding="utf-8"
+    )
+    paths.search_database.parent.mkdir()
+    outside = tmp_path / "outside-search"
+    outside.mkdir()
+    moved = paths.root / "original-search"
+    original_rebuild = SQLiteFtsIndex.rebuild
+
+    def swapping_rebuild(self: SQLiteFtsIndex, manifest: object):
+        report = original_rebuild(self, manifest)
+        paths.search_database.parent.rename(moved)
+        paths.search_database.parent.symlink_to(outside, target_is_directory=True)
+        return report
+
+    monkeypatch.setattr(SQLiteFtsIndex, "rebuild", swapping_rebuild)
+    video = VideoInfo("aaa123DEF45", "Cached", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url, data_paths=paths, discovered=[video]
+    )
+
+    report = execute_acquisition(plan)
+
+    assert report.exit_code == 4
+    assert any("index:" in failure for failure in report.failures)
+    assert not any(outside.iterdir())
+
+
+def test_execute_refuses_preexisting_search_receipt_without_replacing_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.search.sqlite_fts as sqlite_fts
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.transcripts.mkdir(parents=True)
+    (paths.transcripts / "20260820 - Cached [aaa123DEF45].fr.vtt").write_text(
+        "WEBVTT\n", encoding="utf-8"
+    )
+    paths.search_database.parent.mkdir()
+    paths.search_database.write_bytes(b"published sentinel")
+    generation_id = "0" * 32
+    receipt = paths.search_database.with_name(
+        f".{paths.search_database.name}.{generation_id}.receipt.json"
+    )
+    receipt.write_text('{"falsified":true}', encoding="utf-8")
+    monkeypatch.setattr(sqlite_fts.secrets, "token_hex", lambda _: generation_id)
+    video = VideoInfo("aaa123DEF45", "Cached", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url, data_paths=paths, discovered=[video]
+    )
+
+    report = execute_acquisition(plan)
+
+    assert report.exit_code == 4
+    assert any("publication target already exists" in item for item in report.failures)
+    assert paths.search_database.read_bytes() == b"published sentinel"
+    assert receipt.read_text(encoding="utf-8") == '{"falsified":true}'
+
+
 def test_execute_counts_cached_insight_without_resolving_backend(tmp_path: Path) -> None:
     paths = DataPaths.from_root(tmp_path / "corpus")
     video = VideoInfo("aaa123DEF45", "Cached insight", "20260820")

@@ -16,10 +16,13 @@ from .config import Config
 from .downloader import (
     DownloadResult,
     VideoInfo,
+    _copy_regular_at,
     _confined_directory,
     _list_regular_names,
+    _publish_new_regular_file,
     _promote_regular_file,
     _read_regular_at,
+    _replace_regular_file,
     download_subtitles,
 )
 from .paths import DataPaths
@@ -414,6 +417,99 @@ def _safe_regular_file(path: Path, root: Path) -> bool:
         raise ValueError("cache changed while being read") from exc
 
 
+def _require_directory_identity(root: Path, path: Path, expected_fd: int) -> None:
+    """Require the public directory path to still name the held directory."""
+    expected = os.fstat(expected_fd)
+    try:
+        with _confined_directory(root, path, create=False) as current_fd:
+            current = os.fstat(current_fd)
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"database parent changed before publication: {path}") from exc
+    if (current.st_dev, current.st_ino) != (expected.st_dev, expected.st_ino):
+        raise ValueError(f"database parent changed before publication: {path}")
+
+
+def _reject_nonempty_catalog_wal(parent_fd: int, database_name: str) -> None:
+    wal_name = database_name + "-wal"
+    try:
+        details = os.stat(wal_name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(details.st_mode):
+        raise ValueError("catalog WAL is not a regular file")
+    if details.st_size:
+        raise ValueError("cannot refresh with a non-empty catalog WAL")
+
+
+def _refresh_indexes(plan: AcquisitionPlan) -> None:
+    """Build both SQLite databases privately and publish via held parent dirfds."""
+    from .catalog import Catalog
+    from .search.corpus import scan_corpus
+    from .search.sqlite_fts import SQLiteFtsIndex
+
+    catalog_path = plan.data_paths.catalog_database
+    search_path = plan.data_paths.search_database
+    with (
+        _confined_directory(
+            plan.data_paths.root, catalog_path.parent, create=True
+        ) as catalog_parent_fd,
+        _confined_directory(
+            plan.data_paths.root, search_path.parent, create=True
+        ) as search_parent_fd,
+        tempfile.TemporaryDirectory(prefix="yt-insights-indexes-") as staging_name,
+    ):
+        staging = Path(staging_name)
+        staged_catalog = staging / catalog_path.name
+        staged_search = staging / search_path.name
+
+        _reject_nonempty_catalog_wal(catalog_parent_fd, catalog_path.name)
+        try:
+            _copy_regular_at(catalog_parent_fd, catalog_path.name, staged_catalog)
+        except FileNotFoundError:
+            pass
+
+        catalog = Catalog(staged_catalog)
+        try:
+            catalog.import_corpus(plan.data_paths.root)
+            catalog.checkpoint()
+        finally:
+            catalog.close()
+        Catalog.validate_database(staged_catalog)
+
+        manifest = scan_corpus(plan.data_paths.root, limit=None)
+        staged_index = SQLiteFtsIndex(staged_search)
+        rebuilt = staged_index.rebuild(manifest)
+        if staged_index.status() != rebuilt:
+            raise RuntimeError("staged search index status does not match rebuild")
+        receipt_prefix = f".{search_path.name}."
+        receipt_paths = [
+            candidate
+            for candidate in staging.iterdir()
+            if candidate.name.startswith(receipt_prefix)
+            and candidate.name.endswith(".receipt.json")
+            and candidate.is_file()
+            and not candidate.is_symlink()
+        ]
+        if len(receipt_paths) != 1:
+            raise RuntimeError("staged search index receipt is missing or ambiguous")
+        receipt = receipt_paths[0]
+
+        _require_directory_identity(
+            plan.data_paths.root, catalog_path.parent, catalog_parent_fd
+        )
+        _reject_nonempty_catalog_wal(catalog_parent_fd, catalog_path.name)
+        _replace_regular_file(staged_catalog, catalog_parent_fd, catalog_path.name)
+
+        _require_directory_identity(
+            plan.data_paths.root, search_path.parent, search_parent_fd
+        )
+        _publish_new_regular_file(receipt, search_parent_fd, receipt.name)
+        _require_directory_identity(
+            plan.data_paths.root, search_path.parent, search_parent_fd
+        )
+        _replace_regular_file(staged_search, search_parent_fd, search_path.name)
+
+
 def execute_acquisition(
     plan: AcquisitionPlan,
     *,
@@ -547,21 +643,13 @@ def execute_acquisition(
 
     if refresh_indexes and all_vtts:
         try:
-            from .catalog import Catalog
-            from .search.corpus import scan_corpus
-            from .search.sqlite_fts import SQLiteFtsIndex
-
             _validate_confined_file_target(
                 plan.data_paths.catalog_database, plan.data_paths.root
             )
             _validate_confined_file_target(
                 plan.data_paths.search_database, plan.data_paths.root
             )
-            with Catalog(plan.data_paths.catalog_database) as catalog:
-                catalog.import_corpus(plan.data_paths.root)
-            SQLiteFtsIndex(plan.data_paths.search_database).rebuild(
-                scan_corpus(plan.data_paths.root, limit=None)
-            )
+            _refresh_indexes(plan)
         except Exception as exc:
             failures.append(f"index: {type(exc).__name__}: {exc}")
 

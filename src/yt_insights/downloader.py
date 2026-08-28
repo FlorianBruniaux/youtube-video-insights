@@ -228,6 +228,146 @@ def _read_regular_at(
         os.close(descriptor)
 
 
+def _copy_regular_at(directory_fd: int, name: str, destination: Path) -> None:
+    """Copy one stable no-follow directory entry into a private path."""
+    if Path(name).name != name or "\x00" in name:
+        raise ValueError("unsafe copied file name")
+    source_fd = os.open(name, _READ_FLAGS | os.O_NONBLOCK, dir_fd=directory_fd)
+    destination_fd: int | None = None
+    try:
+        before = os.fstat(source_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"not a regular file: {name}")
+        destination_fd = os.open(
+            destination,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+        )
+        copied = 0
+        while True:
+            chunk = os.read(source_fd, 64 * 1024)
+            if not chunk:
+                break
+            view = memoryview(chunk)
+            while view:
+                written = os.write(destination_fd, view)
+                view = view[written:]
+            copied += len(chunk)
+        os.fsync(destination_fd)
+        after = os.fstat(source_fd)
+        if (
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            or copied != before.st_size
+        ):
+            raise ValueError(f"file changed while being copied: {name}")
+    except Exception:
+        try:
+            destination.unlink(missing_ok=True)
+        except OSError:
+            pass
+        raise
+    finally:
+        if destination_fd is not None:
+            os.close(destination_fd)
+        os.close(source_fd)
+
+
+def _copy_path_to_at(source: Path, destination_fd: int, name: str) -> tuple[int, int]:
+    """Copy a stable private source to a new entry through a held dirfd."""
+    if Path(name).name != name or "\x00" in name:
+        raise ValueError("unsafe published file name")
+    source_fd = os.open(source, _READ_FLAGS | os.O_NONBLOCK)
+    output_fd: int | None = None
+    created = False
+    try:
+        before = os.fstat(source_fd)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError(f"published source is not regular: {name}")
+        output_fd = os.open(
+            name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+            0o600,
+            dir_fd=destination_fd,
+        )
+        created = True
+        copied = 0
+        while True:
+            chunk = os.read(source_fd, 64 * 1024)
+            if not chunk:
+                break
+            view = memoryview(chunk)
+            while view:
+                written = os.write(output_fd, view)
+                view = view[written:]
+            copied += len(chunk)
+        os.fsync(output_fd)
+        after = os.fstat(source_fd)
+        if (
+            (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+            != (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+            or copied != before.st_size
+        ):
+            raise ValueError(f"published source changed while copying: {name}")
+        published = os.fstat(output_fd)
+        return published.st_dev, published.st_ino
+    except Exception:
+        if created and output_fd is not None:
+            try:
+                opened = os.fstat(output_fd)
+                current = os.stat(name, dir_fd=destination_fd, follow_symlinks=False)
+                if (current.st_dev, current.st_ino) == (opened.st_dev, opened.st_ino):
+                    os.unlink(name, dir_fd=destination_fd)
+            except FileNotFoundError:
+                pass
+        raise
+    finally:
+        if output_fd is not None:
+            os.close(output_fd)
+        os.close(source_fd)
+
+
+def _publish_new_regular_file(source: Path, destination_fd: int, name: str) -> None:
+    """Publish a new file and refuse every pre-existing destination."""
+    try:
+        _copy_path_to_at(source, destination_fd, name)
+        os.fsync(destination_fd)
+    except FileExistsError as exc:
+        raise ValueError(f"publication target already exists: {name}") from exc
+
+
+def _replace_regular_file(source: Path, destination_fd: int, name: str) -> None:
+    """Copy privately, then atomically replace a destination through its dirfd."""
+    temporary_name = f".{name}.{secrets.token_hex(8)}.tmp"
+    temporary_identity: tuple[int, int] | None = None
+    try:
+        temporary_identity = _copy_path_to_at(source, destination_fd, temporary_name)
+        current = os.stat(
+            temporary_name, dir_fd=destination_fd, follow_symlinks=False
+        )
+        if (current.st_dev, current.st_ino) != temporary_identity:
+            raise ValueError("database publication temporary changed")
+        os.replace(
+            temporary_name,
+            name,
+            src_dir_fd=destination_fd,
+            dst_dir_fd=destination_fd,
+        )
+        os.fsync(destination_fd)
+    finally:
+        try:
+            current = os.stat(
+                temporary_name, dir_fd=destination_fd, follow_symlinks=False
+            )
+            if temporary_identity is not None and (
+                current.st_dev,
+                current.st_ino,
+            ) == temporary_identity:
+                os.unlink(temporary_name, dir_fd=destination_fd)
+        except FileNotFoundError:
+            pass
+
+
 def _promote_regular_file(source: Path, destination_fd: int, name: str) -> bool:
     """Copy a stable source to a private sibling, then publish without overwrite."""
     if Path(name).name != name or "\x00" in name:
@@ -355,9 +495,16 @@ def download_subtitles(
     root = Path(os.path.realpath(requested_root))
     stable_output = root / relative_output
     with _confined_directory(root, stable_output, create=True) as destination_fd:
-        _list_regular_names(destination_fd, reject_unsafe=True)
+        destination_names = _list_regular_names(destination_fd, reject_unsafe=True)
         with tempfile.TemporaryDirectory(prefix="yt-insights-download-") as staging_name:
             staging = Path(staging_name)
+            cached_vtt_names: set[str] = set()
+            for name in destination_names:
+                if not (name.endswith(".vtt") or name.endswith(".info.json")):
+                    continue
+                _copy_regular_at(destination_fd, name, staging / name)
+                if name.endswith(".vtt"):
+                    cached_vtt_names.add(name)
             cmd = [
                 "yt-dlp",
                 "--write-auto-subs",
@@ -388,16 +535,16 @@ def download_subtitles(
                 errors.append(f"yt-dlp exited with status {result.returncode}: {detail}")
 
             selected_vtt_names: set[str] = set()
-            skipped_count = 0
+            skipped_vtt_names: set[str] = set()
             for entry in staging.iterdir():
                 details = entry.lstat()
                 if not stat.S_ISREG(details.st_mode):
                     raise ValueError(f"yt-dlp staged a non-regular entry: {entry.name}")
                 promoted = _promote_regular_file(entry, destination_fd, entry.name)
-                if not promoted:
-                    skipped_count += 1
                 if entry.name.endswith(".vtt"):
                     selected_vtt_names.add(entry.name)
+                    if not promoted:
+                        skipped_vtt_names.add(entry.name)
 
             for line in (result.stdout + "\n" + result.stderr).splitlines():
                 marker = "Subtitle file already exists:"
@@ -405,7 +552,7 @@ def download_subtitles(
                     name = Path(line.split(marker, 1)[1].strip()).name
                     if name.endswith(".vtt"):
                         selected_vtt_names.add(name)
-                        skipped_count += 1
+                        skipped_vtt_names.add(name)
                 marker = "Writing video subtitles to:"
                 if marker in line:
                     name = Path(line.split(marker, 1)[1].strip()).name
@@ -416,6 +563,6 @@ def download_subtitles(
             return DownloadResult(
                 vtt_files=[output_dir / name for name in sorted(selected_vtt_names & available)],
                 errors=errors,
-                skipped_count=skipped_count,
+                skipped_count=len(skipped_vtt_names | cached_vtt_names),
                 returncode=result.returncode,
             )

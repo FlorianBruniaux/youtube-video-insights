@@ -301,6 +301,48 @@ class Catalog:
     def close(self) -> None:
         self._connection.close()
 
+    def checkpoint(self) -> None:
+        """Move every committed WAL frame into the private main database."""
+        self._connection.commit()
+        busy, remaining, checkpointed = self._connection.execute(
+            "PRAGMA wal_checkpoint(TRUNCATE)"
+        ).fetchone()
+        if busy or remaining != checkpointed:
+            raise RuntimeError("catalog WAL checkpoint did not complete")
+
+    @staticmethod
+    def validate_database(db_path: Path) -> None:
+        """Validate a closed private catalog before filesystem publication."""
+        database = Path(db_path)
+        details = database.lstat()
+        if not stat.S_ISREG(details.st_mode):
+            raise RuntimeError("staged catalog is not a regular file")
+        wal_path = database.with_name(database.name + "-wal")
+        try:
+            wal_details = wal_path.lstat()
+        except FileNotFoundError:
+            wal_details = None
+        if wal_details is not None and (
+            not stat.S_ISREG(wal_details.st_mode) or wal_details.st_size != 0
+        ):
+            raise RuntimeError("staged catalog has an uncheckpointed WAL")
+
+        connection = sqlite3.connect(
+            f"{database.absolute().as_uri()}?mode=ro", uri=True
+        )
+        try:
+            connection.execute("PRAGMA query_only = ON")
+            result = connection.execute("PRAGMA quick_check").fetchone()
+            if result != ("ok",):
+                raise RuntimeError("staged catalog failed SQLite quick_check")
+            row = connection.execute(
+                "SELECT version FROM schema_meta LIMIT 1"
+            ).fetchone()
+            if row != (_SCHEMA_VERSION,):
+                raise RuntimeError("staged catalog schema is invalid")
+        finally:
+            connection.close()
+
     def _create_schema(self) -> None:
         self._connection.executescript(
             """
