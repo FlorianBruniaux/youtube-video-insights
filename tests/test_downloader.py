@@ -97,7 +97,8 @@ def test_download_subtitles_returns_logged_vtt_and_preserves_argument_vector(
 
     assert result.vtt_files == [vtt_path]
     assert result.errors == []
-    assert result.skipped_count == 0
+    assert result.skipped_count == int("already exists" in log_template)
+    assert result.returncode == 0
     assert calls == [
         (
             [
@@ -222,5 +223,22 @@ def test_fetch_video_list_exposes_nonzero_exit_without_error_line() -> None:
         result = fetch_video_list("https://www.youtube.com/@example/videos")
 
     assert result.videos == []
+    assert result.returncode == 2
+    assert result.errors == ["yt-dlp exited with status 2: connection refused"]
+
+
+def test_download_subtitles_exposes_nonzero_exit_without_error_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(
+        downloader.subprocess,
+        "run",
+        lambda *args, **kwargs: subprocess.CompletedProcess(
+            args=args[0], returncode=2, stdout="", stderr="connection refused"
+        ),
+    )
+
+    result = download_subtitles("https://youtu.be/nfupYzLjFGc", tmp_path)
+
     assert result.returncode == 2
     assert result.errors == ["yt-dlp exited with status 2: connection refused"]

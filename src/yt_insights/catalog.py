@@ -6,6 +6,7 @@ import hashlib
 import json
 import re
 import sqlite3
+import stat
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -137,6 +138,27 @@ def _source_slug(source: str) -> str:
         candidate = parsed.netloc
     slug = re.sub(r"[^a-z0-9]+", "-", candidate.lower()).strip("-")
     return slug or "unknown-source"
+
+
+def _flat_artifact_source_slug(
+    corpus_root: Path, path: Path, name: _ArtifactName
+) -> str:
+    """Resolve a stable source for inbox artifacts from yt-dlp metadata."""
+    info_name = path.name.removesuffix(f".{name.language}{path.suffix}") + ".info.json"
+    info_path = corpus_root / "transcripts" / info_name
+    try:
+        details = info_path.lstat()
+        if not stat.S_ISREG(details.st_mode) or details.st_size > 1024 * 1024:
+            return "inbox"
+        payload = json.loads(info_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return "inbox"
+    if not isinstance(payload, dict) or payload.get("id") != name.video_id:
+        return "inbox"
+    identity = payload.get("channel_id") or payload.get("uploader_id")
+    if not isinstance(identity, str) or not identity.strip():
+        return "inbox"
+    return _source_slug(identity.strip())
 
 
 class Catalog:
@@ -322,21 +344,35 @@ class Catalog:
         error_count = 0
         touched_video_ids: set[str] = set()
 
-        for source_dir in sorted(path for path in corpus_root.iterdir() if path.is_dir()):
-            source_slug = source_dir.name
+        layouts: list[tuple[str, Path, Path]] = [
+            ("inbox", corpus_root / "insights", corpus_root / "transcripts")
+        ]
+        layouts.extend(
+            (source_dir.name, source_dir / "insights", source_dir / "transcripts")
+            for source_dir in sorted(path for path in corpus_root.iterdir() if path.is_dir())
+            if source_dir.name not in {"transcripts", "insights", "exports", "shorts", "clips", ".search"}
+        )
+
+        for source_slug, insights_dir, transcripts_dir in layouts:
             artifacts = [
                 ("insight", path)
-                for path in sorted((source_dir / "insights").glob("*.json"))
+                for path in sorted(insights_dir.glob("*.json"))
                 if not path.name.startswith("AGGREGATE_REPORT")
             ]
             artifacts += [
                 ("transcript", path)
-                for path in sorted((source_dir / "transcripts").glob("*.vtt"))
+                for path in sorted(transcripts_dir.glob("*.vtt"))
             ]
             for kind, path in artifacts:
                 items_seen += 1
+                artifact_source_slug = source_slug
                 try:
                     name = _parse_artifact_name(path)
+                    artifact_source_slug = (
+                        _flat_artifact_source_slug(corpus_root, path, name)
+                        if source_slug == "inbox"
+                        else source_slug
+                    )
                     raw_bytes = path.read_bytes()
                     digest = hashlib.sha256(raw_bytes).hexdigest()
                     existing_artifact = self._connection.execute(
@@ -355,7 +391,7 @@ class Catalog:
                         SELECT 1 FROM video_sources
                         WHERE video_id = ? AND source_slug = ?
                         """,
-                        (name.video_id, source_slug),
+                        (name.video_id, artifact_source_slug),
                     ).fetchone()
 
                     if kind == "insight":
@@ -366,7 +402,7 @@ class Catalog:
                             self._record_error(
                                 run_id=run_id,
                                 stage="corpus_validation",
-                                source=source_slug,
+                                source=artifact_source_slug,
                                 item_ref=str(path.resolve()),
                                 message="; ".join(validation_issues),
                             )
@@ -380,7 +416,7 @@ class Catalog:
 
                     now = _utc_now()
                     self._upsert_video(name, now)
-                    self._upsert_source(name.video_id, source_slug, now)
+                    self._upsert_source(name.video_id, artifact_source_slug, now)
                     inserted_count = 0
                     if existing_artifact is None:
                         inserted = self._connection.execute(
@@ -392,7 +428,7 @@ class Catalog:
                             """,
                             (
                                 name.video_id,
-                                source_slug,
+                                artifact_source_slug,
                                 kind,
                                 name.language,
                                 str(path.resolve()),
@@ -418,7 +454,7 @@ class Catalog:
                     self._record_error(
                         run_id=run_id,
                         stage="corpus_import",
-                        source=source_slug,
+                        source=artifact_source_slug,
                         item_ref=str(path.resolve()),
                         message=f"{type(exc).__name__}: {exc}",
                     )

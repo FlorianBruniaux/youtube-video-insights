@@ -48,6 +48,28 @@ def _write_video_artifacts(
 
 
 class CatalogImportTests(unittest.TestCase):
+    def test_import_includes_flat_inbox_and_nested_corpus_without_double_counting(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            corpus = base / "corpus"
+            nested = corpus / "product-channel" / "transcripts"
+            flat = corpus / "transcripts"
+            nested.mkdir(parents=True)
+            flat.mkdir(parents=True)
+            filename = f"20260820 - Agentic product discovery [{VIDEO_ID}].fr.vtt"
+            payload = "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nEvidence\n"
+            (nested / filename).write_text(payload, encoding="utf-8")
+            (flat / filename).write_text(payload, encoding="utf-8")
+
+            with Catalog(base / "catalog.sqlite3") as catalog:
+                summary = catalog.import_corpus(corpus)
+                stats = catalog.stats()
+
+            self.assertEqual(summary.items_seen, 2)
+            self.assertEqual(summary.items_written, 1)
+            self.assertEqual(stats.videos, 1)
+            self.assertEqual(stats.artifacts, 1)
+
     def test_import_is_idempotent_across_language_variants(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

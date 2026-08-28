@@ -118,6 +118,7 @@ class DownloadResult:
     vtt_files: list[Path] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     skipped_count: int = 0
+    returncode: int = 0
 
 
 def download_subtitles(
@@ -134,6 +135,7 @@ def download_subtitles(
     (--print after_move:filepath only fires for media downloads, not subtitles.)
     """
     output_dir.mkdir(parents=True, exist_ok=True)
+    before = set(output_dir.glob("*.vtt"))
 
     cmd = [
         "yt-dlp",
@@ -161,6 +163,7 @@ def download_subtitles(
 
     vtt_files: list[Path] = []
     errors: list[str] = []
+    skipped_count = 0
 
     # yt-dlp writes the "[info] Writing video subtitles to:" lines to stdout and
     # WARNING/ERROR lines to stderr, so both streams must be scanned.
@@ -178,11 +181,18 @@ def download_subtitles(
             p = Path(path_str)
             if p.suffix == ".vtt" and p.exists():
                 vtt_files.append(p)
+                skipped_count += 1
         elif "ERROR" in line.upper():
             errors.append(line)
+
+    vtt_files.extend(path for path in output_dir.glob("*.vtt") if path not in before)
+    if result.returncode != 0 and not errors:
+        detail = result.stderr.strip() or "no diagnostic output"
+        errors.append(f"yt-dlp exited with status {result.returncode}: {detail}")
 
     return DownloadResult(
         vtt_files=sorted(set(vtt_files)),
         errors=errors,
-        skipped_count=0,
+        skipped_count=skipped_count,
+        returncode=result.returncode,
     )
