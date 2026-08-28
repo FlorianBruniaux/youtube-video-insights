@@ -635,7 +635,7 @@ def catalog_discover(
 @click.option("--source", default=None, help="Restrict results to one source slug.")
 @click.option(
     "--limit",
-    type=click.IntRange(1, 100),
+    type=click.IntRange(1, 20),
     default=20,
     show_default=True,
 )
@@ -658,8 +658,8 @@ def catalog_search(
     if not query.strip():
         raise click.UsageError("Search query cannot be empty")
     try:
-        with Catalog(db_path) as catalog:
-            results = catalog.search(query, source=source, limit=limit)
+        with Catalog.open_read_only(db_path.expanduser().absolute()) as catalog:
+            results = catalog.search_videos(query, source=source, limit=limit)
     except (OSError, RuntimeError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -671,8 +671,6 @@ def catalog_search(
         sources = ",".join(result.sources) or "unknown-source"
         click.echo(f"{date}  {sources}  {result.title}  [{result.video_id}]")
         click.echo(f"  {result.watch_url}")
-        if result.highlight:
-            click.echo(f"  {result.highlight}")
 
 
 @catalog_group.command("stats")
@@ -688,7 +686,7 @@ def catalog_stats(db_path: Path) -> None:
     from .catalog import Catalog
 
     try:
-        with Catalog(db_path) as catalog:
+        with Catalog.open_read_only(db_path.expanduser().absolute()) as catalog:
             stats = catalog.stats()
     except (OSError, RuntimeError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc
@@ -712,7 +710,7 @@ def catalog_errors(run_id: int | None, db_path: Path) -> None:
     from .catalog import Catalog
 
     try:
-        with Catalog(db_path) as catalog:
+        with Catalog.open_read_only(db_path.expanduser().absolute()) as catalog:
             errors = catalog.list_errors(run_id=run_id)
     except (OSError, RuntimeError, ValueError) as exc:
         raise click.ClickException(str(exc)) from exc

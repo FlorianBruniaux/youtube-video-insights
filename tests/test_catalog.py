@@ -298,7 +298,10 @@ class CatalogImportTests(unittest.TestCase):
             self.assertEqual(stats.errors, 1)
             self.assertEqual(len(errors), 1)
             self.assertEqual(errors[0].stage, "corpus_import")
-            self.assertEqual(errors[0].item_ref, str(broken_path.resolve()))
+            self.assertEqual(
+                errors[0].item_ref,
+                "broken-channel/insights/20260819 - Broken metadata [bad123DEF45].en.json",
+            )
             self.assertIn("JSON", errors[0].message)
 
     def test_import_keeps_type_invalid_insight_and_records_validation_error(self) -> None:
@@ -672,3 +675,85 @@ def test_read_only_catalog_uses_anchored_snapshot_during_parent_swap(
 
     assert swapped is True
     assert [item.title for item in found] == ["Original needle"]
+
+
+def test_imported_artifact_paths_survive_relocation_and_reject_escape_symlinks(
+    tmp_path: Path,
+) -> None:
+    original_root = tmp_path / "original-corpus"
+    relocated_root = tmp_path / "relocated-corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        original_root,
+        channel="product-channel",
+        language="en",
+        transcript="Portable catalog artifact.",
+    )
+
+    with Catalog(database) as catalog:
+        catalog.import_corpus(original_root)
+        catalog.checkpoint()
+    with sqlite3.connect(database) as connection:
+        stored_paths = [
+            row[0] for row in connection.execute("SELECT path FROM artifacts ORDER BY path")
+        ]
+
+    assert stored_paths == [
+        f"product-channel/insights/20260820 - Agentic product discovery [{VIDEO_ID}].en.json",
+        f"product-channel/transcripts/20260820 - Agentic product discovery [{VIDEO_ID}].en.vtt",
+    ]
+    original_root.rename(relocated_root)
+    resolved = [Catalog.resolve_artifact_path(relocated_root, path) for path in stored_paths]
+    assert all(path.is_file() for path in resolved)
+
+    outside = tmp_path / "outside.json"
+    outside.write_text("outside", encoding="utf-8")
+    resolved[0].unlink()
+    resolved[0].symlink_to(outside)
+    with pytest.raises(CatalogError):
+        Catalog.resolve_artifact_path(relocated_root, stored_paths[0])
+
+
+@pytest.mark.parametrize("unsafe_path", ["../escape.vtt", "/absolute.vtt", r"C:\\escape.vtt"])
+def test_read_only_catalog_rejects_unsafe_stored_artifact_paths(
+    tmp_path: Path, unsafe_path: str
+) -> None:
+    corpus = tmp_path / "corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        corpus,
+        channel="product-channel",
+        language="en",
+        transcript="Catalog path validation.",
+    )
+    with Catalog(database) as catalog:
+        catalog.import_corpus(corpus)
+        catalog.checkpoint()
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE artifacts SET path = ?", (unsafe_path,))
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    with pytest.raises(CatalogError):
+        Catalog.open_read_only(database)
+
+
+def test_read_only_catalog_rejects_pre_portability_schema(tmp_path: Path) -> None:
+    corpus = tmp_path / "corpus"
+    database = tmp_path / "catalog.sqlite3"
+    _write_video_artifacts(
+        corpus,
+        channel="product-channel",
+        language="en",
+        transcript="Old schemas must fail closed.",
+    )
+    with Catalog(database) as catalog:
+        catalog.import_corpus(corpus)
+        catalog.checkpoint()
+    with sqlite3.connect(database) as connection:
+        connection.execute("UPDATE schema_meta SET version = 1")
+        connection.commit()
+        connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+
+    with pytest.raises(CatalogError):
+        Catalog.open_read_only(database)

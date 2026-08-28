@@ -15,7 +15,7 @@ import unicodedata
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Iterator
 from urllib.parse import urlparse
 
@@ -30,7 +30,7 @@ from .downloader import (
 )
 
 
-_SCHEMA_VERSION = 1
+_SCHEMA_VERSION = 2
 _ARTIFACT_NAME = re.compile(
     r"^(?P<date>\d{8})\s*-\s*(?P<title>.*?)\s*"
     r"\[(?P<video_id>[A-Za-z0-9_-]{11})\]\."
@@ -43,6 +43,36 @@ _SOURCE_SLUG = re.compile(r"[^\W_][\w.-]{0,199}", flags=re.UNICODE)
 
 class CatalogError(RuntimeError):
     """Raised when the catalog database path cannot be trusted."""
+
+
+def _validate_artifact_relative_path(value: object) -> str:
+    if not isinstance(value, str) or not value or "\x00" in value or "\\" in value:
+        raise CatalogError("catalog artifact path is invalid")
+    path = PurePosixPath(value)
+    if (
+        path.is_absolute()
+        or PureWindowsPath(value).is_absolute()
+        or not path.parts
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise CatalogError("catalog artifact path is invalid")
+    return path.as_posix()
+
+
+def _resolve_artifact_path(corpus_root: Path, stored_path: object) -> Path:
+    relative_path = _validate_artifact_relative_path(stored_path)
+    try:
+        root = Path(corpus_root).resolve(strict=True)
+    except OSError as exc:
+        raise CatalogError("corpus root is not safe") from exc
+    if not root.is_dir():
+        raise CatalogError("corpus root is not safe")
+    candidate = root.joinpath(*PurePosixPath(relative_path).parts)
+    try:
+        candidate.resolve(strict=False).relative_to(root)
+    except (OSError, ValueError) as exc:
+        raise CatalogError("catalog artifact path escapes corpus root") from exc
+    return candidate
 
 
 def _catalog_database_identity(
@@ -297,7 +327,6 @@ def _safe_artifacts(
     root_fd: int,
     directory_parts: tuple[str, ...],
     suffix: str,
-    corpus_root: Path,
 ) -> list[_ArtifactSnapshot]:
     """Read stable snapshots through no-follow descriptors rooted in corpus."""
     try:
@@ -310,7 +339,7 @@ def _safe_artifacts(
                 try:
                     snapshots.append(
                         _ArtifactSnapshot(
-                            path=corpus_root.joinpath(*directory_parts, name),
+                            path=Path(*directory_parts, name),
                             raw_bytes=_read_regular_at(directory_fd, name),
                         )
                     )
@@ -349,7 +378,7 @@ def _inventory_corpus(
 
         for source_slug, insights_parts, transcripts_parts in layouts:
             insight_snapshots = _safe_artifacts(
-                root_fd, insights_parts, ".json", corpus_root
+                root_fd, insights_parts, ".json"
             )
             for snapshot in insight_snapshots:
                 if not snapshot.path.name.startswith("AGGREGATE_REPORT"):
@@ -364,7 +393,7 @@ def _inventory_corpus(
                             pass
                     inventory.append((artifact_slug, "insight", snapshot))
             transcript_snapshots = _safe_artifacts(
-                root_fd, transcripts_parts, ".vtt", corpus_root
+                root_fd, transcripts_parts, ".vtt"
             )
             for snapshot in transcript_snapshots:
                 artifact_slug = source_slug
@@ -427,6 +456,11 @@ class Catalog:
     def open_read_only(db_path: Path) -> "ReadOnlyCatalog":
         """Open catalog discovery queries without locks, journals, or writes."""
         return ReadOnlyCatalog(db_path)
+
+    @staticmethod
+    def resolve_artifact_path(corpus_root: Path, stored_path: object) -> Path:
+        """Resolve a stored relative artifact path without allowing corpus escape."""
+        return _resolve_artifact_path(corpus_root, stored_path)
 
     def close(self) -> None:
         connection = self._connection
@@ -696,7 +730,7 @@ class Catalog:
                             run_id=run_id,
                             stage="corpus_validation",
                             source=artifact_source_slug,
-                            item_ref=str(path.absolute()),
+                            item_ref=path.as_posix(),
                             message="; ".join(validation_issues),
                         )
                     searchable_text = (
@@ -729,7 +763,7 @@ class Catalog:
                             artifact_source_slug,
                             kind,
                             name.language,
-                            str(path.absolute()),
+                            _validate_artifact_relative_path(path.as_posix()),
                             digest,
                             searchable_text,
                             now,
@@ -751,7 +785,7 @@ class Catalog:
                     run_id=run_id,
                     stage="corpus_import",
                     source=artifact_source_slug,
-                    item_ref=str(path.absolute()),
+                    item_ref=path.as_posix(),
                     message=f"{type(exc).__name__}: {exc}",
                 )
 
@@ -1256,6 +1290,8 @@ class ReadOnlyCatalog:
             raise CatalogError("catalog database is unavailable or invalid")
         required = {
             "artifacts",
+            "collection_errors",
+            "ingestion_runs",
             "schema_meta",
             "video_search",
             "video_sources",
@@ -1269,6 +1305,8 @@ class ReadOnlyCatalog:
         }
         if not required.issubset(present):
             raise CatalogError("catalog database is unavailable or invalid")
+        for artifact in connection.execute("SELECT path FROM artifacts"):
+            _validate_artifact_relative_path(artifact["path"])
 
     @staticmethod
     def _validate_source_slug(value: object) -> str:
@@ -1363,6 +1401,79 @@ class ReadOnlyCatalog:
             raise
         except (sqlite3.Error, TypeError, ValueError) as exc:
             raise CatalogError("catalog query failed") from exc
+
+    def stats(self) -> CatalogStats:
+        self._require_database_identity()
+        connection = self._connection_or_raise()
+        try:
+            def count(table: str) -> int:
+                row = connection.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
+                return self._validate_nonnegative_count(row["n"])
+
+            result = CatalogStats(
+                videos=count("videos"),
+                sources=count("video_sources"),
+                artifacts=count("artifacts"),
+                runs=count("ingestion_runs"),
+                errors=count("collection_errors"),
+            )
+            self._require_database_identity()
+            return result
+        except CatalogError:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            raise CatalogError("catalog query failed") from exc
+
+    def list_errors(self, *, run_id: int | None = None) -> tuple[CollectionError, ...]:
+        if run_id is not None and (
+            isinstance(run_id, bool) or not isinstance(run_id, int) or run_id < 1
+        ):
+            raise ValueError("run_id must be a positive integer")
+        self._require_database_identity()
+        connection = self._connection_or_raise()
+        sql = "SELECT * FROM collection_errors"
+        parameters: tuple[object, ...] = ()
+        if run_id is not None:
+            sql += " WHERE run_id = ?"
+            parameters = (run_id,)
+        sql += " ORDER BY id"
+        try:
+            rows = connection.execute(sql, parameters).fetchall()
+            result = tuple(
+                CollectionError(
+                    id=self._validate_positive_id(row["id"]),
+                    run_id=self._validate_positive_id(row["run_id"]),
+                    stage=self._validate_collection_text(row["stage"]),
+                    source=self._validate_collection_text(row["source"]),
+                    item_ref=self._validate_collection_text(row["item_ref"], allow_empty=True),
+                    message=self._validate_collection_text(row["message"]),
+                    created_at=self._validate_collection_text(row["created_at"]),
+                )
+                for row in rows
+            )
+            self._require_database_identity()
+            return result
+        except CatalogError:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            raise CatalogError("catalog query failed") from exc
+
+    @staticmethod
+    def _validate_positive_id(value: object) -> int:
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise CatalogError("catalog row is invalid")
+        return value
+
+    @staticmethod
+    def _validate_collection_text(value: object, *, allow_empty: bool = False) -> str:
+        if (
+            not isinstance(value, str)
+            or (not allow_empty and not value)
+            or len(value) > 10000
+            or "\x00" in value
+        ):
+            raise CatalogError("catalog row is invalid")
+        return value
 
     @staticmethod
     def _validate_nonnegative_count(value: object) -> int:
