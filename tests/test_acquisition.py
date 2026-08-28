@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import fcntl
+import os
 from dataclasses import replace
 from pathlib import Path
 
@@ -15,6 +17,15 @@ from yt_insights.acquisition import (
 )
 from yt_insights.downloader import DownloadResult, VideoInfo
 from yt_insights.paths import DataPaths
+
+
+def _assert_catalog_lock_held(lock_path: Path) -> None:
+    descriptor = os.open(lock_path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(descriptor)
 
 
 @pytest.mark.parametrize(
@@ -640,6 +651,185 @@ def test_execute_refuses_preexisting_search_receipt_without_replacing_database(
     assert any("publication target already exists" in item for item in report.failures)
     assert paths.search_database.read_bytes() == b"published sentinel"
     assert receipt.read_text(encoding="utf-8") == '{"falsified":true}'
+
+
+def test_execute_holds_catalog_lock_through_import_and_publication(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.acquisition as acquisition_module
+    from yt_insights.catalog import Catalog
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.transcripts.mkdir(parents=True)
+    (paths.transcripts / "20260820 - Cached [aaa123DEF45].fr.vtt").write_text(
+        "WEBVTT\n", encoding="utf-8"
+    )
+    lock_path = paths.root / ".catalog.sqlite3.lock"
+    lock_path.touch()
+    video = VideoInfo("aaa123DEF45", "Cached", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url, data_paths=paths, discovered=[video]
+    )
+    checkpoints: list[str] = []
+    original_import = Catalog.import_corpus
+    original_replace = acquisition_module._replace_regular_file
+
+    def checked_import(self: Catalog, root: Path):
+        checkpoints.append("import")
+        _assert_catalog_lock_held(lock_path)
+        return original_import(self, root)
+
+    def checked_replace(
+        source: Path, destination_fd: int, name: str, *args: object, **kwargs: object
+    ) -> None:
+        if name == paths.catalog_database.name:
+            checkpoints.append("publish")
+            _assert_catalog_lock_held(lock_path)
+        original_replace(source, destination_fd, name, *args, **kwargs)
+
+    monkeypatch.setattr(Catalog, "import_corpus", checked_import)
+    monkeypatch.setattr(acquisition_module, "_replace_regular_file", checked_replace)
+
+    report = execute_acquisition(plan)
+
+    assert report.exit_code == 0
+    assert checkpoints == ["import", "publish"]
+
+
+def test_execute_restores_old_catalog_when_post_publication_validation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import sqlite3
+    import yt_insights.acquisition as acquisition_module
+    from yt_insights.catalog import Catalog
+    from yt_insights.downloader import VideoListResult
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.root.mkdir(parents=True)
+    discovered = VideoInfo("disc123ABCD", "Discovery survives", "20260819")
+    with Catalog(paths.catalog_database) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@stable/videos",
+            VideoListResult(videos=[discovered]),
+        )
+        catalog.checkpoint()
+    paths.transcripts.mkdir()
+    (paths.transcripts / "20260820 - Cached [aaa123DEF45].fr.vtt").write_text(
+        "WEBVTT\n", encoding="utf-8"
+    )
+    video = VideoInfo("aaa123DEF45", "Cached", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url, data_paths=paths, discovered=[video]
+    )
+    original_replace = acquisition_module._replace_regular_file
+    corrupted = False
+
+    def corrupting_replace(
+        source: Path, destination_fd: int, name: str, *args: object, **kwargs: object
+    ) -> None:
+        nonlocal corrupted
+        original_replace(source, destination_fd, name, *args, **kwargs)
+        if name == paths.catalog_database.name and not corrupted:
+            corrupted = True
+            paths.catalog_database.write_bytes(b"corrupted catalog")
+
+    monkeypatch.setattr(acquisition_module, "_replace_regular_file", corrupting_replace)
+
+    report = execute_acquisition(plan)
+
+    assert report.exit_code == 4
+    assert any("catalog" in failure for failure in report.failures)
+    with sqlite3.connect(
+        f"{paths.catalog_database.absolute().as_uri()}?mode=ro", uri=True
+    ) as connection:
+        assert connection.execute(
+            "SELECT title FROM videos WHERE video_id = ?", (discovered.video_id,)
+        ).fetchone() == ("Discovery survives",)
+
+
+def _valid_search_pair(tmp_path: Path) -> tuple[DataPaths, AcquisitionPlan, object, set[str]]:
+    from yt_insights.search.sqlite_fts import SQLiteFtsIndex
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.transcripts.mkdir(parents=True)
+    (paths.transcripts / "20260820 - Cached [aaa123DEF45].fr.vtt").write_text(
+        "WEBVTT\n", encoding="utf-8"
+    )
+    video = VideoInfo("aaa123DEF45", "Cached", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url, data_paths=paths, discovered=[video]
+    )
+    assert execute_acquisition(plan).exit_code == 0
+    status = SQLiteFtsIndex(paths.search_database).status()
+    receipts = {
+        path.name
+        for path in paths.search_database.parent.glob(
+            f".{paths.search_database.name}.*.receipt.json"
+        )
+    }
+    return paths, plan, status, receipts
+
+
+def _corrupt_new_receipt(paths: DataPaths, old_receipts: set[str]) -> None:
+    receipts = [
+        path
+        for path in paths.search_database.parent.glob(
+            f".{paths.search_database.name}.*.receipt.json"
+        )
+        if path.name not in old_receipts
+    ]
+    assert len(receipts) == 1
+    receipts[0].write_bytes(b'{"corrupted":true}')
+
+
+def test_execute_restores_old_search_pair_when_receipt_changes_before_db_replace(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.acquisition as acquisition_module
+    from yt_insights.search.sqlite_fts import SQLiteFtsIndex
+
+    paths, plan, old_status, old_receipts = _valid_search_pair(tmp_path)
+    original_replace = acquisition_module._replace_regular_file
+
+    def corrupting_replace(
+        source: Path, destination_fd: int, name: str, *args: object, **kwargs: object
+    ) -> None:
+        if name == paths.search_database.name:
+            _corrupt_new_receipt(paths, old_receipts)
+        original_replace(source, destination_fd, name, *args, **kwargs)
+
+    monkeypatch.setattr(acquisition_module, "_replace_regular_file", corrupting_replace)
+
+    report = execute_acquisition(plan)
+
+    assert report.exit_code == 4
+    assert any("receipt" in failure for failure in report.failures)
+    assert SQLiteFtsIndex(paths.search_database).status() == old_status
+
+
+def test_execute_restores_old_search_pair_when_receipt_changes_after_db_publish(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.acquisition as acquisition_module
+    from yt_insights.search.sqlite_fts import SQLiteFtsIndex
+
+    paths, plan, old_status, old_receipts = _valid_search_pair(tmp_path)
+    original_replace = acquisition_module._replace_regular_file
+
+    def corrupting_replace(
+        source: Path, destination_fd: int, name: str, *args: object, **kwargs: object
+    ) -> None:
+        original_replace(source, destination_fd, name, *args, **kwargs)
+        if name == paths.search_database.name:
+            _corrupt_new_receipt(paths, old_receipts)
+
+    monkeypatch.setattr(acquisition_module, "_replace_regular_file", corrupting_replace)
+
+    report = execute_acquisition(plan)
+
+    assert report.exit_code == 4
+    assert any("receipt" in failure for failure in report.failures)
+    assert SQLiteFtsIndex(paths.search_database).status() == old_status
 
 
 def test_execute_counts_cached_insight_without_resolving_backend(tmp_path: Path) -> None:

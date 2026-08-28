@@ -12,7 +12,7 @@ import secrets
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
+from typing import Callable, Iterator
 
 
 @dataclass
@@ -336,7 +336,13 @@ def _publish_new_regular_file(source: Path, destination_fd: int, name: str) -> N
         raise ValueError(f"publication target already exists: {name}") from exc
 
 
-def _replace_regular_file(source: Path, destination_fd: int, name: str) -> None:
+def _replace_regular_file(
+    source: Path,
+    destination_fd: int,
+    name: str,
+    *,
+    before_replace: Callable[[], None] | None = None,
+) -> None:
     """Copy privately, then atomically replace a destination through its dirfd."""
     temporary_name = f".{name}.{secrets.token_hex(8)}.tmp"
     temporary_identity: tuple[int, int] | None = None
@@ -347,6 +353,8 @@ def _replace_regular_file(source: Path, destination_fd: int, name: str) -> None:
         )
         if (current.st_dev, current.st_ino) != temporary_identity:
             raise ValueError("database publication temporary changed")
+        if before_replace is not None:
+            before_replace()
         os.replace(
             temporary_name,
             name,

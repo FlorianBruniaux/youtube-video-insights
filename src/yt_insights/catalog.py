@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import json
 import os
 import re
@@ -34,6 +35,63 @@ _ARTIFACT_NAME = re.compile(
     r"(?P<language>[A-Za-z0-9-]+)$"
 )
 _INSIGHT_KEYS = {"subject", "key_points", "tools", "advice", "quotes"}
+
+
+def _catalog_lock_name(database_name: str) -> str:
+    if Path(database_name).name != database_name or "\x00" in database_name:
+        raise ValueError("unsafe catalog database name")
+    return f".{database_name}.lock"
+
+
+@contextmanager
+def _held_catalog_parent(parent: Path) -> Iterator[int]:
+    """Hold the requested final directory without following its final component."""
+    parent.mkdir(parents=True, exist_ok=True)
+    inventoried = parent.lstat()
+    if not stat.S_ISDIR(inventoried.st_mode) or stat.S_ISLNK(inventoried.st_mode):
+        raise ValueError("catalog parent is not a safe directory")
+    descriptor = os.open(parent, _DIRECTORY_FLAGS)
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != (
+            inventoried.st_dev,
+            inventoried.st_ino,
+        ):
+            raise ValueError("catalog parent changed while opening")
+        yield descriptor
+    finally:
+        os.close(descriptor)
+
+
+@contextmanager
+def catalog_writer_lock(parent_fd: int, database_name: str) -> Iterator[None]:
+    """Serialize cooperative catalog writers through a no-follow lock file.
+
+    Every in-package writer uses this lock. Processes that write the SQLite
+    database while ignoring the lock are unsupported and can still race.
+    """
+    lock_name = _catalog_lock_name(database_name)
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor = os.open(lock_name, flags, 0o600, dir_fd=parent_fd)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError("catalog writer lock is not a regular file")
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        current = os.stat(lock_name, dir_fd=parent_fd, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ValueError("catalog writer lock changed while acquiring")
+        yield
+    finally:
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+        finally:
+            os.close(descriptor)
 
 
 @dataclass(frozen=True)
@@ -284,13 +342,26 @@ class Catalog:
 
     def __init__(self, db_path: Path) -> None:
         self.db_path = Path(db_path)
-        self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._connection = sqlite3.connect(self.db_path)
-        self._connection.row_factory = sqlite3.Row
-        self._connection.execute("PRAGMA foreign_keys = ON")
-        self._connection.execute("PRAGMA busy_timeout = 60000")
-        self._connection.execute("PRAGMA journal_mode = WAL")
-        self._create_schema()
+        self._directory_context = _held_catalog_parent(self.db_path.parent)
+        self._parent_fd = self._directory_context.__enter__()
+        self._lock_context = catalog_writer_lock(self._parent_fd, self.db_path.name)
+        try:
+            self._lock_context.__enter__()
+        except BaseException:
+            self._directory_context.__exit__(None, None, None)
+            self._directory_context = None
+            raise
+        self._connection: sqlite3.Connection | None = None
+        try:
+            self._connection = sqlite3.connect(self.db_path)
+            self._connection.row_factory = sqlite3.Row
+            self._connection.execute("PRAGMA foreign_keys = ON")
+            self._connection.execute("PRAGMA busy_timeout = 60000")
+            self._connection.execute("PRAGMA journal_mode = WAL")
+            self._create_schema()
+        except BaseException:
+            self.close()
+            raise
 
     def __enter__(self) -> "Catalog":
         return self
@@ -299,7 +370,22 @@ class Catalog:
         self.close()
 
     def close(self) -> None:
-        self._connection.close()
+        connection = self._connection
+        self._connection = None
+        try:
+            if connection is not None:
+                connection.close()
+        finally:
+            lock_context = getattr(self, "_lock_context", None)
+            self._lock_context = None
+            try:
+                if lock_context is not None:
+                    lock_context.__exit__(None, None, None)
+            finally:
+                directory_context = getattr(self, "_directory_context", None)
+                self._directory_context = None
+                if directory_context is not None:
+                    directory_context.__exit__(None, None, None)
 
     def checkpoint(self) -> None:
         """Move every committed WAL frame into the private main database."""
@@ -328,7 +414,7 @@ class Catalog:
             raise RuntimeError("staged catalog has an uncheckpointed WAL")
 
         connection = sqlite3.connect(
-            f"{database.absolute().as_uri()}?mode=ro", uri=True
+            f"{database.absolute().as_uri()}?mode=ro&immutable=1", uri=True
         )
         try:
             connection.execute("PRAGMA query_only = ON")

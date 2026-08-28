@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
+import shutil
 import stat
 import os
 import tempfile
@@ -16,6 +18,7 @@ from .config import Config
 from .downloader import (
     DownloadResult,
     VideoInfo,
+    _READ_FLAGS,
     _copy_regular_at,
     _confined_directory,
     _list_regular_names,
@@ -441,9 +444,179 @@ def _reject_nonempty_catalog_wal(parent_fd: int, database_name: str) -> None:
         raise ValueError("cannot refresh with a non-empty catalog WAL")
 
 
+_PinnedIdentity = tuple[int, int, int, int, int]
+
+
+@dataclass
+class _PinnedRegularFile:
+    descriptor: int
+    name: str
+    identity: _PinnedIdentity
+    sha256: str
+
+    def close(self) -> None:
+        os.close(self.descriptor)
+
+
+def _file_identity(details: os.stat_result) -> _PinnedIdentity:
+    return (
+        details.st_dev,
+        details.st_ino,
+        details.st_size,
+        details.st_mtime_ns,
+        details.st_ctime_ns,
+    )
+
+
+def _hash_pinned_descriptor(
+    descriptor: int, expected: _PinnedIdentity, name: str
+) -> str:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    digest = hashlib.sha256()
+    while True:
+        chunk = os.read(descriptor, 64 * 1024)
+        if not chunk:
+            break
+        digest.update(chunk)
+    if _file_identity(os.fstat(descriptor)) != expected:
+        raise ValueError(f"pinned file changed while hashing: {name}")
+    return digest.hexdigest()
+
+
+def _open_pinned_regular(parent_fd: int, name: str) -> _PinnedRegularFile:
+    if Path(name).name != name or "\x00" in name:
+        raise ValueError("unsafe pinned file name")
+    descriptor = os.open(name, _READ_FLAGS | os.O_NONBLOCK, dir_fd=parent_fd)
+    try:
+        opened = os.fstat(descriptor)
+        if not stat.S_ISREG(opened.st_mode):
+            raise ValueError(f"pinned file is not regular: {name}")
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        if (current.st_dev, current.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ValueError(f"pinned file changed while opening: {name}")
+        identity = _file_identity(opened)
+        return _PinnedRegularFile(
+            descriptor=descriptor,
+            name=name,
+            identity=identity,
+            sha256=_hash_pinned_descriptor(descriptor, identity, name),
+        )
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _recheck_pinned_regular(parent_fd: int, pinned: _PinnedRegularFile) -> None:
+    current = os.stat(pinned.name, dir_fd=parent_fd, follow_symlinks=False)
+    if (current.st_dev, current.st_ino) != pinned.identity[:2]:
+        raise ValueError(f"pinned receipt changed before database publication: {pinned.name}")
+    if _file_identity(os.fstat(pinned.descriptor)) != pinned.identity:
+        raise ValueError(f"pinned receipt changed before database publication: {pinned.name}")
+    if (
+        _hash_pinned_descriptor(pinned.descriptor, pinned.identity, pinned.name)
+        != pinned.sha256
+    ):
+        raise ValueError(f"pinned receipt hash changed before database publication: {pinned.name}")
+    final = os.stat(pinned.name, dir_fd=parent_fd, follow_symlinks=False)
+    if (final.st_dev, final.st_ino) != pinned.identity[:2]:
+        raise ValueError(f"pinned receipt changed before database publication: {pinned.name}")
+
+
+def _copy_pinned_regular(pinned: _PinnedRegularFile, destination: Path) -> None:
+    output_fd = os.open(
+        destination,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+        0o600,
+    )
+    try:
+        os.lseek(pinned.descriptor, 0, os.SEEK_SET)
+        while True:
+            chunk = os.read(pinned.descriptor, 64 * 1024)
+            if not chunk:
+                break
+            view = memoryview(chunk)
+            while view:
+                written = os.write(output_fd, view)
+                view = view[written:]
+        os.fsync(output_fd)
+    finally:
+        os.close(output_fd)
+    if (
+        _hash_pinned_descriptor(pinned.descriptor, pinned.identity, pinned.name)
+        != pinned.sha256
+    ):
+        destination.unlink(missing_ok=True)
+        raise ValueError(f"pinned file changed while snapshotting: {pinned.name}")
+
+
+def _remove_pinned_name(parent_fd: int, pinned: _PinnedRegularFile) -> None:
+    try:
+        current = os.stat(pinned.name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if (current.st_dev, current.st_ino) == pinned.identity[:2]:
+        os.unlink(pinned.name, dir_fd=parent_fd)
+        os.fsync(parent_fd)
+
+
+def _snapshot_valid_search_pair(
+    parent_fd: int, database_name: str, destination: Path
+) -> Path | None:
+    """Snapshot and validate an existing public pair without opening it in SQLite."""
+    from .search.sqlite_fts import SQLiteFtsIndex
+
+    destination.mkdir()
+    database = destination / database_name
+    try:
+        _copy_regular_at(parent_fd, database_name, database)
+    except (FileNotFoundError, OSError, ValueError):
+        return None
+    receipt_prefix = f".{database_name}."
+    for name in _list_regular_names(
+        parent_fd, suffix=".receipt.json", reject_unsafe=False
+    ):
+        if not name.startswith(receipt_prefix):
+            continue
+        try:
+            _copy_regular_at(parent_fd, name, destination / name)
+        except (OSError, ValueError):
+            continue
+    try:
+        SQLiteFtsIndex(database).status()
+    except Exception:
+        return None
+    return database
+
+
+def _validate_published_search_pair(
+    parent_fd: int,
+    database_name: str,
+    expected_receipt: _PinnedRegularFile,
+    destination: Path,
+) -> None:
+    """Reopen, snapshot and validate the just-published database/receipt pair."""
+    from .search.sqlite_fts import SQLiteFtsIndex
+
+    database = _open_pinned_regular(parent_fd, database_name)
+    receipt = _open_pinned_regular(parent_fd, expected_receipt.name)
+    try:
+        if (
+            receipt.identity != expected_receipt.identity
+            or receipt.sha256 != expected_receipt.sha256
+        ):
+            raise ValueError("published search receipt changed")
+        destination.mkdir()
+        _copy_pinned_regular(database, destination / database_name)
+        _copy_pinned_regular(receipt, destination / receipt.name)
+    finally:
+        receipt.close()
+        database.close()
+    SQLiteFtsIndex(destination / database_name).status()
+
+
 def _refresh_indexes(plan: AcquisitionPlan) -> None:
     """Build both SQLite databases privately and publish via held parent dirfds."""
-    from .catalog import Catalog
+    from .catalog import Catalog, catalog_writer_lock
     from .search.corpus import scan_corpus
     from .search.sqlite_fts import SQLiteFtsIndex
 
@@ -458,56 +631,140 @@ def _refresh_indexes(plan: AcquisitionPlan) -> None:
         ) as search_parent_fd,
         tempfile.TemporaryDirectory(prefix="yt-insights-indexes-") as staging_name,
     ):
-        staging = Path(staging_name)
-        staged_catalog = staging / catalog_path.name
+        staging = Path(staging_name).resolve()
+        catalog_build = staging / "catalog-build"
+        catalog_build.mkdir()
+        staged_catalog = catalog_build / catalog_path.name
         staged_search = staging / search_path.name
 
-        _reject_nonempty_catalog_wal(catalog_parent_fd, catalog_path.name)
-        try:
-            _copy_regular_at(catalog_parent_fd, catalog_path.name, staged_catalog)
-        except FileNotFoundError:
-            pass
+        with catalog_writer_lock(catalog_parent_fd, catalog_path.name):
+            _reject_nonempty_catalog_wal(catalog_parent_fd, catalog_path.name)
+            old_catalog_dir = staging / "old-catalog"
+            old_catalog_dir.mkdir()
+            old_catalog = old_catalog_dir / catalog_path.name
+            try:
+                _copy_regular_at(catalog_parent_fd, catalog_path.name, old_catalog)
+            except FileNotFoundError:
+                old_catalog = None
+            if old_catalog is not None:
+                Catalog.validate_database(old_catalog)
+                shutil.copyfile(old_catalog, staged_catalog)
 
-        catalog = Catalog(staged_catalog)
-        try:
-            catalog.import_corpus(plan.data_paths.root)
-            catalog.checkpoint()
-        finally:
-            catalog.close()
-        Catalog.validate_database(staged_catalog)
+            catalog = Catalog(staged_catalog)
+            try:
+                catalog.import_corpus(plan.data_paths.root)
+                catalog.checkpoint()
+            finally:
+                catalog.close()
+            Catalog.validate_database(staged_catalog)
 
-        manifest = scan_corpus(plan.data_paths.root, limit=None)
-        staged_index = SQLiteFtsIndex(staged_search)
-        rebuilt = staged_index.rebuild(manifest)
-        if staged_index.status() != rebuilt:
-            raise RuntimeError("staged search index status does not match rebuild")
-        receipt_prefix = f".{search_path.name}."
-        receipt_paths = [
-            candidate
-            for candidate in staging.iterdir()
-            if candidate.name.startswith(receipt_prefix)
-            and candidate.name.endswith(".receipt.json")
-            and candidate.is_file()
-            and not candidate.is_symlink()
-        ]
-        if len(receipt_paths) != 1:
-            raise RuntimeError("staged search index receipt is missing or ambiguous")
-        receipt = receipt_paths[0]
+            manifest = scan_corpus(plan.data_paths.root, limit=None)
+            staged_index = SQLiteFtsIndex(staged_search)
+            rebuilt = staged_index.rebuild(manifest)
+            if staged_index.status() != rebuilt:
+                raise RuntimeError("staged search index status does not match rebuild")
+            receipt_prefix = f".{search_path.name}."
+            receipt_paths = [
+                candidate
+                for candidate in staging.iterdir()
+                if candidate.name.startswith(receipt_prefix)
+                and candidate.name.endswith(".receipt.json")
+                and candidate.is_file()
+                and not candidate.is_symlink()
+            ]
+            if len(receipt_paths) != 1:
+                raise RuntimeError("staged search index receipt is missing or ambiguous")
+            receipt = receipt_paths[0]
+            old_search = _snapshot_valid_search_pair(
+                search_parent_fd, search_path.name, staging / "old-search"
+            )
 
-        _require_directory_identity(
-            plan.data_paths.root, catalog_path.parent, catalog_parent_fd
-        )
-        _reject_nonempty_catalog_wal(catalog_parent_fd, catalog_path.name)
-        _replace_regular_file(staged_catalog, catalog_parent_fd, catalog_path.name)
+            _require_directory_identity(
+                plan.data_paths.root, catalog_path.parent, catalog_parent_fd
+            )
+            _reject_nonempty_catalog_wal(catalog_parent_fd, catalog_path.name)
+            try:
+                _replace_regular_file(
+                    staged_catalog, catalog_parent_fd, catalog_path.name
+                )
+                _reject_nonempty_catalog_wal(catalog_parent_fd, catalog_path.name)
+                published_catalog_dir = staging / "published-catalog"
+                published_catalog_dir.mkdir()
+                published_catalog = published_catalog_dir / catalog_path.name
+                _copy_regular_at(
+                    catalog_parent_fd, catalog_path.name, published_catalog
+                )
+                Catalog.validate_database(published_catalog)
+                _reject_nonempty_catalog_wal(catalog_parent_fd, catalog_path.name)
+            except Exception as exc:
+                if old_catalog is not None:
+                    _replace_regular_file(
+                        old_catalog, catalog_parent_fd, catalog_path.name
+                    )
+                    restored_catalog_dir = staging / "restored-catalog"
+                    restored_catalog_dir.mkdir()
+                    restored_catalog = restored_catalog_dir / catalog_path.name
+                    _copy_regular_at(
+                        catalog_parent_fd, catalog_path.name, restored_catalog
+                    )
+                    Catalog.validate_database(restored_catalog)
+                raise ValueError(
+                    "catalog post-publication validation failed"
+                ) from exc
 
-        _require_directory_identity(
-            plan.data_paths.root, search_path.parent, search_parent_fd
-        )
-        _publish_new_regular_file(receipt, search_parent_fd, receipt.name)
-        _require_directory_identity(
-            plan.data_paths.root, search_path.parent, search_parent_fd
-        )
-        _replace_regular_file(staged_search, search_parent_fd, search_path.name)
+            _require_directory_identity(
+                plan.data_paths.root, search_path.parent, search_parent_fd
+            )
+            pinned_receipt: _PinnedRegularFile | None = None
+            database_published = False
+            try:
+                _publish_new_regular_file(receipt, search_parent_fd, receipt.name)
+                pinned_receipt = _open_pinned_regular(
+                    search_parent_fd, receipt.name
+                )
+                _require_directory_identity(
+                    plan.data_paths.root, search_path.parent, search_parent_fd
+                )
+                _replace_regular_file(
+                    staged_search,
+                    search_parent_fd,
+                    search_path.name,
+                    before_replace=lambda: _recheck_pinned_regular(
+                        search_parent_fd, pinned_receipt
+                    ),
+                )
+                database_published = True
+                _validate_published_search_pair(
+                    search_parent_fd,
+                    search_path.name,
+                    pinned_receipt,
+                    staging / "published-search",
+                )
+            except Exception as exc:
+                if database_published and old_search is not None:
+                    _replace_regular_file(
+                        old_search, search_parent_fd, search_path.name
+                    )
+                    if (
+                        _snapshot_valid_search_pair(
+                            search_parent_fd,
+                            search_path.name,
+                            staging / "restored-search",
+                        )
+                        is None
+                    ):
+                        raise RuntimeError(
+                            "search receipt/database rollback validation failed"
+                        ) from exc
+                if pinned_receipt is not None:
+                    _remove_pinned_name(search_parent_fd, pinned_receipt)
+                raise ValueError(
+                    "search receipt/database publication validation failed: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            finally:
+                if pinned_receipt is not None:
+                    pinned_receipt.close()
 
 
 def execute_acquisition(

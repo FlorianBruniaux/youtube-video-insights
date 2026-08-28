@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import json
+import fcntl
+import os
 import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 from yt_insights.catalog import Catalog
 from yt_insights.cleaner import clean_vtt
@@ -414,3 +418,27 @@ class CatalogDiscoveryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_catalog_holds_cooperative_writer_lock_for_connection_lifetime(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "catalog.sqlite3"
+    lock_path = tmp_path / ".catalog.sqlite3.lock"
+    lock_path.touch()
+
+    with Catalog(database):
+        competing_fd = os.open(
+            lock_path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0)
+        )
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(competing_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(competing_fd)
+
+    competing_fd = os.open(lock_path, os.O_RDWR | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        fcntl.flock(competing_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    finally:
+        os.close(competing_fd)
