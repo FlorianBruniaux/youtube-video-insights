@@ -1,0 +1,19 @@
+plans/2026-08-28-09-agent-ready-runtime.md
+  s_0a442347250965::t_f71f65f1d768d6 176-178,308,312,400-401,404,413,420,440-441,485
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "9b7f272dabe3e7f41e033e0b2c2ca70677bd511f",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
