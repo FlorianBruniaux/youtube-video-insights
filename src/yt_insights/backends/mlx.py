@@ -15,13 +15,20 @@ from ..config import Config
 class MLXBackend:
     def __init__(self, config: Config) -> None:
         try:
-            import mlx_lm  # noqa: F401
+            import mlx_lm
         except ImportError as exc:
             raise ImportError(
                 "mlx-lm is not installed. Run: pip install yt-insights[mlx]"
             ) from exc
         self._config = config
-        self._mlx_lm = __import__("mlx_lm")
+        self._mlx_lm = mlx_lm
+        self._model = None
+        self._tokenizer = None
+
+    def _ensure_loaded(self) -> tuple[object, object]:
+        if self._model is None or self._tokenizer is None:
+            self._model, self._tokenizer = self._mlx_lm.load(self._config.model)
+        return self._model, self._tokenizer
 
     def generate(
         self,
@@ -30,8 +37,11 @@ class MLXBackend:
         max_tokens: int,
         timeout: int,
     ) -> tuple[str, str]:
+        model, tokenizer = self._ensure_loaded()
         text = self._mlx_lm.generate(
-            prompt,
+            model,
+            tokenizer,
+            prompt=prompt,
             max_tokens=max_tokens,
             verbose=False,
         )

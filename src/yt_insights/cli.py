@@ -15,11 +15,12 @@ from .backends import (
     sanitize_endpoint,
 )
 from .backends.base import BackendNotFoundError, BackendUnavailableError
-from .config import CONFIG_TOML_TEMPLATE, load_config
+from .config import BACKEND_NAMES, CONFIG_TOML_TEMPLATE, load_config
 
 SortKey = Literal["date-desc", "date-asc", "title"]
 
 SORT_CHOICES = click.Choice(["date-desc", "date-asc", "title"])
+BACKEND_CHOICES = click.Choice(BACKEND_NAMES)
 
 
 def _echo_resolved_backend(backend: ResolvedBackend) -> None:
@@ -39,7 +40,7 @@ def _sort_videos(videos: list, sort: SortKey) -> list:
 def cli() -> None:
     """YouTube transcript analysis and Shorts suggestion tool.
 
-    Two pipelines, same LLM backend auto-detection (cc-bridge → Ollama → Anthropic API):
+    Two pipelines, with explicit backend selection or automatic detection:
 
     \b
     Insight pipeline:
@@ -107,6 +108,7 @@ def list_cmd(source: str, sort: SortKey, cookies_from_browser: str | None) -> No
 @click.option("--force", is_flag=True, help="Re-analyze even if insight cache exists.")
 @click.option("--model", default=None, help="Override LLM model.")
 @click.option("--base-url", default=None, help="Override LLM API base URL.")
+@click.option("--backend", type=BACKEND_CHOICES, default=None, help="Select the LLM backend.")
 @click.option(
     "--concurrency",
     type=int,
@@ -139,6 +141,7 @@ def run(
     force: bool,
     model: str | None,
     base_url: str | None,
+    backend: str | None,
     concurrency: int | None,
     output_dir: str | None,
     sleep_requests: int,
@@ -157,6 +160,7 @@ def run(
     overrides: dict = {
         "model": model,
         "base_url": base_url,
+        "backend": backend,
         "concurrency": concurrency,
     }
     if output_dir:
@@ -350,11 +354,19 @@ def run(
 )
 @click.option("--model", default=None)
 @click.option("--base-url", default=None)
-def report(output: str | None, model: str | None, base_url: str | None) -> None:
+@click.option("--backend", type=BACKEND_CHOICES, default=None)
+def report(
+    output: str | None,
+    model: str | None,
+    base_url: str | None,
+    backend: str | None,
+) -> None:
     """Generate an aggregate report from existing insight JSON files."""
     from .reporter import generate_report, load_insights
 
-    config = load_config({"model": model, "base_url": base_url})
+    config = load_config(
+        {"model": model, "base_url": base_url, "backend": backend}
+    )
 
     insights = load_insights(config.insights_dir)
     if not insights:
@@ -391,6 +403,7 @@ def report(output: str | None, model: str | None, base_url: str | None) -> None:
 @click.option("--index-only", is_flag=True, help="Regenerate only INDEX.md from existing caches.")
 @click.option("--model", default=None, help="Override LLM model.")
 @click.option("--base-url", default=None, help="Override LLM API base URL.")
+@click.option("--backend", type=BACKEND_CHOICES, default=None, help="Select the LLM backend.")
 @click.option(
     "--output-dir",
     type=click.Path(),
@@ -403,6 +416,7 @@ def suggest_shorts_cmd(
     index_only: bool,
     model: str | None,
     base_url: str | None,
+    backend: str | None,
     output_dir: str | None,
 ) -> None:
     """Identify the top 3 Short-worthy moments in each VTT transcript.
@@ -412,7 +426,7 @@ def suggest_shorts_cmd(
     """
     from .shorts import generate_index, suggest_all, suggest_shorts
 
-    overrides: dict = {"model": model, "base_url": base_url}
+    overrides: dict = {"model": model, "base_url": base_url, "backend": backend}
     if output_dir:
         base = Path(output_dir)
         overrides["transcripts_dir"] = base / "transcripts"
@@ -536,12 +550,14 @@ def generate_short_cmd(
 @click.option("--duration", default=None, type=click.Choice(["very-short", "standard", "long", "any"]), help="Durée préférée du Short.")
 @click.option("--platform", default=None, type=click.Choice(["youtube-shorts", "tiktok", "reels", "linkedin", "none"]), help="Plateforme cible.")
 @click.option("--format",   "output_format", default=None, type=click.Choice(["mp4", "webm", "mkv"]), help="Format de sortie du clip.")
+@click.option("--backend", type=BACKEND_CHOICES, default=None, help="Route LLM explicite.")
 def interactive_cmd(
     action: str | None,
     source: str | None,
     duration: str | None,
     platform: str | None,
     output_format: str | None,
+    backend: str | None,
 ) -> None:
     """Wizard interactif. En TTY : InquirerPy. Sans TTY : passe les flags directement.
 
@@ -551,7 +567,14 @@ def interactive_cmd(
         --duration standard --platform youtube-shorts --format mp4
     """
     from .wizard import run_wizard
-    run_wizard(action=action, source=source, duration=duration, platform=platform, output_format=output_format)
+    run_wizard(
+        action=action,
+        source=source,
+        duration=duration,
+        platform=platform,
+        output_format=output_format,
+        backend=backend,
+    )
 
 
 _DEFAULT_CATALOG_DB = "output/catalog.sqlite3"
@@ -747,7 +770,10 @@ def config_init() -> None:
 @config_group.command("show")
 @click.option("--model", default=None, help="Simulate --model override.")
 @click.option("--base-url", default=None, help="Simulate --base-url override.")
-def config_show(model: str | None, base_url: str | None) -> None:
+@click.option("--backend", type=BACKEND_CHOICES, default=None, help="Simulate --backend override.")
+def config_show(
+    model: str | None, base_url: str | None, backend: str | None
+) -> None:
     """Print effective configuration values and their sources without probing.
 
     Merges defaults → config.toml → env vars → CLI flags so you can verify
@@ -756,7 +782,9 @@ def config_show(model: str | None, base_url: str | None) -> None:
     import os as _os
 
     config_path = Path.home() / ".config" / "yt-insights" / "config.toml"
-    config = load_config({"model": model, "base_url": base_url})
+    config = load_config(
+        {"model": model, "base_url": base_url, "backend": backend}
+    )
 
     def _src(env_key: str, flag_val: object, default: object) -> str:
         if flag_val is not None:
@@ -772,6 +800,7 @@ def config_show(model: str | None, base_url: str | None) -> None:
     click.echo()
 
     rows = [
+        ("backend",              config.backend,              "YT_INSIGHTS_BACKEND",      backend),
         ("base_url",             sanitize_endpoint(config.base_url), "YT_INSIGHTS_BASE_URL",      base_url),
         ("model",                config.model,                "YT_INSIGHTS_MODEL",                model),
         ("api_key",              "***" if config.api_key else "(not set)", "YT_INSIGHTS_API_KEY", None),
