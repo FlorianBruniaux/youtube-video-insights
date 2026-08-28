@@ -2,3 +2,8 @@ interface:
   display_name: "Export YouTube Transcript"
   short_description: "Export a source-backed transcript for reuse"
   default_prompt: "Use $youtube-export to export this existing transcript as Markdown with its source hash."
+dependencies:
+  tools:
+    - type: "mcp"
+      value: "yt-insights"
+      description: "Read-only lookup of videos already present in the local yt-insights corpus"

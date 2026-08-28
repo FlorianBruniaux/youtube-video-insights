@@ -11,6 +11,10 @@ tools:
   - Read
   - Grep
   - Glob
+  - mcp__yt-insights__list_corpora
+  - mcp__yt-insights__search_videos
+  - mcp__yt-insights__search_passages
+  - mcp__yt-insights__get_passage
 ---
 
 Search the local YouTube corpus through the `youtube-research` skill and its configured MCP. Remain read-only: do not add source material, write exports, rebuild indexes, or change project files.

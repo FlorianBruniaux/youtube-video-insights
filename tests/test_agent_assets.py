@@ -109,13 +109,14 @@ def test_research_skill_uses_only_the_read_only_mcp_surface() -> None:
     assert "yt-insights export" not in body
 
 
-def test_export_skill_uses_catalog_discovery_and_deterministic_export() -> None:
+def test_export_skill_uses_portable_mcp_discovery_and_deterministic_export() -> None:
     body = parse_frontmatter(
         REPOSITORY_ROOT / ".agents" / "skills" / "youtube-export" / "SKILL.md"
     )[1]
 
-    assert "yt-insights catalog search QUERY" in body
-    assert "yt-insights catalog search QUERY --json" not in body
+    assert "yt-insights catalog search" not in body
+    assert "read-only MCP" in body
+    assert "YouTube URL or video ID" in body
     assert "yt-insights export video" in body
     assert "source_sha256" in body
     assert "--json" in body
@@ -148,6 +149,20 @@ def test_research_metadata_declares_the_local_mcp_dependency() -> None:
     assert 'value: "yt-insights"' in metadata
 
 
+def test_export_metadata_declares_the_local_mcp_dependency() -> None:
+    metadata = (
+        REPOSITORY_ROOT
+        / ".agents"
+        / "skills"
+        / "youtube-export"
+        / "agents"
+        / "openai.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert 'type: "mcp"' in metadata
+    assert 'value: "yt-insights"' in metadata
+
+
 def test_codex_researcher_is_read_only_and_inherits_the_model() -> None:
     agent = tomllib.loads(CODEX_AGENT.read_text(encoding="utf-8"))
 
@@ -171,7 +186,15 @@ def test_claude_researcher_preloads_only_research_skill() -> None:
     assert frontmatter["skills"] == ["youtube-research"]
     assert frontmatter["mcpServers"] == ["yt-insights"]
     assert frontmatter["permissionMode"] == "plan"
-    assert frontmatter["tools"] == ["Read", "Grep", "Glob"]
+    assert frontmatter["tools"] == [
+        "Read",
+        "Grep",
+        "Glob",
+        "mcp__yt-insights__list_corpora",
+        "mcp__yt-insights__search_videos",
+        "mcp__yt-insights__search_passages",
+        "mcp__yt-insights__get_passage",
+    ]
 
 
 @pytest.mark.parametrize("path", (CLAUDE_AGENT, CODEX_AGENT))

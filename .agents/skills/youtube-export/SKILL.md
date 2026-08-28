@@ -9,7 +9,7 @@ Export only material already present in the local corpus. This workflow is deter
 
 ## Workflow
 
-1. Resolve the requested video through the read-only MCP. If MCP is unavailable, use `yt-insights catalog search QUERY`. Stop if neither returns one unambiguous existing video.
+1. Resolve the requested video through the read-only MCP. If MCP is unavailable and the request does not already contain an unambiguous YouTube URL or video ID, ask for one instead of searching a cwd-relative catalog. Stop unless one existing video is identified.
 2. Use the language requested by the user. Otherwise omit `--lang`; ask the user only if the MCP evidence already shows multiple languages or the export command returns the explicit language choices.
 3. Run `yt-insights export video VIDEO_OR_URL --format FORMAT --lang LANGUAGE --json`, omitting `--lang` when the transcript is unambiguous. Supported formats are `md`, `txt`, and `vtt`.
 4. Return the exact output `path`, `video_id`, `language`, format, and `source_sha256` from the JSON result.
