@@ -219,15 +219,15 @@ def _apply_dict(cfg: Config, data: dict, source: str) -> Config:
 def _derive_data_paths(cfg: Config) -> Config:
     """Fill defaults after all configuration layers have been merged."""
     paths = cfg.data_paths
-    return replace(
-        cfg,
-        data_root=paths.root,
-        transcripts_dir=paths.transcripts,
-        insights_dir=paths.insights,
-        shorts_dir=paths.shorts,
-        shorts_clips_dir=paths.clips,
-        exports_dir=paths.exports,
-    )
+    updates: dict[str, Path] = {"data_root": paths.root}
+    for field_name, attribute_name in _DATA_PATH_ATTRIBUTES.items():
+        resolved = getattr(paths, attribute_name)
+        updates[field_name] = (
+            _OmittedLegacyPath(resolved)
+            if isinstance(getattr(cfg, field_name), _OmittedLegacyPath)
+            else resolved
+        )
+    return replace(cfg, **updates)
 
 
 CONFIG_TOML_TEMPLATE = """\

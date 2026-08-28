@@ -158,6 +158,20 @@ def test_data_root_precedence_is_cli_then_environment_then_toml_then_output(
     assert load_config({}).data_paths.root == (Path.cwd() / "output").resolve()
 
 
+def test_replace_loaded_config_rederives_omitted_paths_from_a_new_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", tmp_path / "missing.toml")
+    first_root = tmp_path / "first-corpus"
+    second_root = tmp_path / "second-corpus"
+
+    loaded = load_config({"data_root": first_root})
+    moved = replace(loaded, data_root=second_root)
+
+    assert loaded.transcripts_dir == first_root / "transcripts"
+    assert moved.data_paths.transcripts == second_root / "transcripts"
+
+
 def test_legacy_transcript_override_only_replaces_the_transcript_path(
     tmp_path: Path, monkeypatch
 ) -> None:
