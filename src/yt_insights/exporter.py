@@ -372,6 +372,25 @@ def _absolute_without_following_symlinks(path: Path) -> Path:
     return Path(os.path.abspath(os.fspath(path.expanduser())))
 
 
+def _normalize_configured_exports(path: Path) -> Path:
+    """Normalize parent aliases while preserving the final component for no-follow checks."""
+    lexical = _absolute_without_following_symlinks(path)
+    if lexical.name in {"", ".", ".."}:
+        raise UnsafeExportTarget("configured exports directory needs a final directory name")
+    try:
+        parent = lexical.parent.resolve(strict=False)
+    except (OSError, RuntimeError) as error:
+        raise UnsafeExportTarget("configured exports directory could not be normalized safely") from error
+    return parent / lexical.name
+
+
+def _filesystem_anchor(path: Path) -> Path:
+    anchor = Path(path.anchor)
+    if not anchor.is_absolute():
+        raise UnsafeExportTarget("configured exports directory has no stable filesystem anchor")
+    return anchor
+
+
 def _validate_existing_target(target: Path, *, force: bool) -> None:
     try:
         details = target.lstat()
@@ -402,13 +421,13 @@ def _open_validated_directory(directory: Path) -> tuple[int, tuple[int, int]]:
     try:
         before = directory.lstat()
     except OSError as error:
-        raise UnsafeExportTarget("data root is unavailable") from error
+        raise UnsafeExportTarget("filesystem anchor is unavailable") from error
     if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
-        raise UnsafeExportTarget("data root must not be a symlink")
+        raise UnsafeExportTarget("filesystem anchor must not be a symlink")
     no_follow = getattr(os, "O_NOFOLLOW", 0)
     directory_only = getattr(os, "O_DIRECTORY", 0)
     if not no_follow or not directory_only:
-        raise UnsafeExportTarget("this platform cannot safely open the data root")
+        raise UnsafeExportTarget("this platform cannot safely open the filesystem anchor")
     descriptor: int | None = None
     try:
         descriptor = os.open(directory, os.O_RDONLY | no_follow | directory_only)
@@ -416,14 +435,14 @@ def _open_validated_directory(directory: Path) -> tuple[int, tuple[int, int]]:
     except (NotImplementedError, OSError) as error:
         if descriptor is not None:
             os.close(descriptor)
-        raise UnsafeExportTarget("data root could not be opened safely") from error
+        raise UnsafeExportTarget("filesystem anchor could not be opened safely") from error
     assert descriptor is not None
     if (
         not stat.S_ISDIR(opened.st_mode)
         or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
     ):
         os.close(descriptor)
-        raise UnsafeExportTarget("data root changed before it was opened")
+        raise UnsafeExportTarget("filesystem anchor changed before it was opened")
     return descriptor, (opened.st_dev, opened.st_ino)
 
 
@@ -439,11 +458,11 @@ def _directory_path_matches(directory: Path, identity: tuple[int, int]) -> bool:
     )
 
 
-def _exports_relative_parts(root: Path, exports: Path) -> tuple[str, ...]:
+def _exports_relative_parts(anchor: Path, exports: Path) -> tuple[str, ...]:
     try:
-        relative = exports.relative_to(root)
+        relative = exports.relative_to(anchor)
     except ValueError as error:
-        raise UnsafeExportTarget("default exports directory must be inside the data root") from error
+        raise UnsafeExportTarget("configured exports directory escaped its filesystem anchor") from error
     parts = relative.parts
     if not parts or any(part in {"", ".", ".."} or Path(part).name != part for part in parts):
         raise UnsafeExportTarget("default exports directory is not a safe relative path")
@@ -589,28 +608,22 @@ def _write_atomic_at(directory_fd: int, filename: str, payload: bytes, *, force:
 
 
 def _write_bounded_default(
-    root: Path,
-    root_fd: int,
-    root_identity: tuple[int, int],
-    exports_parts: tuple[str, ...],
+    anchor: Path,
+    anchor_identity: tuple[int, int],
+    steps: list[_DirectoryStep],
     filename: str,
     payload: bytes,
     *,
     force: bool,
 ) -> None:
-    steps = _open_exports_from_root(root_fd, exports_parts)
     directory_fd = steps[-1].directory_fd
-    try:
-        _write_atomic_at(directory_fd, filename, payload, force=force)
-        if not _directory_path_matches(root, root_identity) or not _directory_steps_match(steps):
-            try:
-                os.unlink(filename, dir_fd=directory_fd)
-            except (NotImplementedError, OSError):
-                pass
-            raise UnsafeExportTarget("data root or exports directory changed during publication")
-    finally:
-        for step in reversed(steps):
-            os.close(step.directory_fd)
+    _write_atomic_at(directory_fd, filename, payload, force=force)
+    if not _directory_path_matches(anchor, anchor_identity) or not _directory_steps_match(steps):
+        try:
+            os.unlink(filename, dir_fd=directory_fd)
+        except (NotImplementedError, OSError):
+            pass
+        raise UnsafeExportTarget("configured exports directory changed during publication")
 
 
 def _write_atomic(target: Path, payload: bytes, *, force: bool) -> None:
@@ -657,15 +670,22 @@ def export_video(request: VideoExportRequest, paths: DataPaths) -> ExportResult:
     output_format = request.format.strip().lower()
     if output_format not in {"vtt", "txt", "md"}:
         raise ExportError(f"unsupported export format: {request.format}")
-    root_fd: int | None = None
-    root_identity: tuple[int, int] | None = None
-    root = _absolute_without_following_symlinks(paths.root)
+    anchor_fd: int | None = None
+    anchor_identity: tuple[int, int] | None = None
+    anchor: Path | None = None
     exports: Path | None = None
-    exports_parts: tuple[str, ...] | None = None
+    directory_steps: list[_DirectoryStep] = []
     if request.output is None:
-        exports = _absolute_without_following_symlinks(paths.exports)
-        exports_parts = _exports_relative_parts(root, exports)
-        root_fd, root_identity = _open_validated_directory(root)
+        exports = _normalize_configured_exports(paths.exports)
+        anchor = _filesystem_anchor(exports)
+        exports_parts = _exports_relative_parts(anchor, exports)
+        anchor_fd, anchor_identity = _open_validated_directory(anchor)
+        try:
+            directory_steps = _open_exports_from_root(anchor_fd, exports_parts)
+        except ExportError:
+            os.close(anchor_fd)
+            anchor_fd = None
+            raise
 
     try:
         resolved = resolve_transcript(paths.root, request.video_or_url, request.language)
@@ -682,16 +702,16 @@ def export_video(request: VideoExportRequest, paths: DataPaths) -> ExportResult:
 
         if request.output is None:
             assert exports is not None
-            assert exports_parts is not None
-            assert root_fd is not None
-            assert root_identity is not None
+            assert anchor is not None
+            assert anchor_fd is not None
+            assert anchor_identity is not None
+            assert directory_steps
             filename = f"{resolved.video_id}.{resolved.language}.{output_format}"
             absolute_target = exports / filename
             _write_bounded_default(
-                root,
-                root_fd,
-                root_identity,
-                exports_parts,
+                anchor,
+                anchor_identity,
+                directory_steps,
                 filename,
                 payload,
                 force=request.force,
@@ -700,8 +720,10 @@ def export_video(request: VideoExportRequest, paths: DataPaths) -> ExportResult:
             absolute_target = _absolute_without_following_symlinks(request.output)
             _write_atomic(absolute_target, payload, force=request.force)
     finally:
-        if root_fd is not None:
-            os.close(root_fd)
+        for step in reversed(directory_steps):
+            os.close(step.directory_fd)
+        if anchor_fd is not None:
+            os.close(anchor_fd)
     return ExportResult(
         path=absolute_target,
         source_sha256=source_hash,

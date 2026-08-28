@@ -332,15 +332,15 @@ def test_default_exports_directory_must_not_be_a_symlink(tmp_path: Path) -> None
     assert list(outside.iterdir()) == []
 
 
-def test_default_exports_directory_must_remain_inside_data_root(tmp_path: Path) -> None:
+def test_configured_exports_directory_may_be_outside_data_root(tmp_path: Path) -> None:
     _write_transcript(tmp_path)
     outside = tmp_path.parent / f"{tmp_path.name}-outside-exports"
     paths = replace(DataPaths.from_root(tmp_path), exports=outside)
 
-    with pytest.raises(ExportError):
-        export_video(VideoExportRequest(VIDEO_ID, "md", "fr"), paths)
+    result = export_video(VideoExportRequest(VIDEO_ID, "md", "fr"), paths)
 
-    assert not outside.exists()
+    assert result.path == outside / f"{VIDEO_ID}.fr.md"
+    assert result.path.is_file()
 
 
 def test_nested_default_exports_directory_is_created_relative_to_data_root(

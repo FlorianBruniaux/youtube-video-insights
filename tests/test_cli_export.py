@@ -58,6 +58,29 @@ def test_export_video_json_uses_configured_data_root_from_unrelated_cwd(tmp_path
     assert len(payload["source_sha256"]) == 64
 
 
+def test_export_video_honors_external_configured_exports_directory(tmp_path: Path) -> None:
+    corpus = tmp_path / "corpus"
+    external_exports = tmp_path / "external-exports"
+    _write_flat_corpus(corpus, "fr")
+
+    result = CliRunner().invoke(
+        export_group,
+        ["video", VIDEO_ID, "--format", "md", "--lang", "fr", "--json"],
+        env={
+            "YT_INSIGHTS_DATA_ROOT": str(corpus),
+            "YT_INSIGHTS_EXPORTS_DIR": str(external_exports),
+        },
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["path"] == str(
+        (external_exports / f"{VIDEO_ID}.fr.md").resolve()
+    )
+    assert Path(payload["path"]).is_file()
+
+
 def test_export_video_requires_language_when_corpus_is_ambiguous(tmp_path: Path) -> None:
     _write_flat_corpus(tmp_path, "fr", "en")
 
