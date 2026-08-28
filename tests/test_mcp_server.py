@@ -362,8 +362,9 @@ def test_main_prefers_an_explicit_database_over_the_environment(
     assert captured == {"database": explicit, "transport": "stdio"}
 
 
-def test_main_uses_the_environment_then_the_local_default(tmp_path: Path, monkeypatch) -> None:
+def test_main_uses_the_environment_then_the_configured_data_root(tmp_path: Path, monkeypatch) -> None:
     import yt_insights.mcp_server as mcp_server
+    from yt_insights import config as config_module
 
     captured: list[Path] = []
 
@@ -377,9 +378,13 @@ def test_main_uses_the_environment_then_the_local_default(tmp_path: Path, monkey
         lambda database: captured.append(database) or FakeServer(),
     )
     environment = tmp_path / "environment.sqlite3"
+    config_path = tmp_path / "config.toml"
+    data_root = tmp_path / "configured-corpus"
+    config_path.write_text(f'data_root = "{data_root}"\n', encoding="utf-8")
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", config_path)
     monkeypatch.setenv("YT_INSIGHTS_SEARCH_DATABASE", str(environment))
     mcp_server.main()
     monkeypatch.delenv("YT_INSIGHTS_SEARCH_DATABASE")
     mcp_server.main()
 
-    assert captured == [environment, Path("output/.search/search-v1.sqlite3")]
+    assert captured == [environment, data_root / ".search" / "search-v1.sqlite3"]

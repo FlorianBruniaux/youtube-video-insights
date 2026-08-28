@@ -62,6 +62,45 @@ def test_load_config_applies_toml_env_and_cli_in_precedence_order(
     assert result.base_url_source == "env"
 
 
+def test_data_root_precedence_is_cli_then_environment_then_toml_then_output(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "config.toml"
+    toml_root = tmp_path / "toml-root"
+    environment_root = tmp_path / "environment-root"
+    cli_root = tmp_path / "cli-root"
+    config_path.write_text(f'data_root = "{toml_root}"\n', encoding="utf-8")
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", config_path)
+
+    assert load_config({}).data_paths.root == toml_root
+
+    monkeypatch.setenv("YT_INSIGHTS_DATA_ROOT", str(environment_root))
+    assert load_config({}).data_paths.root == environment_root
+
+    assert load_config({"data_root": cli_root}).data_paths.root == cli_root
+
+    monkeypatch.delenv("YT_INSIGHTS_DATA_ROOT")
+    config_path.unlink()
+    assert load_config({}).data_paths.root == (Path.cwd() / "output").resolve()
+
+
+def test_legacy_transcript_override_only_replaces_the_transcript_path(
+    tmp_path: Path, monkeypatch
+) -> None:
+    config_path = tmp_path / "config.toml"
+    data_root = tmp_path / "corpus"
+    transcript_override = tmp_path / "legacy-transcripts"
+    config_path.write_text(f'data_root = "{data_root}"\n', encoding="utf-8")
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", config_path)
+    monkeypatch.setenv("YT_INSIGHTS_TRANSCRIPTS_DIR", str(transcript_override))
+
+    paths = load_config({}).data_paths
+
+    assert paths.transcripts == transcript_override
+    assert paths.insights == data_root / "insights"
+    assert paths.search_database == data_root / ".search" / "search-v1.sqlite3"
+
+
 def test_effective_concurrency_keeps_local_backends_serial() -> None:
     """Detects a regression that concurrently drives local MLX or Ollama backends."""
     assert effective_concurrency(Config(), "mlx") == 1

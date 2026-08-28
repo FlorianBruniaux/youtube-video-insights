@@ -13,6 +13,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field
 
+from .config import load_config
 from .search.models import DocumentRef, Passage, SearchHit, SearchQuery
 from .search.service import SearchService
 from .search.sqlite_fts import (
@@ -22,6 +23,8 @@ from .search.sqlite_fts import (
 )
 
 
+# Compatibility import for callers that document the historic layout. main()
+# resolves the configured database at execution time instead.
 DEFAULT_DATABASE = Path("output/.search/search-v1.sqlite3")
 DATABASE_ENVIRONMENT_VARIABLE = "YT_INSIGHTS_SEARCH_DATABASE"
 MAX_QUERY_CHARACTERS = 500
@@ -228,7 +231,9 @@ def main(database_path: str | Path | None = None) -> None:
     """Run the local MCP server over stdio."""
     configured = database_path
     if configured is None:
-        configured = os.environ.get(DATABASE_ENVIRONMENT_VARIABLE) or DEFAULT_DATABASE
+        configured = os.environ.get(DATABASE_ENVIRONMENT_VARIABLE)
+    if configured is None:
+        configured = load_config({}).data_paths.search_database
     create_server(Path(configured)).run("stdio")
 
 

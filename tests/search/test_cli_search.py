@@ -6,6 +6,8 @@ from pathlib import Path
 from click.testing import CliRunner
 
 from yt_insights.cli import cli
+from yt_insights import config as config_module
+from yt_insights.config import load_config
 from yt_insights.search.corpus import CorpusManifest
 from yt_insights.search.models import BuildReport
 from yt_insights.search.preflight import IndexSpacePreflightReport, InsufficientIndexSpace
@@ -30,6 +32,46 @@ def _build_index(runner: CliRunner, root: Path, database: Path) -> None:
         ["index", "--corpus-root", str(root), "--database", str(database)],
     )
     assert result.exit_code == 0, result.output
+
+
+def test_index_resolves_configured_paths_when_run_from_distinct_directories(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from yt_insights import cli_search
+
+    data_root = tmp_path / "shared-corpus"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(f'data_root = "{data_root}"\n', encoding="utf-8")
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", config_path)
+    calls: list[tuple[Path, Path]] = []
+
+    class FakeIndex:
+        def __init__(self, database: Path) -> None:
+            calls.append((Path(), database))
+
+    def fake_scan(root: Path, *, limit: int | None, selection: str) -> CorpusManifest:
+        calls[-1] = (root, calls[-1][1])
+        return CorpusManifest((), (), (), 0, 0, 0)
+
+    monkeypatch.setattr(cli_search, "SQLiteFtsIndex", FakeIndex)
+    monkeypatch.setattr(cli_search, "scan_corpus", fake_scan)
+    runner = CliRunner()
+    first_directory = tmp_path / "first"
+    second_directory = tmp_path / "second"
+    first_directory.mkdir()
+    second_directory.mkdir()
+
+    monkeypatch.chdir(first_directory)
+    first = runner.invoke(cli, ["index", "--dry-run"])
+    monkeypatch.chdir(second_directory)
+    second = runner.invoke(cli, ["index", "--dry-run"])
+
+    assert first.exit_code == second.exit_code == 0
+    assert calls == [
+        (data_root, data_root / ".search" / "search-v1.sqlite3"),
+        (data_root, data_root / ".search" / "search-v1.sqlite3"),
+    ]
+    assert load_config({}).data_paths.catalog_database == data_root / "catalog.sqlite3"
 
 
 def test_index_dry_run_reports_counts_without_creating_search_directory(tmp_path: Path) -> None:

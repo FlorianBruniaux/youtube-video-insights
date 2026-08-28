@@ -7,6 +7,8 @@ import tomllib
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
+from .paths import DataPaths
+
 DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
 DEFAULT_MODEL = "claude-haiku-4-5"
 _CONFIG_PATH = Path.home() / ".config" / "yt-insights" / "config.toml"
@@ -40,10 +42,12 @@ class Config:
     max_tokens: int = 2048
     timeout: int = 120
     concurrency: int = 0
-    transcripts_dir: Path = field(default_factory=lambda: Path("output/transcripts"))
-    insights_dir: Path = field(default_factory=lambda: Path("output/insights"))
-    shorts_dir: Path = field(default_factory=lambda: Path("output/shorts"))
-    shorts_clips_dir: Path = field(default_factory=lambda: Path("output/clips"))
+    data_root: Path = field(default_factory=lambda: Path("output"))
+    transcripts_dir: Path | None = None
+    insights_dir: Path | None = None
+    shorts_dir: Path | None = None
+    shorts_clips_dir: Path | None = None
+    exports_dir: Path | None = None
 
     def __post_init__(self) -> None:
         if isinstance(self.model, _DefaultModel):
@@ -77,6 +81,19 @@ class Config:
             kwargs["base_url_source"] = base_url_source
         return replace(self, **kwargs)
 
+    @property
+    def data_paths(self) -> DataPaths:
+        """Return paths derived after applying named legacy directory overrides."""
+        defaults = DataPaths.from_root(self.data_root)
+        return replace(
+            defaults,
+            transcripts=self.transcripts_dir or defaults.transcripts,
+            insights=self.insights_dir or defaults.insights,
+            shorts=self.shorts_dir or defaults.shorts,
+            clips=self.shorts_clips_dir or defaults.clips,
+            exports=self.exports_dir or defaults.exports,
+        )
+
 
 def load_config(overrides: dict) -> Config:
     """Merge config from defaults → TOML → env vars → CLI overrides."""
@@ -99,10 +116,12 @@ def load_config(overrides: dict) -> Config:
         "YT_INSIGHTS_MAX_TOKENS": "max_tokens",
         "YT_INSIGHTS_TIMEOUT": "timeout",
         "YT_INSIGHTS_CONCURRENCY": "concurrency",
+        "YT_INSIGHTS_DATA_ROOT": "data_root",
         "YT_INSIGHTS_TRANSCRIPTS_DIR": "transcripts_dir",
         "YT_INSIGHTS_INSIGHTS_DIR": "insights_dir",
         "YT_INSIGHTS_SHORTS_DIR": "shorts_dir",
         "YT_INSIGHTS_SHORTS_CLIPS_DIR": "shorts_clips_dir",
+        "YT_INSIGHTS_EXPORTS_DIR": "exports_dir",
     }
     env_data: dict = {}
     for env_key, field_name in env_map.items():
@@ -115,7 +134,7 @@ def load_config(overrides: dict) -> Config:
     clean = {k: v for k, v in overrides.items() if v is not None}
     cfg = _apply_dict(cfg, clean, "cli")
 
-    return cfg
+    return _derive_data_paths(cfg)
 
 
 def effective_concurrency(config: Config, backend_type: str) -> int:
@@ -130,7 +149,14 @@ def effective_concurrency(config: Config, backend_type: str) -> int:
 def _apply_dict(cfg: Config, data: dict, source: str) -> Config:
     """Apply a flat dict of field values to a Config, coercing types."""
     int_fields = {"max_transcript_chars", "max_tokens", "timeout", "concurrency"}
-    path_fields = {"transcripts_dir", "insights_dir", "shorts_dir", "shorts_clips_dir"}
+    path_fields = {
+        "data_root",
+        "transcripts_dir",
+        "insights_dir",
+        "shorts_dir",
+        "shorts_clips_dir",
+        "exports_dir",
+    }
     updates: dict = {}
     for key, val in data.items():
         if not hasattr(cfg, key):
@@ -148,6 +174,20 @@ def _apply_dict(cfg: Config, data: dict, source: str) -> Config:
     return replace(cfg, **updates) if updates else cfg
 
 
+def _derive_data_paths(cfg: Config) -> Config:
+    """Fill defaults after all configuration layers have been merged."""
+    paths = cfg.data_paths
+    return replace(
+        cfg,
+        data_root=paths.root,
+        transcripts_dir=paths.transcripts,
+        insights_dir=paths.insights,
+        shorts_dir=paths.shorts,
+        shorts_clips_dir=paths.clips,
+        exports_dir=paths.exports,
+    )
+
+
 CONFIG_TOML_TEMPLATE = """\
 # yt-insights configuration
 # All values are optional — defaults shown.
@@ -160,8 +200,10 @@ CONFIG_TOML_TEMPLATE = """\
 # max_tokens = 2048
 # timeout = 120
 # concurrency = 0       # 0 = auto (3 for API, 1 for Ollama/MLX)
-# transcripts_dir = "output/transcripts"
-# insights_dir = "output/insights"
-# shorts_dir = "output/shorts"
-# shorts_clips_dir = "output/clips"
+# data_root = "output"
+# transcripts_dir = "output/transcripts"  # Legacy named override
+# insights_dir = "output/insights"        # Legacy named override
+# shorts_dir = "output/shorts"            # Legacy named override
+# shorts_clips_dir = "output/clips"       # Legacy named override
+# exports_dir = "output/exports"          # Legacy named override
 """

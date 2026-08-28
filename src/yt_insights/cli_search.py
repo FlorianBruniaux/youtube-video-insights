@@ -7,6 +7,7 @@ from pathlib import Path
 
 import click
 
+from .config import load_config
 from .search.corpus import CorpusManifest, scan_corpus
 from .search.models import BuildReport, SearchHit, SearchQuery
 from .search.preflight import (
@@ -19,6 +20,8 @@ from .search.service import SearchService
 from .search.sqlite_fts import SearchIndexError, SearchIndexNotFound, SQLiteFtsIndex
 
 
+# Compatibility imports for callers that still document the historic layout.
+# Command defaults resolve from Config.data_paths only when a command executes.
 DEFAULT_CORPUS_ROOT = Path("output")
 DEFAULT_DATABASE = DEFAULT_CORPUS_ROOT / ".search" / "search-v1.sqlite3"
 MAX_INDEX_LIMIT = 50
@@ -56,6 +59,20 @@ def _parameter_is_explicit(context: click.Context, name: str) -> bool:
     return context.get_parameter_source(name) is click.core.ParameterSource.COMMANDLINE
 
 
+def _configured_paths(
+    context: click.Context, corpus_root: Path | None, database: Path | None
+) -> tuple[Path, Path]:
+    """Resolve option defaults only when a command is executed."""
+    configured = load_config({}).data_paths
+    resolved_corpus_root = (
+        corpus_root if _parameter_is_explicit(context, "corpus_root") else configured.root
+    )
+    resolved_database = (
+        database if _parameter_is_explicit(context, "database") else configured.search_database
+    )
+    return resolved_corpus_root, resolved_database
+
+
 def _format_timestamp(seconds: float) -> str:
     total_seconds = int(seconds)
     hours, remainder = divmod(total_seconds, 3600)
@@ -86,15 +103,15 @@ def _raise_index_error(error: SearchIndexError) -> None:
 @click.option(
     "--corpus-root",
     type=click.Path(path_type=Path, file_okay=False),
-    default=DEFAULT_CORPUS_ROOT,
-    show_default=True,
+    default=None,
+    show_default="configured data root",
     help="Directory containing channel transcript folders.",
 )
 @click.option(
     "--database",
     type=click.Path(path_type=Path, dir_okay=False),
-    default=DEFAULT_DATABASE,
-    show_default=True,
+    default=None,
+    show_default="configured search database",
     help="Derived SQLite search index path.",
 )
 @click.option(
@@ -120,8 +137,8 @@ def _raise_index_error(error: SearchIndexError) -> None:
 @click.option("--dry-run", is_flag=True, help="Scan and report counts without writing an index.")
 @click.option("--status", is_flag=True, help="Validate and report the existing index without scanning.")
 def index_command(
-    corpus_root: Path,
-    database: Path,
+    corpus_root: Path | None,
+    database: Path | None,
     limit: int,
     selection: str,
     all_sources: bool,
@@ -130,6 +147,7 @@ def index_command(
 ) -> None:
     """Build or inspect the deterministic local transcript search index."""
     context = click.get_current_context()
+    corpus_root, database = _configured_paths(context, corpus_root, database)
     explicit_all = _parameter_is_explicit(context, "all_sources")
     explicit_limit = _parameter_is_explicit(context, "limit")
     explicit_selection = _parameter_is_explicit(context, "selection")
@@ -192,8 +210,8 @@ def index_command(
 @click.option(
     "--database",
     type=click.Path(path_type=Path, dir_okay=False),
-    default=DEFAULT_DATABASE,
-    show_default=True,
+    default=None,
+    show_default="configured search database",
     help="SQLite search index path.",
 )
 @click.option("--channel", default=None, help="Exact channel identifier filter.")
@@ -208,13 +226,15 @@ def index_command(
 @click.option("--json", "as_json", is_flag=True, help="Emit deterministic JSON.")
 def search_command(
     query: str,
-    database: Path,
+    database: Path | None,
     channel: str | None,
     language: str | None,
     limit: int,
     as_json: bool,
 ) -> None:
     """Search the local transcript index."""
+    context = click.get_current_context()
+    _corpus_root, database = _configured_paths(context, None, database)
     try:
         request = SearchQuery(query, channel=channel, language=language, limit=limit)
         hits = SearchService(SQLiteFtsIndex(database)).search(request)
