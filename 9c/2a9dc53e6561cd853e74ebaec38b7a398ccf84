@@ -1,0 +1,23 @@
+tests/test_agent_assets.py
+  s_0a442347250965::t_7c1dbafc3678b1 4,12-17,34-55,148-186
+.claude/agents/youtube-corpus-researcher.md
+  s_0a442347250965::t_808bf051884845 1-25
+.codex/agents/youtube-corpus-researcher.toml
+  s_0a442347250965::t_808bf051884845 1-6
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "9c2a9dc53e6561cd853e74ebaec38b7a398ccf84",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
