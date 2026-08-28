@@ -34,27 +34,46 @@ def _build_index(runner: CliRunner, root: Path, database: Path) -> None:
     assert result.exit_code == 0, result.output
 
 
-def test_index_resolves_configured_paths_when_run_from_distinct_directories(
+def test_index_explicit_corpus_root_derives_its_database_when_database_is_omitted(
     tmp_path: Path, monkeypatch
 ) -> None:
     from yt_insights import cli_search
 
-    data_root = tmp_path / "shared-corpus"
-    config_path = tmp_path / "config.toml"
-    config_path.write_text(f'data_root = "{data_root}"\n', encoding="utf-8")
-    monkeypatch.setattr(config_module, "_CONFIG_PATH", config_path)
-    calls: list[tuple[Path, Path]] = []
+    corpus_root = tmp_path / "explicit-corpus"
+    captured: list[tuple[Path, Path]] = []
 
     class FakeIndex:
         def __init__(self, database: Path) -> None:
-            calls.append((Path(), database))
+            captured.append((Path(), database))
 
     def fake_scan(root: Path, *, limit: int | None, selection: str) -> CorpusManifest:
-        calls[-1] = (root, calls[-1][1])
+        captured[-1] = (root, captured[-1][1])
         return CorpusManifest((), (), (), 0, 0, 0)
 
     monkeypatch.setattr(cli_search, "SQLiteFtsIndex", FakeIndex)
     monkeypatch.setattr(cli_search, "scan_corpus", fake_scan)
+
+    result = CliRunner().invoke(
+        cli, ["index", "--corpus-root", str(corpus_root), "--dry-run"]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured == [
+        (corpus_root, corpus_root / ".search" / "search-v1.sqlite3")
+    ]
+
+
+def test_index_resolves_configured_paths_when_run_from_distinct_directories(
+    tmp_path: Path, monkeypatch
+) -> None:
+    data_root = tmp_path / "shared-corpus"
+    config_path = tmp_path / "config.toml"
+    config_path.write_text(f'data_root = "{data_root}"\n', encoding="utf-8")
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", config_path)
+    _write_vtt(
+        _source_path(data_root, "alpha", "Reliable search", "VideoId_123", "en"),
+        (12, "safe deterministic search results"),
+    )
     runner = CliRunner()
     first_directory = tmp_path / "first"
     second_directory = tmp_path / "second"
@@ -62,15 +81,15 @@ def test_index_resolves_configured_paths_when_run_from_distinct_directories(
     second_directory.mkdir()
 
     monkeypatch.chdir(first_directory)
-    first = runner.invoke(cli, ["index", "--dry-run"])
+    build = runner.invoke(cli, ["index"])
+    first = runner.invoke(cli, ["search", "deterministic", "--json"])
     monkeypatch.chdir(second_directory)
-    second = runner.invoke(cli, ["index", "--dry-run"])
+    second = runner.invoke(cli, ["search", "deterministic", "--json"])
 
-    assert first.exit_code == second.exit_code == 0
-    assert calls == [
-        (data_root, data_root / ".search" / "search-v1.sqlite3"),
-        (data_root, data_root / ".search" / "search-v1.sqlite3"),
-    ]
+    assert build.exit_code == first.exit_code == second.exit_code == 0
+    assert json.loads(first.output) == json.loads(second.output)
+    assert json.loads(first.output)["hits"][0]["source"].startswith("alpha/")
+    assert (data_root / ".search" / "search-v1.sqlite3").is_file()
     assert load_config({}).data_paths.catalog_database == data_root / "catalog.sqlite3"
 
 

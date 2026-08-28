@@ -8,6 +8,7 @@ from pathlib import Path
 import click
 
 from .config import load_config
+from .paths import DataPaths
 from .search.corpus import CorpusManifest, scan_corpus
 from .search.models import BuildReport, SearchHit, SearchQuery
 from .search.preflight import (
@@ -64,12 +65,21 @@ def _configured_paths(
 ) -> tuple[Path, Path]:
     """Resolve option defaults only when a command is executed."""
     configured = load_config({}).data_paths
-    resolved_corpus_root = (
-        corpus_root if _parameter_is_explicit(context, "corpus_root") else configured.root
-    )
-    resolved_database = (
-        database if _parameter_is_explicit(context, "database") else configured.search_database
-    )
+    if _parameter_is_explicit(context, "corpus_root"):
+        corpus_paths = DataPaths.from_root(corpus_root)
+        resolved_corpus_root = corpus_paths.root
+        resolved_database = (
+            database
+            if _parameter_is_explicit(context, "database")
+            else corpus_paths.search_database
+        )
+    else:
+        resolved_corpus_root = configured.root
+        resolved_database = (
+            database
+            if _parameter_is_explicit(context, "database")
+            else configured.search_database
+        )
     return resolved_corpus_root, resolved_database
 
 

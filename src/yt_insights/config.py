@@ -43,11 +43,11 @@ class Config:
     timeout: int = 120
     concurrency: int = 0
     data_root: Path = field(default_factory=lambda: Path("output"))
-    transcripts_dir: Path | None = None
-    insights_dir: Path | None = None
-    shorts_dir: Path | None = None
-    shorts_clips_dir: Path | None = None
-    exports_dir: Path | None = None
+    transcripts_dir: Path | None = field(default_factory=lambda: Path("output/transcripts"))
+    insights_dir: Path | None = field(default_factory=lambda: Path("output/insights"))
+    shorts_dir: Path | None = field(default_factory=lambda: Path("output/shorts"))
+    shorts_clips_dir: Path | None = field(default_factory=lambda: Path("output/clips"))
+    exports_dir: Path | None = field(default_factory=lambda: Path("output/exports"))
 
     def __post_init__(self) -> None:
         if isinstance(self.model, _DefaultModel):
@@ -97,7 +97,15 @@ class Config:
 
 def load_config(overrides: dict) -> Config:
     """Merge config from defaults → TOML → env vars → CLI overrides."""
-    cfg = Config()
+    # Keep Config() compatible for library callers while allowing this merge
+    # pipeline to derive all artifact defaults only after its final data root.
+    cfg = Config(
+        transcripts_dir=None,
+        insights_dir=None,
+        shorts_dir=None,
+        shorts_clips_dir=None,
+        exports_dir=None,
+    )
 
     # Layer 1: TOML file (optional)
     if _CONFIG_PATH.exists():

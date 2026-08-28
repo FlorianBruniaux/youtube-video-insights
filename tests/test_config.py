@@ -14,6 +14,15 @@ def test_direct_default_model_has_explicit_source_but_omitted_model_does_not() -
     assert Config(model=DEFAULT_MODEL).model_source == "direct"
 
 
+def test_direct_config_keeps_the_historic_output_directory_defaults() -> None:
+    config = Config()
+
+    assert config.transcripts_dir == Path("output/transcripts")
+    assert config.insights_dir == Path("output/insights")
+    assert config.shorts_dir == Path("output/shorts")
+    assert config.shorts_clips_dir == Path("output/clips")
+
+
 def test_with_url_marks_a_supplied_default_model_as_direct() -> None:
     """Detects retaining omission state when with_url receives an explicit model."""
     result = Config().with_url(OLLAMA_URL, model=DEFAULT_MODEL)
