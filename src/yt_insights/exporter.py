@@ -118,6 +118,14 @@ class _VttSnapshot:
         return self.contents.decode(encoding)
 
 
+@dataclass(frozen=True, slots=True)
+class _DirectoryStep:
+    parent_fd: int
+    name: str
+    directory_fd: int
+    identity: tuple[int, int]
+
+
 def parse_video_id(video_or_url: str) -> str:
     """Return an exact YouTube video ID from the supported input forms."""
     reference = video_or_url.strip()
@@ -198,7 +206,7 @@ def _read_sidecar(path: Path, video_id: str) -> tuple[str, str]:
             != (opened.st_dev, opened.st_ino, opened.st_size, opened.st_mtime_ns)
         ):
             raise CorruptTranscriptMetadata(f"unsafe transcript metadata: {path.name}")
-    except OSError as error:
+    except (NotImplementedError, OSError) as error:
         raise CorruptTranscriptMetadata(f"invalid transcript metadata: {path.name}") from error
     finally:
         if descriptor is not None:
@@ -335,7 +343,7 @@ def _read_source_snapshot(path: Path) -> bytes:
         ):
             raise UnsafeTranscriptSource("transcript source path changed while it was read")
         return b"".join(chunks)
-    except OSError as error:
+    except (NotImplementedError, OSError) as error:
         raise UnsafeTranscriptSource("transcript source could not be read safely") from error
     finally:
         if descriptor is not None:
@@ -364,21 +372,6 @@ def _absolute_without_following_symlinks(path: Path) -> Path:
     return Path(os.path.abspath(os.fspath(path.expanduser())))
 
 
-def _prepare_default_exports_directory(exports: Path) -> None:
-    try:
-        details = exports.lstat()
-    except FileNotFoundError:
-        try:
-            exports.mkdir(parents=True)
-            details = exports.lstat()
-        except OSError as error:
-            raise UnsafeExportTarget("default exports directory could not be created safely") from error
-    except OSError as error:
-        raise UnsafeExportTarget("default exports directory is unavailable") from error
-    if not stat.S_ISDIR(details.st_mode) or stat.S_ISLNK(details.st_mode):
-        raise UnsafeExportTarget("default exports directory must be a regular directory")
-
-
 def _validate_existing_target(target: Path, *, force: bool) -> None:
     try:
         details = target.lstat()
@@ -397,7 +390,7 @@ def _validate_target_at(directory_fd: int, filename: str, *, force: bool) -> Non
         details = os.stat(filename, dir_fd=directory_fd, follow_symlinks=False)
     except FileNotFoundError:
         return
-    except OSError as error:
+    except (NotImplementedError, OSError) as error:
         raise UnsafeExportTarget("export target could not be inspected safely") from error
     if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode):
         raise UnsafeExportTarget("export target must not be a symlink or special file")
@@ -409,28 +402,28 @@ def _open_validated_directory(directory: Path) -> tuple[int, tuple[int, int]]:
     try:
         before = directory.lstat()
     except OSError as error:
-        raise UnsafeExportTarget("default exports directory is unavailable") from error
+        raise UnsafeExportTarget("data root is unavailable") from error
     if not stat.S_ISDIR(before.st_mode) or stat.S_ISLNK(before.st_mode):
-        raise UnsafeExportTarget("default exports directory must not be a symlink")
+        raise UnsafeExportTarget("data root must not be a symlink")
     no_follow = getattr(os, "O_NOFOLLOW", 0)
     directory_only = getattr(os, "O_DIRECTORY", 0)
     if not no_follow or not directory_only:
-        raise UnsafeExportTarget("this platform cannot safely open the exports directory")
+        raise UnsafeExportTarget("this platform cannot safely open the data root")
     descriptor: int | None = None
     try:
         descriptor = os.open(directory, os.O_RDONLY | no_follow | directory_only)
         opened = os.fstat(descriptor)
-    except OSError as error:
+    except (NotImplementedError, OSError) as error:
         if descriptor is not None:
             os.close(descriptor)
-        raise UnsafeExportTarget("default exports directory could not be opened safely") from error
+        raise UnsafeExportTarget("data root could not be opened safely") from error
     assert descriptor is not None
     if (
         not stat.S_ISDIR(opened.st_mode)
         or (opened.st_dev, opened.st_ino) != (before.st_dev, before.st_ino)
     ):
         os.close(descriptor)
-        raise UnsafeExportTarget("default exports directory changed before it was opened")
+        raise UnsafeExportTarget("data root changed before it was opened")
     return descriptor, (opened.st_dev, opened.st_ino)
 
 
@@ -444,6 +437,94 @@ def _directory_path_matches(directory: Path, identity: tuple[int, int]) -> bool:
         and not stat.S_ISLNK(details.st_mode)
         and (details.st_dev, details.st_ino) == identity
     )
+
+
+def _exports_relative_parts(root: Path, exports: Path) -> tuple[str, ...]:
+    try:
+        relative = exports.relative_to(root)
+    except ValueError as error:
+        raise UnsafeExportTarget("default exports directory must be inside the data root") from error
+    parts = relative.parts
+    if not parts or any(part in {"", ".", ".."} or Path(part).name != part for part in parts):
+        raise UnsafeExportTarget("default exports directory is not a safe relative path")
+    return parts
+
+
+def _open_directory_at(parent_fd: int, name: str) -> tuple[int, tuple[int, int]]:
+    if Path(name).name != name or name in {"", ".", ".."}:
+        raise UnsafeExportTarget("unsafe exports directory component")
+    try:
+        details = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        try:
+            os.mkdir(name, dir_fd=parent_fd)
+        except FileExistsError:
+            pass
+        except (NotImplementedError, OSError) as error:
+            raise UnsafeExportTarget("exports directory could not be created safely") from error
+        try:
+            details = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except (NotImplementedError, OSError) as error:
+            raise UnsafeExportTarget("exports directory could not be inspected safely") from error
+    except (NotImplementedError, OSError) as error:
+        raise UnsafeExportTarget("exports directory could not be inspected safely") from error
+    if not stat.S_ISDIR(details.st_mode) or stat.S_ISLNK(details.st_mode):
+        raise UnsafeExportTarget("exports directory components must not be symlinks")
+
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    directory_only = getattr(os, "O_DIRECTORY", 0)
+    if not no_follow or not directory_only:
+        raise UnsafeExportTarget("this platform cannot safely traverse the exports directory")
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            name,
+            os.O_RDONLY | no_follow | directory_only,
+            dir_fd=parent_fd,
+        )
+        opened = os.fstat(descriptor)
+    except (NotImplementedError, OSError) as error:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise UnsafeExportTarget("exports directory could not be opened safely") from error
+    assert descriptor is not None
+    if (
+        not stat.S_ISDIR(opened.st_mode)
+        or (opened.st_dev, opened.st_ino) != (details.st_dev, details.st_ino)
+    ):
+        os.close(descriptor)
+        raise UnsafeExportTarget("exports directory changed before it was opened")
+    return descriptor, (opened.st_dev, opened.st_ino)
+
+
+def _open_exports_from_root(root_fd: int, parts: tuple[str, ...]) -> list[_DirectoryStep]:
+    steps: list[_DirectoryStep] = []
+    parent_fd = root_fd
+    try:
+        for name in parts:
+            directory_fd, identity = _open_directory_at(parent_fd, name)
+            steps.append(_DirectoryStep(parent_fd, name, directory_fd, identity))
+            parent_fd = directory_fd
+    except ExportError:
+        for step in reversed(steps):
+            os.close(step.directory_fd)
+        raise
+    return steps
+
+
+def _directory_steps_match(steps: list[_DirectoryStep]) -> bool:
+    for step in steps:
+        try:
+            details = os.stat(step.name, dir_fd=step.parent_fd, follow_symlinks=False)
+        except (NotImplementedError, OSError):
+            return False
+        if (
+            not stat.S_ISDIR(details.st_mode)
+            or stat.S_ISLNK(details.st_mode)
+            or (details.st_dev, details.st_ino) != step.identity
+        ):
+            return False
+    return True
 
 
 def _write_atomic_at(directory_fd: int, filename: str, payload: bytes, *, force: bool) -> None:
@@ -462,7 +543,7 @@ def _write_atomic_at(directory_fd: int, filename: str, payload: bytes, *, force:
             )
         except FileExistsError as error:
             raise ExportError(f"temporary export path already exists: {temporary}") from error
-        except OSError as error:
+        except (NotImplementedError, OSError) as error:
             raise ExportError("temporary export file could not be created safely") from error
         try:
             with os.fdopen(descriptor, "wb") as handle:
@@ -470,7 +551,7 @@ def _write_atomic_at(directory_fd: int, filename: str, payload: bytes, *, force:
                 handle.write(payload)
                 handle.flush()
                 os.fsync(handle.fileno())
-        except OSError as error:
+        except (NotImplementedError, OSError) as error:
             raise ExportError("temporary export file could not be written safely") from error
         if force:
             _validate_target_at(directory_fd, filename, force=True)
@@ -481,7 +562,7 @@ def _write_atomic_at(directory_fd: int, filename: str, payload: bytes, *, force:
                     src_dir_fd=directory_fd,
                     dst_dir_fd=directory_fd,
                 )
-            except OSError as error:
+            except (NotImplementedError, OSError) as error:
                 raise ExportError("export target could not be replaced atomically") from error
         else:
             try:
@@ -501,24 +582,35 @@ def _write_atomic_at(directory_fd: int, filename: str, payload: bytes, *, force:
             os.close(descriptor)
         try:
             os.unlink(temporary, dir_fd=directory_fd)
-        except OSError:
+        except FileNotFoundError:
             pass
+        except (NotImplementedError, OSError) as error:
+            raise ExportError("temporary export file could not be cleaned safely") from error
 
 
 def _write_bounded_default(
-    directory: Path, filename: str, payload: bytes, *, force: bool
+    root: Path,
+    root_fd: int,
+    root_identity: tuple[int, int],
+    exports_parts: tuple[str, ...],
+    filename: str,
+    payload: bytes,
+    *,
+    force: bool,
 ) -> None:
-    directory_fd, identity = _open_validated_directory(directory)
+    steps = _open_exports_from_root(root_fd, exports_parts)
+    directory_fd = steps[-1].directory_fd
     try:
         _write_atomic_at(directory_fd, filename, payload, force=force)
-        if not _directory_path_matches(directory, identity):
+        if not _directory_path_matches(root, root_identity) or not _directory_steps_match(steps):
             try:
                 os.unlink(filename, dir_fd=directory_fd)
-            except OSError:
+            except (NotImplementedError, OSError):
                 pass
-            raise UnsafeExportTarget("default exports directory changed during publication")
+            raise UnsafeExportTarget("data root or exports directory changed during publication")
     finally:
-        os.close(directory_fd)
+        for step in reversed(steps):
+            os.close(step.directory_fd)
 
 
 def _write_atomic(target: Path, payload: bytes, *, force: bool) -> None:
@@ -542,20 +634,22 @@ def _write_atomic(target: Path, payload: bytes, *, force: bool) -> None:
             _validate_existing_target(target, force=True)
             try:
                 os.replace(temporary, target)
-            except OSError as error:
+            except (NotImplementedError, OSError) as error:
                 raise ExportError("export target could not be replaced atomically") from error
         else:
             try:
                 os.link(temporary, target)
             except FileExistsError as error:
                 raise ExportTargetExists(f"export target already exists: {target}") from error
-            except OSError as error:
+            except (NotImplementedError, OSError) as error:
                 raise ExportError("export target could not be created atomically") from error
     finally:
         try:
             temporary.unlink()
-        except OSError:
+        except FileNotFoundError:
             pass
+        except (NotImplementedError, OSError) as error:
+            raise ExportError("temporary export file could not be cleaned safely") from error
 
 
 def export_video(request: VideoExportRequest, paths: DataPaths) -> ExportResult:
@@ -563,29 +657,51 @@ def export_video(request: VideoExportRequest, paths: DataPaths) -> ExportResult:
     output_format = request.format.strip().lower()
     if output_format not in {"vtt", "txt", "md"}:
         raise ExportError(f"unsupported export format: {request.format}")
-    resolved = resolve_transcript(paths.root, request.video_or_url, request.language)
-    source_bytes = _read_source_snapshot(resolved.path)
-    source_hash = sha256(source_bytes).hexdigest()
-    snapshot = _VttSnapshot(source_bytes)
-
-    if output_format == "vtt":
-        payload = source_bytes
-    elif output_format == "txt":
-        payload = f"{clean_vtt(snapshot)}\n".encode("utf-8")  # type: ignore[arg-type]
-    else:
-        payload = _markdown(resolved, source_hash, snapshot).encode("utf-8")
-
+    root_fd: int | None = None
+    root_identity: tuple[int, int] | None = None
+    root = _absolute_without_following_symlinks(paths.root)
+    exports: Path | None = None
+    exports_parts: tuple[str, ...] | None = None
     if request.output is None:
         exports = _absolute_without_following_symlinks(paths.exports)
-        _prepare_default_exports_directory(exports)
-        filename = f"{resolved.video_id}.{resolved.language}.{output_format}"
-        absolute_target = exports / filename
-        if absolute_target.parent != exports:
-            raise UnsafeExportTarget("default export target escaped the exports directory")
-        _write_bounded_default(exports, filename, payload, force=request.force)
-    else:
-        absolute_target = _absolute_without_following_symlinks(request.output)
-        _write_atomic(absolute_target, payload, force=request.force)
+        exports_parts = _exports_relative_parts(root, exports)
+        root_fd, root_identity = _open_validated_directory(root)
+
+    try:
+        resolved = resolve_transcript(paths.root, request.video_or_url, request.language)
+        source_bytes = _read_source_snapshot(resolved.path)
+        source_hash = sha256(source_bytes).hexdigest()
+        snapshot = _VttSnapshot(source_bytes)
+
+        if output_format == "vtt":
+            payload = source_bytes
+        elif output_format == "txt":
+            payload = f"{clean_vtt(snapshot)}\n".encode("utf-8")  # type: ignore[arg-type]
+        else:
+            payload = _markdown(resolved, source_hash, snapshot).encode("utf-8")
+
+        if request.output is None:
+            assert exports is not None
+            assert exports_parts is not None
+            assert root_fd is not None
+            assert root_identity is not None
+            filename = f"{resolved.video_id}.{resolved.language}.{output_format}"
+            absolute_target = exports / filename
+            _write_bounded_default(
+                root,
+                root_fd,
+                root_identity,
+                exports_parts,
+                filename,
+                payload,
+                force=request.force,
+            )
+        else:
+            absolute_target = _absolute_without_following_symlinks(request.output)
+            _write_atomic(absolute_target, payload, force=request.force)
+    finally:
+        if root_fd is not None:
+            os.close(root_fd)
     return ExportResult(
         path=absolute_target,
         source_sha256=source_hash,

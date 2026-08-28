@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -331,26 +332,133 @@ def test_default_exports_directory_must_not_be_a_symlink(tmp_path: Path) -> None
     assert list(outside.iterdir()) == []
 
 
+def test_default_exports_directory_must_remain_inside_data_root(tmp_path: Path) -> None:
+    _write_transcript(tmp_path)
+    outside = tmp_path.parent / f"{tmp_path.name}-outside-exports"
+    paths = replace(DataPaths.from_root(tmp_path), exports=outside)
+
+    with pytest.raises(ExportError):
+        export_video(VideoExportRequest(VIDEO_ID, "md", "fr"), paths)
+
+    assert not outside.exists()
+
+
+def test_nested_default_exports_directory_is_created_relative_to_data_root(
+    tmp_path: Path,
+) -> None:
+    _write_transcript(tmp_path)
+    nested = tmp_path / "artifacts" / "exports"
+    paths = replace(DataPaths.from_root(tmp_path), exports=nested)
+
+    result = export_video(VideoExportRequest(VIDEO_ID, "md", "fr"), paths)
+
+    assert result.path == nested / f"{VIDEO_ID}.fr.md"
+    assert result.path.is_file()
+
+
 def test_default_exports_directory_replaced_after_validation_fails_closed(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     _write_transcript(tmp_path)
     paths = DataPaths.from_root(tmp_path)
     outside = tmp_path / "outside-exports"
+    moved_exports = tmp_path / "original-exports"
     outside.mkdir()
-    real_prepare = exporter._prepare_default_exports_directory
+    real_write = exporter._write_atomic_at
 
-    def prepare_then_swap(exports: Path) -> None:
-        real_prepare(exports)
-        exports.rmdir()
-        exports.symlink_to(outside, target_is_directory=True)
+    def swap_then_write(
+        directory_fd: int, filename: str, payload: bytes, *, force: bool
+    ) -> None:
+        paths.exports.rename(moved_exports)
+        paths.exports.symlink_to(outside, target_is_directory=True)
+        real_write(directory_fd, filename, payload, force=force)
 
-    monkeypatch.setattr(exporter, "_prepare_default_exports_directory", prepare_then_swap)
+    monkeypatch.setattr(exporter, "_write_atomic_at", swap_then_write)
 
     with pytest.raises(ExportError):
         export_video(VideoExportRequest(VIDEO_ID, "md", "fr"), paths)
 
     assert list(outside.iterdir()) == []
+    assert list(moved_exports.iterdir()) == []
+
+
+def test_data_root_replaced_after_source_snapshot_cannot_redirect_default_export(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "corpus"
+    moved_root = tmp_path / "original-corpus"
+    outside = tmp_path / "outside-root"
+    outside.mkdir()
+    _write_transcript(root)
+    paths = DataPaths.from_root(root)
+    real_snapshot = exporter._read_source_snapshot
+
+    def snapshot_then_swap(source: Path) -> bytes:
+        contents = real_snapshot(source)
+        root.rename(moved_root)
+        root.symlink_to(outside, target_is_directory=True)
+        return contents
+
+    monkeypatch.setattr(exporter, "_read_source_snapshot", snapshot_then_swap)
+
+    with pytest.raises(ExportError):
+        export_video(VideoExportRequest(VIDEO_ID, "md", "fr"), paths)
+
+    assert list(outside.iterdir()) == []
+
+
+@pytest.mark.parametrize("use_default_target", (False, True))
+def test_force_maps_unsupported_atomic_replace_and_cleans_temporary_file(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    use_default_target: bool,
+) -> None:
+    _write_transcript(tmp_path)
+    paths = DataPaths.from_root(tmp_path)
+    if use_default_target:
+        target = paths.exports / f"{VIDEO_ID}.fr.md"
+    else:
+        target = tmp_path / "explicit.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("original", encoding="utf-8")
+
+    def unsupported_replace(*args: object, **kwargs: object) -> None:
+        raise NotImplementedError("replace with dir_fd unsupported")
+
+    monkeypatch.setattr(exporter.os, "replace", unsupported_replace)
+    request = VideoExportRequest(
+        VIDEO_ID,
+        "md",
+        "fr",
+        None if use_default_target else target,
+        force=True,
+    )
+
+    with pytest.raises(ExportError):
+        export_video(request, paths)
+
+    assert target.read_text(encoding="utf-8") == "original"
+    assert not target.with_name(f"{target.name}.tmp").exists()
+
+
+def test_unsupported_dir_fd_stat_becomes_stable_export_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_transcript(tmp_path)
+    paths = DataPaths.from_root(tmp_path)
+    real_stat = exporter.os.stat
+
+    def unsupported_stat(*args: object, **kwargs: object):
+        if kwargs.get("dir_fd") is not None:
+            raise NotImplementedError("dir_fd stat unsupported")
+        return real_stat(*args, **kwargs)
+
+    monkeypatch.setattr(exporter.os, "stat", unsupported_stat)
+
+    with pytest.raises(ExportError):
+        export_video(VideoExportRequest(VIDEO_ID, "md", "fr"), paths)
+
+    assert not (paths.exports / f"{VIDEO_ID}.fr.md.tmp").exists()
 
 
 def test_non_force_export_never_overwrites_target_created_during_publish(
