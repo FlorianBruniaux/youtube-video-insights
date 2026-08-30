@@ -342,6 +342,28 @@ derived index. `index --limit` accepts only 1 through 50 in slice mode;
 `search --limit` accepts 1 through 20. The VTT corpus remains read-only and the
 SQLite database can be rebuilt at any time.
 
+### Prepare a relevance review packet
+
+Copy the tracked template, replace every placeholder with real article subjects
+and queries, then prepare a deterministic packet. The command records the Git
+commit, observed loaded-source hashes, captured index hash, query-set hash,
+ranked passages, timestamps, and source URLs. It never invents human judgments
+and keeps the evaluation status `UNKNOWN`.
+
+```bash
+cp plans/evidence/2026-08-30-p2-query-template.json /tmp/p2-queries.json
+uv run python scripts/prepare_search_relevance_evaluation.py \
+  --database /ABSOLUTE/PATH/TO/search-v1.sqlite3 \
+  --queries-file /tmp/p2-queries.json \
+  --output /tmp/p2-evaluation-packet.json \
+  --commit-sha "$(git rev-parse HEAD)" \
+  --top-k 10
+```
+
+The unedited template is rejected intentionally. See the
+[P2 evaluation protocol](plans/evidence/2026-08-28-p2-50-vtt-evaluation.md)
+for the 20-result pilot, the 60-to-100-case release gate, and human-review rules.
+
 ### MCP access for local LLM clients
 
 Install the `mcp` extra, build an index, then configure the stdio command in the

@@ -31,6 +31,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   language and channel filters, timestamps, and direct YouTube links.
 - Full-corpus indexing with a disk-capacity preflight, representative 50-file
   selection, deterministic passage identities, and atomic SQLite publication.
+- Deterministic relevance-evaluation packet preparation with a versioned query
+  template, pinned index snapshot, index/query/code hashes, source-complete
+  ranked results, empty human-judgment fields, atomic publication, and
+  fail-closed input validation.
 - Read-only MCP server with four closed-world tools: `list_corpora`,
   `search_videos`, `search_passages`, and `get_passage`. Catalog and passage
   search keep their separate SQLite sources.

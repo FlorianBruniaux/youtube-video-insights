@@ -2,7 +2,7 @@
 
 - **Mise à jour :** 2026-08-30
 - **Socle fonctionnel :** branche `main`; setup assistants ajouté dans le lot courant
-- **Validation locale :** 521 tests et 10 sous-tests réussis
+- **Validation locale :** 567 tests et 10 sous-tests réussis
 - **Wheel :** installation minimale et extra MCP validés hors checkout, offline
 - **Source globale :** fast-forward approuvé de `e760a81` vers `62aa9ca`, puis 144 tests réussis
 - **Release partagée :** `60cbcac…` active via la transaction `shared-cbd58f0a09d9-64a8fa11-a6a4-4d3f-a114-f87e188e1153`; check live `issues: []`
@@ -59,6 +59,7 @@ flowchart LR
 | Shorts | Identifier trois passages et télécharger le segment choisi | Implémenté |
 | Catalogue | Inventorier vidéos, sources, artefacts et erreurs d'import | Schéma portable v2, lecteurs immuables et writer copy-on-write dans `catalog.sqlite3` |
 | Recherche de passages | Retrouver un extrait VTT, son timestamp et son lien YouTube | Implémenté dans `search-v1.sqlite3` |
+| Préparation de revue | Produire un packet déterministe de résultats sourcés sans inventer de jugement | Script et template versionnés; statut maintenu à `UNKNOWN` jusqu'à revue humaine |
 | Export | Produire un VTT, TXT ou Markdown sourcé sans LLM | `export video`, publication atomique |
 | Diagnostic | Vérifier dépendances, chemins et backends locaux sans secret ni écriture | `doctor --json` |
 | Accès LLM | Interroger catalogue et passages depuis un client MCP | Quatre outils read-only implémentés |
@@ -75,7 +76,7 @@ directement des VTT et conserve les passages horodatés. Aucun des deux ne doit
 
 | Évolution | Pourquoi elle n'est pas active | Gate avant développement |
 |---|---|---|
-| Revue humaine de la pertinence | La technique est validée, pas la qualité éditoriale des résultats | Juger les requêtes de l'artefact P2 et enregistrer `PASS` ou `FAIL` |
+| Revue humaine de la pertinence | Le packet peut être préparé, mais la qualité éditoriale n'est pas jugée | Remplacer les placeholders par des sujets réels, préparer le packet puis enregistrer les jugements humains |
 | Routage implicite Claude Code/Codex | Les calibrations disjointes conservent des faux positifs ou perdent des requêtes légitimes | Nouveau mécanisme seulement si un besoin d'invocation implicite est démontré; les skills explicites sont utilisables maintenant |
 | Application globale | La source `62aa9ca`, la release partagée `60cbcac…` et le setup local sont prêts | Capturer les préimages live, approuver le digest, appliquer le runtime puis `setup assistants --apply`; reconnecter Claude avant son canari |
 | Découpage LLM des longs transcripts | Insights et Shorts utilisent actuellement les 10 000 premiers caractères | Mesurer les pertes sur des articles réels, puis définir chunking et fusion |
@@ -100,7 +101,7 @@ uv lock --check
 git diff --check
 ```
 
-Résultat observé le 30 août 2026 sur la branche de travail : `521 passed, 10 subtests passed`.
+Résultat observé le 30 août 2026 sur la branche de travail : `567 passed, 10 subtests passed`.
 
 ### 2. Tranche locale de 50 VTT
 

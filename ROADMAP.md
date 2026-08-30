@@ -45,7 +45,15 @@ Les métadonnées vidéo servent à relier les résultats à YouTube. Elles ne r
 | P4 | MCP minimal | `TERMINÉE TECHNIQUEMENT` | Exposition comme accès produit prêt bloquée par P2 `UNKNOWN` |
 | P5 | Installation | `TERMINÉE TECHNIQUEMENT` | Installation promue ou recommandée aux usages produit bloquée par P2 `UNKNOWN` |
 
-L'[artefact P2](plans/evidence/2026-08-28-p2-50-vtt-evaluation.md) est suivi dans le repo, mais son évaluation reste non remplie. P2-S1 y renseigne le manifeste ordonné des 50 VTT, son hash, les requêtes et résultats ; P2-S2 y ajoute les jugements humains. L'absence de jugement reste `UNKNOWN` : elle interdit la promotion, jamais le développement autorisé de P3 à P5.
+L'[artefact P2](plans/evidence/2026-08-28-p2-50-vtt-evaluation.md) et son
+[template de requêtes](plans/evidence/2026-08-30-p2-query-template.json) sont
+suivis dans le repo. Le script `scripts/prepare_search_relevance_evaluation.py`
+fige le commit déclaré, les hashes des sources chargées observées, du snapshot
+d'index capturé et des requêtes, ainsi que les résultats sourcés, sans produire
+de jugement. Le pilote historique porte sur
+20 résultats issus d'un index représentatif de 50 VTT. Le gate complet porte
+sur 60 à 100 cas avec oracle humain. L'absence de jugement conserve `UNKNOWN` :
+elle interdit la promotion, jamais le développement autorisé de P3 à P5.
 
 La [preuve full-corpus](plans/evidence/2026-08-28-full-corpus-benchmark.md)
 atteste 3 270 documents, 183 789 passages, un build en 48,75 s, un p95
