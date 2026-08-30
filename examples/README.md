@@ -22,11 +22,13 @@ The `.json` and `.md` share the same stem as the `.vtt`, which is how cache look
 ## Reproduce this output
 
 ```bash
-# Install yt-insights
-pipx install yt-insights
+# Clone and install the development checkout
+git clone https://github.com/FlorianBruniaux/youtube-video-insights
+cd youtube-video-insights
+uv sync --extra dev
 
 # Download subtitles + extract insights
-yt-insights run https://www.youtube.com/watch?v=nfupYzLjFGc
+uv run yt-insights run https://www.youtube.com/watch?v=nfupYzLjFGc
 
 # Output lands in:
 #   output/transcripts/*.vtt   subtitle file
@@ -38,13 +40,13 @@ yt-insights run https://www.youtube.com/watch?v=nfupYzLjFGc
 Skip the download if the VTT is already present:
 
 ```bash
-yt-insights run https://www.youtube.com/watch?v=nfupYzLjFGc --skip-download
+uv run yt-insights run https://www.youtube.com/watch?v=nfupYzLjFGc --skip-download
 ```
 
 Force re-analysis even if the cache exists:
 
 ```bash
-yt-insights run https://www.youtube.com/watch?v=nfupYzLjFGc --force
+uv run yt-insights run https://www.youtube.com/watch?v=nfupYzLjFGc --force
 ```
 
 ---
@@ -53,10 +55,10 @@ yt-insights run https://www.youtube.com/watch?v=nfupYzLjFGc --force
 
 ```bash
 # Suggest the best Short moments from existing VTTs
-yt-insights suggest-shorts
+uv run yt-insights suggest-shorts
 
 # Download the best clip as MP4
-yt-insights generate-short nfupYzLjFGc \
+uv run yt-insights generate-short nfupYzLjFGc \
   --start 00:00:56 --end 00:01:43 \
   --title "hook-1200-commits" \
   --output-format mp4
@@ -71,7 +73,7 @@ yt-insights generate-short nfupYzLjFGc \
 In a real terminal (TTY), the wizard guides you step by step with arrow-key menus:
 
 ```bash
-yt-insights interactive
+uv run yt-insights interactive
 ```
 
 Inside Claude Code (no TTY), pass all flags directly. See `prompt-claude-code.md` for the ready-to-use prompt.
@@ -90,5 +92,6 @@ Inside Claude Code (no TTY), pass all flags directly. See `prompt-claude-code.md
 }
 ```
 
-LLM backend is auto-detected at runtime: cc-bridge (port 4141) first, then Ollama, then
-`ANTHROPIC_API_KEY`. No configuration needed if one of these is available.
+The package is not currently published on PyPI, so these examples deliberately use
+the checked-out repository. The LLM backend is auto-detected at runtime: cc-bridge
+(port 4141) first, then Ollama, then `ANTHROPIC_API_KEY`.

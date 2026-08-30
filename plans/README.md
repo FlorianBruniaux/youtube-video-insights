@@ -1,12 +1,13 @@
 # YT Insights : index des plans
 
-**Dernière mise à jour :** 2026-08-28
+**Dernière mise à jour :** 2026-08-30
 **État du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **État du runtime agentique :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **État des skills et agents projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**État du candidat global :** `VALIDÉ DANS UN CLONE INERTE`, non intégré et non activé.
+**État de la source globale :** `INTÉGRÉE`, commit `62aa9ca`.
+**État de la release partagée :** `ACTIVE`, release `60cbcac…`.
 **État du routeur réel :** `REJETÉ`, aucun candidat disjoint ne passe tous les gates.
-**État de l'installation globale :** `NON INSTALLÉE`, approbations exactes requises.
+**État de l'installation globale :** `PARTIELLE`, skills actifs; runtime, agents et MCP absents.
 **Readiness produit :** `UNKNOWN` jusqu'à la revue humaine P2 ; ce n'est pas un veto de développement.
 
 ## À lire maintenant
@@ -31,12 +32,12 @@ répertoire par Claude Code et Codex, sans dupliquer la logique métier :
 |---|---|---|
 | A | Runtime indépendant du répertoire courant, `doctor`, acquisition avec preview, export, backends explicites et MCP quatre outils | `TERMINÉ`, intégration à 508 tests plus 10 sous-tests avant mise à jour documentaire |
 | B | Trois skills communs, deux agents natifs et corpus de routage | `PARTIEL`: assets terminés; routage implicite rejeté après holdout disjoint, invocation explicite retenue |
-| C | Candidats globaux immuables, diffs, digests, rollback et tests en sessions neuves | `EN ATTENTE D'APPROBATION`: 144 tests, 10 rendus identiques, bundle Git et deux digests distincts; aucun live modifié |
+| C | Candidats globaux immuables, diffs, digests, rollback et tests en sessions neuves | `PARTIEL`: source `62aa9ca` et release partagée `60cbcac…` actives; runtime, agents, MCP et canari Claude restent ouverts |
 | H | API hébergée, worker, extension et MCP distant | `CONDITIONNEL` aux déclencheurs d'usage |
 
-Aucune modification de `~/.claude`, `~/.codex` ou `~/.config/ai-agents` ne fait
-partie du plan documentaire. Ces écritures exigent une transaction approuvée
-par digest après construction et validation d'un candidat inerte.
+Les écritures globales restent séparées du plan documentaire et exigent chacune
+une transaction approuvée par digest. Les transactions source et shared ont été
+appliquées. Les transactions runtime et intégrations ne l'ont pas été.
 
 ## Plans détaillés conservés
 
@@ -59,7 +60,7 @@ actif ci-dessus.
 | [09 - Runtime utilisable par les agents](2026-08-28-09-agent-ready-runtime.md) | Plan d'exécution prioritaire du socle local |
 | [10 - Intégration globale Claude Code et Codex](2026-08-28-10-claude-codex-global-integration.md) | Plan d'exécution des skills, agents, MCP et garde-fous globaux |
 | [11 - Service hébergé et extension](2026-08-28-11-hosted-extension.md) | Plan conditionnel pour navigateur, accès distant et multi-utilisateur |
-| [Preuve d'intégration finale](evidence/2026-08-28-final-integration.md) | Code, packaging, corpus v2, routeur et candidat global inerte |
+| [Preuve d'intégration finale](evidence/2026-08-28-final-integration.md) | Code, packaging, corpus v2, routeur, source globale et release partagée |
 | [Spécification de la plateforme agentique](specs/AGENT-PLATFORM.md) | Architecture cible et décisions de périmètre |
 | [Spécification d'architecture](specs/SEARCH-ARCHITECTURE.md) | Contrats de conception initiaux |
 | [Critique architecture et plan](reviews/2026-08-27-architecture-plan-critique.md) | Décisions écartées, risques et garde-fous |

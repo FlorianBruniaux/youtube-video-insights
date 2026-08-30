@@ -1,11 +1,11 @@
 # Sessions parallèles : suivi d'exécution
 
-**Mise à jour :** 2026-08-28
+**Mise à jour :** 2026-08-30
 **État du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **État du runtime et des assets agentiques projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**État du candidat global :** `CONSTRUIT ET VALIDÉ EN ENVIRONNEMENT INERTE`.
+**État de la source et de la release partagée :** `INTÉGRÉES ET ACTIVES`.
 **État du routeur réel :** `REJETÉ`, aucun candidat disjoint ne passe tous les gates.
-**État de l'installation globale :** `NON INSTALLÉE`, approbations exactes requises.
+**État de l'installation globale :** `PARTIELLE`, runtime, agents et MCP restent à installer.
 **Règle :** `UNKNOWN` bloque promotion/readiness produit, pas l'implémentation P3 à P5 autorisée.
 
 **Références :** [architecture agentique](specs/AGENT-PLATFORM.md), [runtime](2026-08-28-09-agent-ready-runtime.md), [intégration globale](2026-08-28-10-claude-codex-global-integration.md), [plan consolidé V2](2026-08-27-CONSOLIDATED-v2.md) et [roadmap](../ROADMAP.md).
@@ -42,7 +42,7 @@ A0 contrats runtime -> A1 chemins
     B1 MCP   B2 skills     B3 agents + évaluation du routage
     └────────┼─────────────┘
              ↓ candidat local validé
-        C1 trois candidats -> trois approbations digest -> C2 installation + sessions neuves
+        C1 source + shared [terminés] -> runtime + integrations [à approuver] -> C3 sessions neuves
 
 D1 backends explicites + MLX : terminé, canaris réels séparés
 
@@ -97,7 +97,7 @@ P2-S2 démarre après fusion de P2-S1 et consomme l'identifiant de commit ainsi 
 | Phase | Construction/tests autorisés | Dépendance technique | Promotion ou exposition interdite tant que P2 est `UNKNOWN` |
 |---|---|---|---|
 | P3 corpus complet | Construire et tester `search-v1.sqlite3` depuis les VTT, avec réconciliation | Contrat de passages stable | Le promouvoir comme référence produit full-corpus |
-| P4 MCP minimal | Construire/tester localement `search_passages` et `get_passage` | P3 et contrat de recherche stables | Le présenter comme accès produit prêt ou le distribuer pour usage produit |
+| P4 MCP minimal | Construire/tester localement `list_corpora`, `search_videos`, `search_passages` et `get_passage` | P3, catalogue et contrat de recherche stables | Le présenter comme accès produit prêt ou le distribuer pour usage produit |
 | P5 installation | Rejouer une installation client locale comme test d'intégration | P4 testé | La recommander ou la promouvoir comme installation produit prête |
 
 `catalog.sqlite3` reste une branche d'inventaire/import/repli vidéo. Il ne précède ni n'alimente `search-v1.sqlite3`, qui est dérivé directement des VTT.
@@ -146,16 +146,19 @@ existant, mais pas des backends LLM.
 | B3 `codex/agent-native-adapters` | agent Claude, agent Codex et corpus 45 prompts | `PARTIEL`: assets et fixture terminés | benchmark routeur restant: 27/30 positifs, 0/15 négatifs, p95 chaud inférieur ou égal à 10 ms |
 | B4 `codex/agent-packaging-docs` | smoke wheel et docs repo | `TERMINÉ` | installation minimale et MCP hors checkout, cinq commandes agent testées |
 
-### Vague C : préparer puis installer la configuration globale
+### Vague C : installation globale partiellement terminée
 
-C1 peut construire et tester un candidat dans un faux répertoire personnel.
-C1 n'a pas l'autorisation d'écrire dans la configuration globale en direct.
+La source globale et la release partagée ont été appliquées par deux transactions
+approuvées et journalisées. Le runtime, les agents natifs et les entrées MCP restent
+des transactions séparées. Ils ne sont pas installés à ce checkpoint.
 
-| Session | Propriété exclusive | Gate |
+| Session | Propriété exclusive | État et gate |
 |---|---|---|
-| C1 `codex/agent-global-candidate` | source de release `~/.config/ai-agents`, transaction runtime, tests inertes, manifestes et diffs expurgés | Présenter `GO INSTALL YT RUNTIME <digest>`, `GO INSTALL SHARED <digest>` et `GO INSTALL YT INTEGRATIONS <digest>`, puis s'arrêter |
-| C2 installation | wheel, config runtime et fichiers globaux approuvés avec trois journaux de rollback | Démarre uniquement après les trois confirmations exactes et la relecture des préimages |
-| C3 validation | sessions Claude Code et Codex neuves, canaris de refus d'écriture | Même corpus depuis deux cwd, cinq requêtes identiques, agents chercheurs incapables d'écrire ou d'acquérir |
+| C1 source globale | source de release `~/.config/ai-agents`, tests inertes, manifestes et diffs expurgés | `TERMINÉ`: source `62aa9ca...`, 144 tests et bundle validés |
+| C2 release partagée | index actif et trois skills portables | `TERMINÉ`: release `60cbcac...`, 8 opérations journalisées, canari Codex positif |
+| C2 runtime | wheel, config runtime et binaires gérés | `À REPRÉPARER`: aucun runtime global `uv` installé; nouvelle préimage et nouveau digest requis |
+| C2 intégrations | agents natifs Claude/Codex et entrées MCP | `BLOQUÉ`: commence après installation et validation du runtime global |
+| C3 validation | sessions Claude Code et Codex neuves, canaris de refus d'écriture | `PARTIEL`: skills visibles dans Codex; Claude, agents natifs, MCP global et parité multi-cwd restent `UNKNOWN` |
 
 La configuration globale n'installe pas un second hook YouTube. Le routeur
 global existant n'est ajusté que si le corpus de 45 prompts prouve un manque.

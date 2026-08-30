@@ -26,14 +26,16 @@ si demandé, puis relancer `scripts/build_index.py` pour mettre à jour `output/
 
 **Cookies Safari.** yt-dlp accepte `--cookies-from-browser safari`, mais macOS interdit la
 lecture de `Cookies.binarycookies` sans Full Disk Access. Résultat : zéro sous-titre
-téléchargé, run avorté. Le template n'utilise aucun cookie. Sur 30 à 800 vidéos avec
-`--sleep-requests 2`, le rate-limiting YouTube reste rare. Si tu te fais bloquer, passe des
-cookies Chrome (`--cookies-from-browser chrome`) en éditant le template.
+téléchargé, run avorté. Le template n'utilise aucun cookie. `--sleep-requests 2` réduit
+la cadence, mais ne garantit pas l'absence de blocage YouTube. Si la source exige une
+session, utilise une copie locale du template et passe explicitement des cookies Chrome.
 
 **Troncature à 10 000 caractères.** `max_transcript_chars` vaut 10000 par défaut. Sur un
-podcast d'une heure, ça n'analyse que le premier quart d'heure. Le template exporte
-`YT_INSIGHTS_MAX_TRANSCRIPT_CHARS=60000`, ce qui couvre un épisode entier. Le modèle
-`devstral-64k` a 64k tokens de contexte, 60000 caractères passent large.
+podcast d'une heure, ça peut n'analyser que le début. Le template exporte
+`YT_INSIGHTS_MAX_TRANSCRIPT_CHARS=60000`. Cette valeur réduit la troncature, mais ne
+garantit pas de couvrir un épisode entier. La marge réelle dépend de la longueur du VTT,
+du prompt et de la fenêtre de contexte du modèle. Le CLI affiche `USED/TOTAL` avant
+chaque appel réel.
 
 **Filtre par année.** Le CLI n'a pas de filtre natif. `--flat-playlist` liste vite mais ne
 donne pas les dates. Le template fait une passe métadonnées (`yt-dlp --print upload_date|id`)
@@ -49,8 +51,9 @@ catalogue comptera les doublons.
 
 ## Backend LLM
 
-Par défaut : Ollama en local, `devstral-64k:latest`, endpoint `http://127.0.0.1:11434/v1`.
-Zéro coût API, contexte 64k. Vérifier qu'Ollama tourne : `curl -s http://127.0.0.1:11434/api/tags`.
+Ce template, contrairement au résolveur automatique du CLI, force Ollama en local avec
+`devstral-64k:latest` et `http://127.0.0.1:11434/v1`. Vérifie que ce nom de modèle est
+bien installé avant le run : `curl -s http://127.0.0.1:11434/api/tags`.
 
 Pour une qualité d'extraction supérieure, viser cc-bridge ou l'API Anthropic :
 

@@ -86,11 +86,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Documented
 
+- Recorded the digest-approved integration of global source commit `62aa9ca`
+  and activation of shared release `60cbcac…`. The eight-operation transaction
+  is installed, its live check reports `issues: []`, and a fresh Codex session
+  discovers the three portable YouTube skills.
+- Clarified that the shared release does not install the global
+  `yt-insights` runtime, native researcher agents, or MCP entries. Those remain
+  separate approval gates, and the Claude discovery canary remains `UNKNOWN`
+  until its local CLI is connected.
 - Added a consolidated Claude Code and Codex architecture plus executable plans
   for an agent-ready runtime, portable skills, native agents, read-only MCP,
   digest-bound global installation, and a conditional hosted extension.
 - Added parallel ownership, dependency and acceptance gates for the new agent
-  integration lot. The documents do not install or alter global configuration.
+  integration lot. Initial candidates were inert; only the separately approved
+  source and shared-release transactions have since changed global state.
 - README, installation guide, roadmap, changelog, plan index, and `llms.txt`
   now distinguish `catalog.sqlite3` from the timestamped `search-v1.sqlite3`
   index.

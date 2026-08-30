@@ -3,8 +3,9 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Turn YouTube channels into a local, searchable research corpus: transcripts,
-structured insights, SQLite/FTS5 search, reports, and Shorts.
+Turn YouTube channels into a local research corpus: transcripts, structured
+insights, SQLite/FTS5 search, timestamped exports, reports, Shorts, and
+read-only MCP access for Claude Code or Codex.
 
 The current implementation can acquire YouTube subtitles, export sourced text,
 index every timestamped VTT passage, and expose the corpus through the CLI or
@@ -19,15 +20,15 @@ four read-only MCP tools. See the
 
 | Goal | Command | Result |
 |---|---|---|
-| Check a local installation | `yt-insights doctor --json` | Secret-safe dependency, corpus, index, catalog, and optional backend status |
-| Preview an acquisition | `yt-insights acquire URL --dry-run --json` | Selected videos and exclusions, with no corpus write |
-| Acquire one channel | `yt-insights acquire URL --slug NAME --yes` | VTT and metadata under the configured data root |
-| Export one transcript | `yt-insights export video VIDEO_ID --format md` | Sourced VTT, text, or timestamped Markdown |
-| Analyze a channel | `yt-insights run https://www.youtube.com/@ChannelName` | Transcripts, structured insights, and an aggregate report |
-| Index an existing corpus | `yt-insights catalog import-corpus ./output` | One deduplicated SQLite catalog with durable import errors |
-| Build the timestamped search index | `yt-insights index --all` | A derived FTS5 index over every VTT passage |
-| Find a sourced passage | `yt-insights search "AI product discovery"` | Ranked excerpts, timestamps, and direct YouTube links |
-| Query from an LLM client | `yt-insights-mcp` | Four read-only corpus, video, and passage tools |
+| Check a local installation | `uv run yt-insights doctor --json` | Secret-safe dependency, corpus, index, catalog, and optional backend status |
+| Preview an acquisition | `uv run yt-insights acquire URL --dry-run --json` | Selected videos and exclusions, with no corpus write |
+| Acquire one channel | `uv run yt-insights acquire URL --slug NAME --yes` | VTT and metadata under the configured data root |
+| Export one transcript | `uv run yt-insights export video VIDEO_ID --format md` | Sourced VTT, text, or timestamped Markdown |
+| Analyze a channel | `uv run yt-insights run https://www.youtube.com/@ChannelName` | Transcripts, structured insights, and an aggregate report |
+| Index an existing corpus | `uv run yt-insights catalog import-corpus ./output` | One deduplicated SQLite catalog with durable import errors |
+| Build the timestamped search index | `uv run yt-insights index --all` | A derived FTS5 index over every VTT passage |
+| Find a sourced passage | `uv run yt-insights search "AI product discovery"` | Ranked excerpts, timestamps, and direct YouTube links |
+| Query from an LLM client | `uv run --extra mcp yt-insights-mcp` | Four read-only corpus, video, and passage tools |
 
 Analysis uses a local or cloud LLM. Catalog import, transcript indexing, and
 both search commands do not. Repeated runs reuse analysis caches and avoid
@@ -195,35 +196,35 @@ For a machine with no local LLM (no Ollama, no GPU), see [INSTALL.md](INSTALL.md
 export YT_INSIGHTS_DATA_ROOT="$HOME/Library/Application Support/yt-insights/corpus"
 
 # Validate the local runtime without changing the corpus or calling an LLM
-yt-insights doctor --json
+uv run yt-insights doctor --json
 
 # Preview first. Channel, playlist, and batch acquisition require --yes.
-yt-insights acquire https://www.youtube.com/@DevWithAIYoutube --dry-run --json
-yt-insights acquire https://www.youtube.com/@DevWithAIYoutube --slug dev-with-ai --yes
+uv run yt-insights acquire https://www.youtube.com/@DevWithAIYoutube --dry-run --json
+uv run yt-insights acquire https://www.youtube.com/@DevWithAIYoutube --slug dev-with-ai --yes
 
 # Export source material without an LLM
-yt-insights export video VIDEO_ID --format md
+uv run yt-insights export video VIDEO_ID --format md
 
 # Full pipeline: download subtitles + analyze + aggregate report
-yt-insights run https://www.youtube.com/@DevWithAIYoutube
+uv run yt-insights run https://www.youtube.com/@DevWithAIYoutube
 
 # Re-analyze existing VTT files (no download)
-yt-insights run https://www.youtube.com/@DevWithAIYoutube --skip-download
+uv run yt-insights run https://www.youtube.com/@DevWithAIYoutube --skip-download
 
 # Regenerate the aggregate report only
-yt-insights report
+uv run yt-insights report
 
 # Suggest Shorts from all existing VTT files
-yt-insights suggest-shorts
+uv run yt-insights suggest-shorts
 
 # Suggest Shorts for a single talk
-yt-insights suggest-shorts --vtt output/transcripts/20260423-talk.vtt
+uv run yt-insights suggest-shorts --vtt output/transcripts/20260423-talk.vtt
 
 # Regenerate the global Shorts index (no LLM call)
-yt-insights suggest-shorts --index-only
+uv run yt-insights suggest-shorts --index-only
 
 # Download a specific clip segment (no full-video download)
-yt-insights generate-short VIDEO_ID --start 00:05:10 --end 00:05:55 --title "hook-context-engineering"
+uv run yt-insights generate-short VIDEO_ID --start 00:05:10 --end 00:05:55 --title "hook-context-engineering"
 ```
 
 Expected output, with paths shortened to keep the example readable:
@@ -697,18 +698,27 @@ of reimplementing acquisition and search.
 
 Invoke the skills explicitly. The disjoint routing evaluation rejected the
 implicit BM25 hook because every generalizable calibration left either missed
-requests or forbidden activations. Global installation remains a separate,
-digest-bound operation and has not been applied.
+requests or forbidden activations.
+
+On the development workstation, the digest-approved shared release `60cbcac…`
+is active and a fresh Codex session discovers all three skills. This shared
+installation does not install the packaged `yt-insights` runtime, the native
+researcher agents, or the MCP client entries. Those remain separate,
+digest-bound transactions. Claude discovery remains `UNKNOWN` because its local
+CLI is not connected.
 
 | Document | Purpose |
 |---|---|
+| [Current Claude Code and Codex guide](docs/claude-code.md) | Supported skills, four MCP tools, local commands and verified installation boundary |
 | [Agent platform architecture](plans/specs/AGENT-PLATFORM.md) | Target behavior, data boundaries, skills, agents and safety rules |
 | [Agent-ready runtime plan](plans/2026-08-28-09-agent-ready-runtime.md) | CLI, paths, backends, acquisition, export and MCP work |
 | [Claude Code and Codex integration plan](plans/2026-08-28-10-claude-codex-global-integration.md) | Portable skills, native agents, routing evaluation and digest-bound global installation |
 | [Hosted service and extension plan](plans/2026-08-28-11-hosted-extension.md) | Conditional browser and remote-access path |
 
-The runtime plan passes the package smoke gate. No global Claude Code or Codex
-configuration is installed by the current repository setup.
+The runtime plan passes the package smoke gate. Cloning or installing this
+repository never changes global Claude Code or Codex configuration. Until the
+runtime transaction is approved and applied, use `uv run yt-insights` and
+`uv run --extra mcp yt-insights-mcp` from this checkout.
 
 ---
 

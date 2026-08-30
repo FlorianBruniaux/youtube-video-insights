@@ -18,6 +18,9 @@ La recherche passe par un MCP local en lecture seule. L'acquisition et l'export 
 
 ## État observé au 2026-08-28
 
+> Ce bloc conserve le snapshot antérieur à l'implémentation. Pour l'état courant,
+> voir le [suivi d'implémentation](../../docs/IMPLEMENTATION-STATUS.md).
+
 - La CLI, l'index FTS5 complet et le MCP à deux outils fonctionnent dans le dépôt.
 - Le MCP utilise encore un chemin de base relatif par défaut.
 - Le dépôt contient cinq skills, un agent et un hook propres à Claude Code.

@@ -70,11 +70,11 @@ processus en 0,32 s avec cache disque non purgé. Voir la
 
 ### P4 : MCP minimal
 
-Construire et tester localement un MCP stdio read-only limité à `search_passages` et `get_passage`. Il appelle la même recherche que la CLI et n'expose ni écriture, ni SQL brut, ni shell, ni URL arbitraire. Son exposition comme surface produit reste bloquée par P2 `UNKNOWN`.
+Construire et tester localement un MCP stdio read-only limité à `list_corpora`, `search_videos`, `search_passages` et `get_passage`. Il appelle les mêmes couches catalogue et recherche que la CLI et n'expose ni écriture, ni SQL brut, ni shell, ni URL arbitraire. Son exposition comme surface produit reste bloquée par P2 `UNKNOWN`.
 
 ### P5 : Installation
 
-Écrire puis rejouer une installation client locale comme test d'intégration des deux outils. Ne pas présenter cette installation comme prête pour les usages produit ou comme recommandée tant que P2 est `UNKNOWN`.
+Écrire puis rejouer une installation client locale comme test d'intégration des quatre outils. Ne pas présenter cette installation comme prête pour les usages produit ou comme recommandée tant que P2 est `UNKNOWN`.
 
 ## 6. Packs, exports et extensions
 

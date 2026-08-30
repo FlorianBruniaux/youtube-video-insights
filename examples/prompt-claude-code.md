@@ -10,18 +10,22 @@ passing all parameters as flags.
 
 ```bash
 cd /path/to/yt-insights
-source .venv/bin/activate   # or: pipx run yt-insights ...
+uv sync --extra dev
 ```
 
 Make sure CC Bridge (or Ollama, or an `ANTHROPIC_API_KEY`) is available before starting.
 
 ---
 
-## Step 0: clean previous output
+## Step 0: isolate this example
 
 ```bash
-rm -rf output/
+export YT_INSIGHTS_DATA_ROOT="$(mktemp -d /tmp/yt-insights-example.XXXXXX)"
+mkdir -p "$YT_INSIGHTS_DATA_ROOT/transcripts"
 ```
+
+This keeps existing repository output untouched and gives the run a disposable,
+explicit data root.
 
 ---
 
@@ -31,39 +35,39 @@ rm -rf output/
 want to separate the steps, download manually first:
 
 ```bash
-yt-dlp \
+uv run yt-dlp \
   --write-auto-subs \
   --sub-langs 'fr' \
   --sub-format vtt \
   --skip-download \
-  --output 'output/transcripts/%(id)s.%(ext)s' \
+  --output "$YT_INSIGHTS_DATA_ROOT/transcripts/%(id)s.%(ext)s" \
   'https://www.youtube.com/watch?v=nfupYzLjFGc'
 ```
 
-Expected output: `output/transcripts/nfupYzLjFGc.fr.vtt`
+Expected output: `$YT_INSIGHTS_DATA_ROOT/transcripts/nfupYzLjFGc.fr.vtt`
 
 ---
 
 ## Step 2: extract insights
 
 ```bash
-yt-insights run 'https://www.youtube.com/watch?v=nfupYzLjFGc'
+uv run yt-insights run 'https://www.youtube.com/watch?v=nfupYzLjFGc'
 ```
 
 If the VTT already exists, add `--skip-download` to avoid a second yt-dlp call.
 
 Expected output:
 
-- `output/insights/nfupYzLjFGc.fr.json`
-- `output/insights/nfupYzLjFGc.fr.md`
-- `output/insights/AGGREGATE_REPORT.md`
+- `$YT_INSIGHTS_DATA_ROOT/insights/nfupYzLjFGc.fr.json`
+- `$YT_INSIGHTS_DATA_ROOT/insights/nfupYzLjFGc.fr.md`
+- `$YT_INSIGHTS_DATA_ROOT/insights/AGGREGATE_REPORT.md`
 
 ---
 
 ## Step 3: suggest Shorts
 
 ```bash
-yt-insights suggest-shorts
+uv run yt-insights suggest-shorts
 ```
 
 Expected: a ranked list of Short candidates with start/end timecodes and scores.
@@ -75,7 +79,7 @@ Expected: a ranked list of Short candidates with start/end timecodes and scores.
 No TTY in Claude Code, so pass all parameters explicitly:
 
 ```bash
-yt-insights interactive \
+uv run yt-insights interactive \
   --action pipeline \
   --source 'https://www.youtube.com/watch?v=nfupYzLjFGc' \
   --duration standard \
@@ -90,7 +94,7 @@ Alternatively, pick a specific clip from the `suggest-shorts` output and downloa
 directly:
 
 ```bash
-yt-insights generate-short nfupYzLjFGc \
+uv run yt-insights generate-short nfupYzLjFGc \
   --start 00:00:56 \
   --end 00:01:43 \
   --title "hook-1200-commits" \
@@ -102,12 +106,12 @@ yt-insights generate-short nfupYzLjFGc \
 ## Step 5: bilan
 
 ```bash
-ls -lh output/clips/
-cat output/insights/AGGREGATE_REPORT.md
+ls -lh "$YT_INSIGHTS_DATA_ROOT/clips/"
+cat "$YT_INSIGHTS_DATA_ROOT/insights/AGGREGATE_REPORT.md"
 ```
 
-Verify: at least one `.mp4` in `output/clips/`, `AGGREGATE_REPORT.md` populated with
-insights from the video.
+Verify: at least one `.mp4` in `$YT_INSIGHTS_DATA_ROOT/clips/`, and a populated
+`AGGREGATE_REPORT.md` under `$YT_INSIGHTS_DATA_ROOT/insights/`.
 
 ---
 

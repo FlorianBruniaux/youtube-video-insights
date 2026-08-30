@@ -1,12 +1,13 @@
 # Roadmap produit YT Insights
 
-**Mise à jour :** 2026-08-28
+**Mise à jour :** 2026-08-30
 **Statut du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **Statut du runtime pour Claude Code et Codex :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **Statut des skills et agents projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**Statut du candidat global :** `VALIDÉ DANS UN CLONE INERTE`, non intégré et non activé.
+**Statut de la source globale :** `INTÉGRÉE`, commit `62aa9ca`, 144 tests réussis.
+**Statut de la release partagée :** `ACTIVE`, release `60cbcac…`, huit opérations journalisées.
 **Statut du routage implicite :** `REJETÉ`, aucun candidat disjoint ne passe tous les gates.
-**Statut de l'installation globale :** `NON INSTALLÉE`, approbations exactes requises.
+**Statut de l'installation globale :** `PARTIELLE`, skills actifs; runtime, agents et MCP non installés.
 **Readiness éditoriale :** `UNKNOWN` ; ce statut bloque la promotion produit, pas l'implémentation autorisée.
 
 La CLI, l'index complet et le MCP sont utilisables localement. Le statut
@@ -163,13 +164,13 @@ index dérivés, ouverts uniquement par un corpus de questions en échec.
 
 | Priorité | Décision | Critère de sortie |
 |---:|---|---|
-| 1 | Valider le candidat corpus portable sans le promouvoir | Sources inchangées, chemins relatifs, lecteurs immuables, hashes et benchmark consignés |
-| 2 | Présenter les candidats globaux avec leurs diffs et digests | Runtime, shared et integrations restent inertes jusqu'à l'approbation liée aux préimages live |
-| 3 | Installer C2 après approbation explicite | Claude Code et Codex neufs voient les mêmes skills, agent et corpus |
-| 4 | Revoir humainement l'artefact P2 sur un article réel | Statut `PASS` ou `FAIL`, passages conservés et frictions consignées |
-| 5 | Exécuter les canaris Ollama et MLX | Une génération courte par backend, modèle et identité runtime consignés |
-| 6 | Activer ou rejeter le lot hébergé | Au moins un déclencheur du plan H est prouvé |
-| 7 | Étudier hybride, graphe ou Qdrant | Échec mesuré de FTS5 ou limite SQLite reproduite |
+| 1 | Préparer un nouveau candidat runtime global | Wheel, binaire, configuration et préimages live liés à un digest courant |
+| 2 | Installer le runtime après approbation exacte | `doctor`, `acquire`, `export`, `index`, `search` et `yt-insights-mcp` résolus hors checkout |
+| 3 | Préparer puis installer agents et MCP | Agents natifs présents, deux clients reliés aux mêmes bases absolues |
+| 4 | Terminer les canaris Claude Code et Codex | Trois skills, agent et MCP vérifiés dans deux sessions neuves; Claude reconnecté |
+| 5 | Revoir humainement l'artefact P2 sur un article réel | Statut `PASS` ou `FAIL`, passages conservés et frictions consignées |
+| 6 | Exécuter les canaris Ollama et MLX | Une génération courte par backend, modèle et identité runtime consignés |
+| 7 | Activer extension, hybride, graphe ou Qdrant seulement sur leur déclencheur | Friction ou échec mesuré consigné avant développement |
 
 ## Documents de référence
 
