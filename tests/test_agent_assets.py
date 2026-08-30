@@ -22,6 +22,7 @@ CLAUDE_AGENT = (
 CODEX_AGENT = (
     REPOSITORY_ROOT / ".codex" / "agents" / "youtube-corpus-researcher.toml"
 )
+PROMPT_EXAMPLES = REPOSITORY_ROOT / "examples" / "agent-prompts.md"
 
 
 def parse_frontmatter(path: Path) -> tuple[dict[str, str], str]:
@@ -215,6 +216,20 @@ def test_researcher_agent_has_a_source_backed_output_contract(path: Path) -> Non
     assert "yt-dlp " not in content
     assert "yt-insights acquire" not in content
     assert "yt-insights export" not in content
+
+
+def test_ready_to_copy_agent_prompts_are_in_english() -> None:
+    content = PROMPT_EXAMPLES.read_text(encoding="utf-8")
+
+    for expected in (
+        "Use youtube-acquire",
+        "Use youtube-research",
+        "Use youtube-corpus-researcher",
+        "Use youtube-export",
+    ):
+        assert expected in content
+    for forbidden in ("Utilise ", "Nommez ", "Ne télécharge", "Travaille en"):
+        assert forbidden not in content
 
 
 @pytest.mark.parametrize(("filename", "replacement"), LEGACY_CLAUDE_SKILLS.items())

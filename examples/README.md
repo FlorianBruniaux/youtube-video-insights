@@ -14,6 +14,7 @@ Real output from running `yt-insights` on a public YouTube video.
 | `*.fr.json` | Structured insight extracted by the LLM. Source of truth for the cache. |
 | `*.fr.md` | Markdown rendered from the JSON. Human-readable output. |
 | `prompt-claude-code.md` | Ready-to-paste prompt for running the full pipeline inside Claude Code. |
+| `agent-prompts.md` | Ready-to-copy English prompts for acquisition, research, and export. |
 
 The `.json` and `.md` share the same stem as the `.vtt`, which is how cache lookup works at runtime.
 

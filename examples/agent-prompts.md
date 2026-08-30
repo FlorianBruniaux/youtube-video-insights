@@ -1,78 +1,76 @@
-# Prompts Claude Code et Codex
+# Claude Code and Codex prompts
 
-Nommez le skill ou l’agent dans le prompt. YT Insights conserve un routage explicite pour éviter qu’une demande générale sur YouTube déclenche une acquisition ou une recherche locale par erreur.
+Name the skill or agent explicitly in each prompt. YT Insights keeps routing explicit so that a general YouTube request cannot trigger local acquisition or corpus research by mistake.
 
-## Prévisualiser une chaîne avant acquisition
-
-```text
-Utilise youtube-acquire pour prévisualiser cette chaîne YouTube : URL.
-Ne télécharge rien avant ma confirmation. Donne-moi le nombre de vidéos retenues,
-les exclusions, la langue demandée et le répertoire cible.
-```
-
-## Acquérir une vidéo précise
+## Preview a channel before acquisition
 
 ```text
-Utilise youtube-acquire pour ajouter cette vidéo à mon corpus local : URL.
-Commence par doctor et le dry-run. Si la vidéo est bien identifiée et que les
-prérequis passent, lance l’acquisition puis rapporte selected, transcripts_ready,
-insights_ready et les erreurs éventuelles.
+Use youtube-acquire to preview this YouTube channel: URL.
+Do not download anything before I confirm. Report the number of selected videos,
+the exclusions, the requested language, and the target directory.
 ```
 
-## Rechercher des preuves pour un article
+## Acquire one specific video
 
 ```text
-Utilise youtube-research pour chercher dans mon corpus les passages qui répondent
-à cette question : QUESTION. Limite-toi à 10 passages. Pour chaque résultat,
-donne le titre, la chaîne, un extrait borné, le timestamp, le lien direct et la
-langue. Sépare les preuves directes de ton interprétation et indique les limites
-de couverture du corpus.
+Use youtube-acquire to add this video to my local corpus: URL.
+Start with doctor and a dry-run. If the video is identified correctly and all
+required checks pass, run the acquisition. Then report selected,
+transcripts_ready, insights_ready, and any failures.
 ```
 
-## Comparer deux chaînes
+## Find evidence for an article
 
 ```text
-Utilise youtube-corpus-researcher pour comparer les positions de CHAÎNE_A et
-CHAÎNE_B sur SUJET. Cherche les accords, désaccords et exemples concrets. Chaque
-affirmation doit pointer vers un passage horodaté. Signale les questions que le
-corpus ne permet pas de trancher.
+Use youtube-research to search my corpus for passages that answer this question:
+QUESTION. Return at most 10 passages. For each result, include the title,
+channel, bounded excerpt, timestamp, direct link, and language. Separate direct
+evidence from your interpretation and state the corpus coverage limits.
 ```
 
-## Préparer un dossier de rédaction
+## Compare two channels
 
 ```text
-Utilise youtube-corpus-researcher pour préparer un dossier sourcé sur SUJET pour
-un article de blog. Regroupe les idées récurrentes, les désaccords, les exemples
-et les citations utiles. Pour chaque élément, conserve le titre, la chaîne,
-l’extrait, le timestamp et le lien YouTube. Termine par les angles encore sans
-preuve dans le corpus.
+Use youtube-corpus-researcher to compare the positions of CHANNEL_A and
+CHANNEL_B on TOPIC. Find agreements, disagreements, and concrete examples.
+Every claim must link to a timestamped passage. List the questions that the
+corpus cannot resolve.
 ```
 
-## Retrouver la source d’une citation
+## Prepare an article research pack
 
 ```text
-Utilise youtube-research pour retrouver la source de cette phrase ou de cette
-idée dans mon corpus : EXTRAIT. Donne uniquement les correspondances étayées,
-avec le passage, le timestamp et le lien direct. Si la recherche ne trouve rien,
-dis-le sans proposer un résultat voisin comme preuve.
+Use youtube-corpus-researcher to prepare a source-backed research pack about
+TOPIC for a blog article. Group recurring ideas, disagreements, examples, and
+useful quotations. For every item, retain the title, channel, excerpt,
+timestamp, and YouTube link. Finish with the angles that still lack evidence
+in the corpus.
 ```
 
-## Exporter la matière d’une vidéo
+## Find the source of a quotation
 
 ```text
-Utilise youtube-export pour exporter la vidéo URL_OU_ID en Markdown. N’appelle
-aucun LLM, ne remplace aucun fichier existant et retourne le chemin exact, la
-langue, le format et le source_sha256.
+Use youtube-research to find the source of this sentence or idea in my corpus:
+EXCERPT. Return only supported matches with the passage, timestamp, and direct
+link. If the search finds no evidence, say so without presenting a nearby
+result as proof.
 ```
 
-## Enchaîner acquisition, recherche et export
+## Export material from one video
 
 ```text
-Travaille en trois étapes explicites. Utilise d’abord youtube-acquire pour
-prévisualiser URL et attends ma confirmation si la source contient plusieurs
-vidéos. Après acquisition confirmée, utilise youtube-research pour répondre à
-QUESTION avec des passages horodatés. Exporte seulement les vidéos que je
-sélectionnerai ensuite avec youtube-export.
+Use youtube-export to export VIDEO_URL_OR_ID as Markdown. Do not call an LLM or
+overwrite an existing file. Return the exact path, language, format, and
+source_sha256.
 ```
 
-Cette dernière recette respecte les frontières d’écriture. Le chercheur reste en lecture seule, tandis que l’acquisition et l’export s’exécutent dans la session principale.
+## Chain acquisition, research, and export
+
+```text
+Work in three explicit stages. First, use youtube-acquire to preview URL and
+wait for my confirmation if the source contains multiple videos. After the
+confirmed acquisition, use youtube-research to answer QUESTION with timestamped
+passages. Export only the videos I select afterward with youtube-export.
+```
+
+The final recipe preserves the write boundaries. The researcher remains read-only, while acquisition and export run in the main session.

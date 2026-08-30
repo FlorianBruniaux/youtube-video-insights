@@ -2,7 +2,7 @@
 
 - **Mise à jour :** 2026-08-30
 - **Socle fonctionnel :** branche `main`; setup assistants ajouté dans le lot courant
-- **Validation locale :** 520 tests et 10 sous-tests réussis
+- **Validation locale :** 521 tests et 10 sous-tests réussis
 - **Wheel :** installation minimale et extra MCP validés hors checkout, offline
 - **Source globale :** fast-forward approuvé de `e760a81` vers `62aa9ca`, puis 144 tests réussis
 - **Release partagée :** `60cbcac…` active via la transaction `shared-cbd58f0a09d9-64a8fa11-a6a4-4d3f-a114-f87e188e1153`; check live `issues: []`
@@ -100,7 +100,7 @@ uv lock --check
 git diff --check
 ```
 
-Résultat observé le 30 août 2026 sur la branche de travail : `520 passed, 10 subtests passed`.
+Résultat observé le 30 août 2026 sur la branche de travail : `521 passed, 10 subtests passed`.
 
 ### 2. Tranche locale de 50 VTT
 

@@ -103,7 +103,7 @@ uv run yt-insights generate-short nfupYzLjFGc \
 
 ---
 
-## Step 5: bilan
+## Step 5: review the outputs
 
 ```bash
 ls -lh "$YT_INSIGHTS_DATA_ROOT/clips/"
