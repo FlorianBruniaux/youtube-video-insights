@@ -86,6 +86,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Documented
 
+- Replaced the README workflow image with the implemented branching architecture:
+  VTT remains the source of truth, FTS5 search and exports do not depend on an
+  LLM, and Claude Code or Codex access the corpus through the read-only MCP.
 - Recorded the digest-approved integration of global source commit `62aa9ca`
   and activation of shared release `60cbcac…`. The eight-operation transaction
   is installed, its live check reports `issues: []`, and a fresh Codex session

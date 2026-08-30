@@ -12,7 +12,7 @@ index every timestamped VTT passage, and expose the corpus through the CLI or
 four read-only MCP tools. See the
 [implementation status, diagram, and test guide](docs/IMPLEMENTATION-STATUS.md).
 
-![yt-insights workflow: YouTube channels, playlists, and videos become transcripts, structured insights, a deduplicated SQLite/FTS5 index, search results, reports, and Short suggestions.](docs/assets/yt-insights-workflow.jpg)
+![yt-insights workflow: preview and acquire YouTube VTT sources, then branch into SQLite/FTS5 timestamped search without an LLM, optional analysis, source-backed exports, and read-only MCP access from Claude Code or Codex.](docs/assets/yt-insights-workflow.jpg)
 
 ---
 
