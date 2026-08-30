@@ -1,0 +1,20 @@
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_beef26a8da5bd9 3,7-8,77
+  s_0a442347250965::t_2134c4c9569625 4,100
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "d5fb5661a34e753de8389b9794433b63dadd0e5b",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
