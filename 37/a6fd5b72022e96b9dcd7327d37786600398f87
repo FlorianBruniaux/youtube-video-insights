@@ -1,0 +1,86 @@
+tests/test_assistant_setup.py
+  s_0a442347250965::t_8b83396eda2105 93-94,105-107,129
+  s_0a442347250965::t_28c3841d03f564 164-187
+  s_0a442347250965::t_4f25fa3958e2ba 262
+  s_0a442347250965::t_dd204ea0c2d9c9 1-8,10-15,19,23-92,95-104,108-128,130-163,188-205,234-252,257-261,263-266,300-349
+  s_0a442347250965::t_482aa711a4ce9e 267-299
+  s_0a442347250965::t_48462923018b75 9,206-233
+  s_0a442347250965::t_5125b577389774 16-18,20-22,253-256
+README.md
+  s_0a442347250965::t_bfc73d297e32da 706-731,736,743-746
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_e8a3f278fd0843 4,37-38,66,80,156-162
+  s_0a442347250965::t_d8a99fc09a4a8d 5,103
+src/yt_insights/assistant_assets/skills/youtube-export/agents/openai.yaml
+  s_0a442347250965::t_9ade47e8bf5635 1-9
+src/yt_insights/assistant_assets/skills/youtube-acquire/SKILL.md
+  s_0a442347250965::t_9ade47e8bf5635 1-21
+src/yt_insights/assistant_assets/skills/youtube-acquire/agents/openai.yaml
+  s_0a442347250965::t_9ade47e8bf5635 1-4
+src/yt_insights/assistant_setup.py
+  s_0a442347250965::t_5323620582120c 1-24,32-89,104-152,154-164,168-171,185-227,229-242,252-267,269,271-273,275,277-283,287-288,290-294,300
+  s_0a442347250965::t_065a1ce91aa6f1 25-31,153,166-167,172-184,268,274
+  s_0a442347250965::t_12da0d0043c577 90-103,228
+  s_0a442347250965::t_5125b577389774 248-251,284-286,295-299
+  s_0a442347250965::t_6955d2c99f642e 165
+  s_0a442347250965::t_a94240b2b6a2ab 270,276,289
+  s_0a442347250965::t_0f542cb7295be4 243-247
+scripts/smoke_wheel.py
+  s_0a442347250965::t_c7046b35c199cd 119,132-140,282-283,323-324,328-350,524
+  s_0a442347250965::t_881a81e526f907 194-200,208
+ROADMAP.md
+  s_0a442347250965::t_bfc73d297e32da 10,122,168-170
+plans/README.md
+  s_0a442347250965::t_bfc73d297e32da 10,35
+tests/test_cli_agent_commands.py
+  s_0a442347250965::t_dd204ea0c2d9c9 27
+src/yt_insights/assistant_assets/skills/youtube-research/agents/openai.yaml
+  s_0a442347250965::t_9ade47e8bf5635 1-9
+plans/PARALLEL-SESSIONS.md
+  s_0a442347250965::t_3f0dc6c95ac2e2 8,131,146-148,161
+pyproject.toml
+  s_0a442347250965::t_5323620582120c 42-44
+examples/agent-prompts.md
+  s_0a442347250965::t_bfc73d297e32da 1-78
+tests/test_packaging.py
+  s_0a442347250965::t_881a81e526f907 173-181
+  s_0a442347250965::t_c7046b35c199cd 21
+llms.txt
+  s_0a442347250965::t_bfc73d297e32da 178-179,189-190,214
+src/yt_insights/assistant_assets/claude/youtube-corpus-researcher.md
+  s_0a442347250965::t_9ade47e8bf5635 1-29
+src/yt_insights/assistant_assets/skills/youtube-research/SKILL.md
+  s_0a442347250965::t_9ade47e8bf5635 1-21
+src/yt_insights/assistant_assets/codex/youtube-corpus-researcher.toml
+  s_0a442347250965::t_9ade47e8bf5635 1-6
+INSTALL.md
+  s_0a442347250965::t_bfc73d297e32da 169-204
+src/yt_insights/cli_setup.py
+  s_0a442347250965::t_5125b577389774 39-43
+  s_0a442347250965::t_5323620582120c 1-38,44-84
+src/yt_insights/cli.py
+  s_0a442347250965::t_5323620582120c 827,835
+docs/claude-code.md
+  s_0a442347250965::t_bfc73d297e32da 12-13,15,19-49,106
+CHANGELOG.md
+  s_0a442347250965::t_bfc73d297e32da 19-24
+  s_0a442347250965::t_c7046b35c199cd 46-47
+src/yt_insights/assistant_assets/skills/youtube-export/SKILL.md
+  s_0a442347250965::t_9ade47e8bf5635 1-17
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "37a6fd5b72022e96b9dcd7327d37786600398f87",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
