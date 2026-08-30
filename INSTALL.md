@@ -166,6 +166,42 @@ Le serveur MCP donne un accès local et en lecture seule aux outils
 ordre. Configurez deux chemins absolus pour éviter qu’un client lancé depuis un
 autre répertoire lise les mauvaises bases.
 
+La commande recommandée installe les trois skills, le chercheur natif de chaque
+client et les deux entrées MCP. Sans option de mode, elle produit seulement un
+aperçu JSON ou texte et n’écrit rien :
+
+```bash
+uv run --extra mcp yt-insights setup assistants \
+  --client both \
+  --data-root "$YT_INSIGHTS_DATA_ROOT" \
+  --dry-run
+
+uv run --extra mcp yt-insights setup assistants \
+  --client both \
+  --data-root "$YT_INSIGHTS_DATA_ROOT" \
+  --apply
+
+uv run --extra mcp yt-insights setup assistants \
+  --client both \
+  --data-root "$YT_INSIGHTS_DATA_ROOT" \
+  --verify \
+  --json
+```
+
+Le chemin du corpus doit être absolu. La commande résout
+`yt-insights-mcp`, `claude` et `codex` comme exécutables absolus. Elle refuse un
+fichier existant dont le contenu diffère et une entrée MCP déjà présente, au
+lieu de les remplacer. Si la seconde inscription échoue, elle retire les
+inscriptions et fichiers créés pendant cette exécution. Elle ne copie aucune
+clé de fournisseur et n’installe aucun hook de routage implicite.
+
+Pour un seul client, remplacez `both` par `claude` ou `codex`. Les
+[prompts prêts à copier](examples/agent-prompts.md) couvrent l’acquisition, la
+recherche sourcée et l’export.
+
+La configuration manuelle ci-dessous reste disponible pour les clients qui ne
+peuvent pas exécuter la commande de setup.
+
 ```json
 {
   "mcpServers": {

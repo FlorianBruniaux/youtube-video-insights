@@ -9,13 +9,44 @@ See [Implementation status](IMPLEMENTATION-STATUS.md) for the detailed verificat
 | Surface | Repository state | Development workstation state |
 | --- | --- | --- |
 | Portable skills | `.agents/skills/youtube-*` contains acquire, research and export | Shared release `60cbcac...` is active; a fresh Codex session sees all three skills |
-| Claude researcher | `.claude/agents/youtube-researcher.md` is versioned | Global agent not installed; fresh Claude validation is blocked because the CLI is not connected |
-| Codex researcher | `.codex/agents/youtube-researcher.md` is versioned | Global agent not installed |
+| Claude researcher | `.claude/agents/youtube-corpus-researcher.md` is versioned | Global agent not installed; fresh Claude validation is blocked because the CLI is not connected |
+| Codex researcher | `.codex/agents/youtube-corpus-researcher.toml` is versioned | Global agent not installed |
 | Runtime | Package and wheel smoke tests are versioned | Managed global `uv` runtime not installed |
+| Setup | `yt-insights setup assistants` packages skills, agents and MCP registration | Dry-run and fake-client transaction tests pass; no new live transaction applied |
 | MCP | `yt-insights-mcp` exposes four read-only tools | Global Claude/Codex MCP entries not installed |
 | Implicit routing | A rejection fixture protects against accidental auto-routing | Explicit skill, agent or MCP invocation is required |
 
-Cloning or setting up the repository never changes global Claude or Codex configuration. The shared skills release was installed through a separate, approved transaction. Runtime, native agents and MCP registration remain distinct approval gates.
+Cloning and the default setup preview never change global Claude or Codex configuration. The shared skills release was installed through a separate, approved transaction. The new `--apply` mode is the explicit user-level transaction for native agents and MCP registration; it has not been run on the development workstation.
+
+## Install the assistant surfaces
+
+Use one absolute corpus path from every project:
+
+```bash
+uv run --extra mcp yt-insights setup assistants \
+  --client both \
+  --data-root "$YT_INSIGHTS_DATA_ROOT" \
+  --dry-run
+
+uv run --extra mcp yt-insights setup assistants \
+  --client both \
+  --data-root "$YT_INSIGHTS_DATA_ROOT" \
+  --apply
+
+uv run --extra mcp yt-insights setup assistants \
+  --client both \
+  --data-root "$YT_INSIGHTS_DATA_ROOT" \
+  --verify --json
+```
+
+The installer copies the three portable skills to `~/.agents/skills`, installs
+one read-only native researcher per selected client, and registers the same
+absolute MCP executable and databases in Claude Code and Codex. A conflict
+stops before any write. A failed registration rolls back the state created by
+that execution. Existing different files or MCP entries require manual review.
+
+See [assistant prompt examples](../examples/agent-prompts.md) for explicit
+acquisition, research, article dossier, comparison and export requests.
 
 ## Supported portable skills
 
@@ -72,4 +103,4 @@ The project-specific commands remain compatibility shortcuts. They are not an im
 UV_CACHE_DIR=/tmp/yt-insights-uv-cache bash scripts/smoke_wheel.sh
 ```
 
-Automated checks cover package structure, CLI contracts, MCP schemas and portable assets. Fresh client sessions are still required to prove discovery and effective loading. At the current checkpoint, only the fresh Codex portable-skill canary is confirmed. Fresh Claude loading, global native agents and global MCP registration remain `UNKNOWN` because they are not installed or not observable.
+Automated checks cover package structure, CLI contracts, MCP schemas, packaged assets, dry-run, conflicts, rollback and verification against fake clients. Fresh client sessions are still required to prove discovery and effective loading. At the current checkpoint, only the fresh Codex portable-skill canary is confirmed. Fresh Claude loading, global native agents and global MCP registration remain `UNKNOWN` because the new transaction has not been applied.

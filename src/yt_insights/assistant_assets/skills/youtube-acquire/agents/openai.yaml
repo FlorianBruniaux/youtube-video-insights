@@ -1,0 +1,4 @@
+interface:
+  display_name: "Acquire YouTube Corpus"
+  short_description: "Preview and acquire YouTube source material"
+  default_prompt: "Use $youtube-acquire to preview and acquire this YouTube source into my local corpus."

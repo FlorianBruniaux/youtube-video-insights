@@ -116,7 +116,7 @@ def _snapshot_tree(root: Path) -> tuple[tuple[str, str, str], ...]:
 
 def _write_fake_yt_dlp(directory: Path) -> Path:
     """Create a deterministic discovery-only yt-dlp stand-in for dry-run."""
-    directory.mkdir()
+    directory.mkdir(exist_ok=True)
     executable = directory / "yt-dlp"
     executable.write_text(
         "#!/bin/sh\n"
@@ -125,6 +125,15 @@ def _write_fake_yt_dlp(directory: Path) -> Path:
         "\"upload_date\":\"20260101\"}'\n",
         encoding="utf-8",
     )
+    executable.chmod(0o755)
+    return executable
+
+
+def _write_fail_if_called_client(directory: Path, name: str) -> Path:
+    """Create a client stand-in that proves a dry-run never executes it."""
+    directory.mkdir(exist_ok=True)
+    executable = directory / name
+    executable.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
     executable.chmod(0o755)
     return executable
 
@@ -182,6 +191,13 @@ def _verify_wheel(
         source.relative_to(build_source / "src").as_posix()
         for source in (build_source / "src" / "yt_insights").rglob("*.py")
     }
+    expected_assets = {
+        source.relative_to(build_source / "src").as_posix()
+        for source in (
+            build_source / "src" / "yt_insights" / "assistant_assets"
+        ).rglob("*")
+        if source.is_file()
+    }
     with ZipFile(wheel) as archive:
         members = set(archive.namelist())
         record_names = [name for name in members if name.endswith(".dist-info/RECORD")]
@@ -189,7 +205,7 @@ def _verify_wheel(
             raise SmokeFailure(f"Expected one wheel RECORD, found {len(record_names)}.")
         record = archive.read(record_names[0]).decode("utf-8")
 
-    missing = sorted(expected_modules - members)
+    missing = sorted((expected_modules | expected_assets) - members)
     if missing:
         raise SmokeFailure(f"Wheel is missing current modules: {', '.join(missing)}")
     if stale_sentinel in record or any(stale_sentinel in member for member in members):
@@ -263,7 +279,8 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
         help_result = _run(
             [str(base_cli), "--help"], cwd=workspace, environment=clean_environment
         )
-        for command_name in ("doctor", "acquire", "export", "index", "search"):
+        commands = ("doctor", "acquire", "export", "index", "search", "setup")
+        for command_name in commands:
             if command_name not in help_result.stdout:
                 raise SmokeFailure(
                     f"Installed CLI help is missing the {command_name!r} command."
@@ -303,9 +320,34 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
 
         fake_bin = workspace / "fake-bin"
         _write_fake_yt_dlp(fake_bin)
+        _write_fail_if_called_client(fake_bin, "claude")
+        _write_fail_if_called_client(fake_bin, "codex")
         acquisition_environment = runtime_environment | {
             "PATH": f"{fake_bin}{os.pathsep}{runtime_environment['PATH']}",
         }
+        setup_home = workspace / "setup-home"
+        setup_environment = acquisition_environment | {"HOME": str(setup_home)}
+        setup = _run(
+            [
+                str(base_cli),
+                "setup",
+                "assistants",
+                "--client",
+                "both",
+                "--data-root",
+                str(data_root),
+                "--mcp-command",
+                str(base_mcp),
+                "--json",
+            ],
+            cwd=workspace,
+            environment=setup_environment,
+        )
+        if json.loads(setup.stdout).get("status") != "planned":
+            raise SmokeFailure("Installed assistant setup did not return a plan.")
+        if setup_home.exists():
+            raise SmokeFailure("Installed assistant setup dry-run wrote to HOME.")
+
         before_acquire = _snapshot_tree(data_root)
         acquisition = _run(
             [
@@ -479,7 +521,7 @@ asyncio.run(check())
             "wheel": wheel.name,
             "version": PACKAGE_VERSION,
             "minimal_mcp_exit": 2,
-            "commands": ["doctor", "acquire", "export", "index", "search"],
+            "commands": list(commands),
             "tools": list(MCP_TOOLS),
             "verified_modules": verified_modules,
             "offline": offline,

@@ -5,7 +5,7 @@
 **État du runtime et des assets agentiques projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
 **État de la source et de la release partagée :** `INTÉGRÉES ET ACTIVES`.
 **État du routeur réel :** `REJETÉ`, aucun candidat disjoint ne passe tous les gates.
-**État de l'installation globale :** `PARTIELLE`, runtime, agents et MCP restent à installer.
+**État de l'installation globale :** `PRÊTE À APPLIQUER`, setup local livré; runtime, agents et MCP live restent à installer.
 **Règle :** `UNKNOWN` bloque promotion/readiness produit, pas l'implémentation P3 à P5 autorisée.
 
 **Références :** [architecture agentique](specs/AGENT-PLATFORM.md), [runtime](2026-08-28-09-agent-ready-runtime.md), [intégration globale](2026-08-28-10-claude-codex-global-integration.md), [plan consolidé V2](2026-08-27-CONSOLIDATED-v2.md) et [roadmap](../ROADMAP.md).
@@ -128,7 +128,7 @@ utilisateur déjà modifiés dans le checkout principal : `.claude/skills/yt-add
 | A2 `codex/agent-doctor` | `doctor.py`, `cli_doctor.py` et tests associés | `TERMINÉ` | Aucune valeur de secret affichée |
 | A3 `codex/agent-acquire` | façade `acquire`, preview, downloader et tests associés | `TERMINÉ` | vidéo unitaire immédiate, channel/playlist bloqués sans `--yes`, aucun cookie automatique |
 | A4 `codex/agent-export` | exporteur, formats VTT/TXT/Markdown et tests associés | `TERMINÉ` | export déterministe, sourcé, sans appel LLM |
-| A5 coordinateur | `cli.py` et test d'intégration des commandes | `TERMINÉ` | Treize noms de commande stables et tests de comportement |
+| A5 coordinateur | `cli.py` et test d'intégration des commandes | `TERMINÉ` | Quatorze noms de commande stables et tests de comportement, dont `setup` |
 
 Le coordinateur possède les contrats partagés et `cli.py`. Les sessions
 proposent leurs ajouts sous forme de fonctions isolées. Le coordinateur intègre
@@ -143,8 +143,9 @@ existant, mais pas des backends LLM.
 |---|---|---|---|
 | B1 `codex/agent-mcp-four-tools` | serveur MCP, quatre contrats read-only et tests | `TERMINÉ` | exactement quatre outils, chemins absolus, aucune mutation |
 | B2 `codex/agent-portable-skills` | trois dossiers `.agents/skills/youtube-*` et fixtures de skills | `TERMINÉ` | mêmes commandes sur Claude Code et Codex, aucune dépendance au cwd |
-| B3 `codex/agent-native-adapters` | agent Claude, agent Codex et corpus 45 prompts | `PARTIEL`: assets et fixture terminés | benchmark routeur restant: 27/30 positifs, 0/15 négatifs, p95 chaud inférieur ou égal à 10 ms |
-| B4 `codex/agent-packaging-docs` | smoke wheel et docs repo | `TERMINÉ` | installation minimale et MCP hors checkout, cinq commandes agent testées |
+| B3 `codex/agent-native-adapters` | agent Claude, agent Codex et corpus 45 prompts | `TERMINÉ AVEC REJET DU ROUTEUR`: assets livrés; invocation explicite retenue après 30/30 positifs mais 5/15 activations interdites | Aucun hook implicite installé |
+| B4 `codex/agent-packaging-docs` | smoke wheel et docs repo | `TERMINÉ` | installation minimale et MCP hors checkout, assets assistants présents dans le wheel |
+| B5 `codex/assistant-setup` | setup transactionnel, tests clients factices et prompts | `TERMINÉ LOCALEMENT` | dry-run sans écriture, conflit fail-closed, rollback et verify au vert |
 
 ### Vague C : installation globale partiellement terminée
 
@@ -157,7 +158,7 @@ des transactions séparées. Ils ne sont pas installés à ce checkpoint.
 | C1 source globale | source de release `~/.config/ai-agents`, tests inertes, manifestes et diffs expurgés | `TERMINÉ`: source `62aa9ca...`, 144 tests et bundle validés |
 | C2 release partagée | index actif et trois skills portables | `TERMINÉ`: release `60cbcac...`, 8 opérations journalisées, canari Codex positif |
 | C2 runtime | wheel, config runtime et binaires gérés | `À REPRÉPARER`: aucun runtime global `uv` installé; nouvelle préimage et nouveau digest requis |
-| C2 intégrations | agents natifs Claude/Codex et entrées MCP | `BLOQUÉ`: commence après installation et validation du runtime global |
+| C2 intégrations | agents natifs Claude/Codex et entrées MCP | `PRÊT À APPLIQUER`: commande versionnée; préimages live et approbation digest encore requises |
 | C3 validation | sessions Claude Code et Codex neuves, canaris de refus d'écriture | `PARTIEL`: skills visibles dans Codex; Claude, agents natifs, MCP global et parité multi-cwd restent `UNKNOWN` |
 
 La configuration globale n'installe pas un second hook YouTube. Le routeur

@@ -16,6 +16,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   MLX loads its model and tokenizer lazily.
 - Three portable assistant skills, `youtube-acquire`, `youtube-research`, and
   `youtube-export`, plus read-only Claude Code and Codex corpus researchers.
+- Safe `yt-insights setup assistants` workflow for Claude Code and Codex. It
+  provides no-write preview, explicit user-level apply, independent verify,
+  conflict refusal, atomic asset writes, MCP registration and rollback after a
+  partial client failure. Packaged assets make the setup available from a wheel.
+- Ready-to-copy prompts for acquisition preview, corpus research, channel
+  comparison, article dossiers, citation lookup and deterministic export.
 - Portable catalog schema v2 with corpus-relative artifact paths, immutable
   read-only snapshots, private copy-on-write writers, conditional atomic
   publication, rollback witnesses, and stale-stage recovery.
@@ -37,7 +43,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Optional `mcp` dependency, `yt-insights-mcp` entrypoint, versioned `uv.lock`,
   clean-source wheel smoke test, and reproducible search benchmark script. The
   wheel smoke now installs both minimal and MCP variants outside the checkout,
-  exercises the five agent-facing commands, and calls all four MCP tools.
+  exercises six agent-facing command groups, including assistant setup, and
+  calls all four MCP tools.
 - SHA-256 generation receipts for derived search indexes. Each process validates
   the database content on first access and invalidates its cache when the file
   identity or `ctime` changes.

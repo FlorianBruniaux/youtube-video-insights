@@ -7,7 +7,7 @@
 **Statut de la source globale :** `INTÉGRÉE`, commit `62aa9ca`, 144 tests réussis.
 **Statut de la release partagée :** `ACTIVE`, release `60cbcac…`, huit opérations journalisées.
 **Statut du routage implicite :** `REJETÉ`, aucun candidat disjoint ne passe tous les gates.
-**Statut de l'installation globale :** `PARTIELLE`, skills actifs; runtime, agents et MCP non installés.
+**Statut de l'installation globale :** `PRÊTE À APPLIQUER`, setup transactionnel livré; skills actifs, runtime, agents et MCP live non installés.
 **Readiness éditoriale :** `UNKNOWN` ; ce statut bloque la promotion produit, pas l'implémentation autorisée.
 
 La CLI, l'index complet et le MCP sont utilisables localement. Le statut
@@ -119,6 +119,7 @@ preview obligatoire pour channel/playlist
 | B3 | `REJETÉ` | Skills et agents natifs terminés; candidat disjoint à 30/30 positifs et 0 confusion, mais 5/15 activations interdites | Conserver l'invocation explicite; rouvrir seulement avec un mécanisme différent et un besoin observé |
 | C1 | `TERMINÉ` | Fast-forward approuvé de `e760a81` vers `62aa9ca`; 144/144 tests et check de la release `60cbcac…` au vert après intégration | Source globale intégrée le 30 août 2026; aucune activation de release dans cette étape |
 | C2 | `TERMINÉ` | Release `60cbcac…`, index privé et projections de skills activés par huit opérations journalisées; check live au vert et trois skills visibles dans un Codex frais | Transaction `shared-cbd58f0a09d9-64a8fa11-a6a4-4d3f-a114-f87e188e1153`; canari Claude encore `UNKNOWN` faute de connexion |
+| C3 | `TERMINÉ LOCALEMENT` | `setup assistants` empaquette skills et agents, prévisualise sans écrire, inscrit le MCP dans les deux clients, vérifie les empreintes et rollback sur échec partiel | Tests avec HOME et clients factices; application live encore soumise à une approbation liée au digest |
 | D1 | `TERMINÉ` | Choix explicite Ollama, MLX, cc-bridge, Anthropic ou endpoint compatible | Canari MLX et Ollama réels séparés des tests sans réseau |
 
 Les détails exécutables sont dans le [plan runtime](plans/2026-08-28-09-agent-ready-runtime.md), le [plan d'intégration globale](plans/2026-08-28-10-claude-codex-global-integration.md) et le [suivi parallèle](plans/PARALLEL-SESSIONS.md).
@@ -164,9 +165,9 @@ index dérivés, ouverts uniquement par un corpus de questions en échec.
 
 | Priorité | Décision | Critère de sortie |
 |---:|---|---|
-| 1 | Préparer un nouveau candidat runtime global | Wheel, binaire, configuration et préimages live liés à un digest courant |
-| 2 | Installer le runtime après approbation exacte | `doctor`, `acquire`, `export`, `index`, `search` et `yt-insights-mcp` résolus hors checkout |
-| 3 | Préparer puis installer agents et MCP | Agents natifs présents, deux clients reliés aux mêmes bases absolues |
+| 1 | Construire et vérifier le wheel contenant le setup | Assets présents dans le wheel et smoke offline au vert |
+| 2 | Préparer un candidat d'installation live | Dry-run, préimages globales et diff exact liés à un digest courant |
+| 3 | Appliquer le runtime, les agents et le MCP après approbation exacte | `doctor`, agents natifs et deux clients reliés aux mêmes bases absolues |
 | 4 | Terminer les canaris Claude Code et Codex | Trois skills, agent et MCP vérifiés dans deux sessions neuves; Claude reconnecté |
 | 5 | Revoir humainement l'artefact P2 sur un article réel | Statut `PASS` ou `FAIL`, passages conservés et frictions consignées |
 | 6 | Exécuter les canaris Ollama et MLX | Une génération courte par backend, modèle et identité runtime consignés |

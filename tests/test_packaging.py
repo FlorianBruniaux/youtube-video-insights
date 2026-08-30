@@ -18,7 +18,7 @@ def test_installed_cli_contract_exposes_agent_facing_commands() -> None:
     result = CliRunner().invoke(cli, ["--help"])
 
     assert result.exit_code == 0, result.output
-    for command in ("doctor", "acquire", "export", "index", "search"):
+    for command in ("doctor", "acquire", "export", "index", "search", "setup"):
         assert command in cli.commands
         assert command in result.output
 
@@ -170,6 +170,15 @@ def test_wheel_smoke_copies_only_current_build_inputs(tmp_path: Path) -> None:
     assert (copied_source / "pyproject.toml").is_file()
     assert (copied_source / "README.md").is_file()
     assert (copied_source / "src" / "yt_insights" / "mcp_entrypoint.py").is_file()
+    assert (
+        copied_source
+        / "src"
+        / "yt_insights"
+        / "assistant_assets"
+        / "skills"
+        / "youtube-research"
+        / "SKILL.md"
+    ).is_file()
     assert not (copied_source / "build").exists()
     assert not tuple((copied_source / "src").glob("*.egg-info"))
     assert not tuple((copied_source / "src").rglob("__pycache__"))

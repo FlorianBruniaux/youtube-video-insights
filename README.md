@@ -703,22 +703,47 @@ requests or forbidden activations.
 On the development workstation, the digest-approved shared release `60cbcac…`
 is active and a fresh Codex session discovers all three skills. This shared
 installation does not install the packaged `yt-insights` runtime, the native
-researcher agents, or the MCP client entries. Those remain separate,
-digest-bound transactions. Claude discovery remains `UNKNOWN` because its local
-CLI is not connected.
+researcher agents, or the MCP client entries. The repository now includes a
+safe setup command for those remaining assistant assets. It previews by
+default, refuses different existing files, and rolls back newly created state
+if one client registration fails:
+
+```bash
+uv run --extra mcp yt-insights setup assistants \
+  --client both \
+  --data-root "$YT_INSIGHTS_DATA_ROOT" \
+  --dry-run
+
+uv run --extra mcp yt-insights setup assistants \
+  --client both \
+  --data-root "$YT_INSIGHTS_DATA_ROOT" \
+  --apply
+
+uv run --extra mcp yt-insights setup assistants \
+  --client both \
+  --data-root "$YT_INSIGHTS_DATA_ROOT" \
+  --verify
+```
+
+`--apply` changes the user-level Claude Code and Codex configuration. Cloning,
+installing, or running the default preview changes nothing globally. The
+development workstation has not applied this new transaction yet. Claude
+discovery remains `UNKNOWN` because its local CLI is not connected.
 
 | Document | Purpose |
 |---|---|
 | [Current Claude Code and Codex guide](docs/claude-code.md) | Supported skills, four MCP tools, local commands and verified installation boundary |
+| [Ready-to-copy assistant prompts](examples/agent-prompts.md) | Acquisition previews, cited research, article dossiers and deterministic exports |
 | [Agent platform architecture](plans/specs/AGENT-PLATFORM.md) | Target behavior, data boundaries, skills, agents and safety rules |
 | [Agent-ready runtime plan](plans/2026-08-28-09-agent-ready-runtime.md) | CLI, paths, backends, acquisition, export and MCP work |
 | [Claude Code and Codex integration plan](plans/2026-08-28-10-claude-codex-global-integration.md) | Portable skills, native agents, routing evaluation and digest-bound global installation |
 | [Hosted service and extension plan](plans/2026-08-28-11-hosted-extension.md) | Conditional browser and remote-access path |
 
 The runtime plan passes the package smoke gate. Cloning or installing this
-repository never changes global Claude Code or Codex configuration. Until the
-runtime transaction is approved and applied, use `uv run yt-insights` and
-`uv run --extra mcp yt-insights-mcp` from this checkout.
+repository never changes global Claude Code or Codex configuration. Only
+`setup assistants --apply` performs that scoped user-level installation.
+Until a runtime transaction is approved and applied, use `uv run yt-insights`
+and `uv run --extra mcp yt-insights-mcp` from this checkout.
 
 ---
 

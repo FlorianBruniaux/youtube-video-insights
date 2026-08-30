@@ -24,6 +24,7 @@ EXPECTED_COMMANDS = {
     "report",
     "run",
     "search",
+    "setup",
     "suggest-shorts",
 }
 VIDEO_ID = "nfupYzLjFGc"

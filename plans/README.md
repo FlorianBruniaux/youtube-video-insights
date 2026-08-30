@@ -7,7 +7,7 @@
 **État de la source globale :** `INTÉGRÉE`, commit `62aa9ca`.
 **État de la release partagée :** `ACTIVE`, release `60cbcac…`.
 **État du routeur réel :** `REJETÉ`, aucun candidat disjoint ne passe tous les gates.
-**État de l'installation globale :** `PARTIELLE`, skills actifs; runtime, agents et MCP absents.
+**État de l'installation globale :** `PRÊTE À APPLIQUER`, setup transactionnel livré; runtime, agents et MCP live absents.
 **Readiness produit :** `UNKNOWN` jusqu'à la revue humaine P2 ; ce n'est pas un veto de développement.
 
 ## À lire maintenant
@@ -32,7 +32,7 @@ répertoire par Claude Code et Codex, sans dupliquer la logique métier :
 |---|---|---|
 | A | Runtime indépendant du répertoire courant, `doctor`, acquisition avec preview, export, backends explicites et MCP quatre outils | `TERMINÉ`, intégration à 508 tests plus 10 sous-tests avant mise à jour documentaire |
 | B | Trois skills communs, deux agents natifs et corpus de routage | `PARTIEL`: assets terminés; routage implicite rejeté après holdout disjoint, invocation explicite retenue |
-| C | Candidats globaux immuables, diffs, digests, rollback et tests en sessions neuves | `PARTIEL`: source `62aa9ca` et release partagée `60cbcac…` actives; runtime, agents, MCP et canari Claude restent ouverts |
+| C | Candidats globaux immuables, diffs, digests, rollback et tests en sessions neuves | `PARTIEL`: setup local livré, source `62aa9ca` et release `60cbcac…` actives; application live, runtime global et canari Claude restent ouverts |
 | H | API hébergée, worker, extension et MCP distant | `CONDITIONNEL` aux déclencheurs d'usage |
 
 Les écritures globales restent séparées du plan documentaire et exigent chacune

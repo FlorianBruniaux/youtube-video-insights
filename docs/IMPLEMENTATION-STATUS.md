@@ -1,8 +1,8 @@
 # État d'implémentation
 
 - **Mise à jour :** 2026-08-30
-- **Socle fonctionnel :** intégration `4aff073`; la branche locale reste non poussée
-- **Validation locale :** 508 tests et 10 sous-tests réussis
+- **Socle fonctionnel :** branche `main`; setup assistants ajouté dans le lot courant
+- **Validation locale :** 520 tests et 10 sous-tests réussis
 - **Wheel :** installation minimale et extra MCP validés hors checkout, offline
 - **Source globale :** fast-forward approuvé de `e760a81` vers `62aa9ca`, puis 144 tests réussis
 - **Release partagée :** `60cbcac…` active via la transaction `shared-cbd58f0a09d9-64a8fa11-a6a4-4d3f-a114-f87e188e1153`; check live `issues: []`
@@ -34,6 +34,8 @@ flowchart LR
     IDX --> MCP[MCP read-only<br/>passages]
     CLI --> AGENTS[3 skills portables<br/>chercheur Claude + Codex]
     MCP --> AGENTS
+    SETUP[setup assistants<br/>dry-run, apply, verify] --> AGENTS
+    SETUP --> MCP
     AGENTS --> ARTICLE[Recherche et rédaction d'articles]
 
     ARTICLE -. besoin observé .-> UI[UI locale]
@@ -61,7 +63,7 @@ flowchart LR
 | Diagnostic | Vérifier dépendances, chemins et backends locaux sans secret ni écriture | `doctor --json` |
 | Accès LLM | Interroger catalogue et passages depuis un client MCP | Quatre outils read-only implémentés |
 | Corpus complet | Construire l'index de tous les VTT après contrôle disque | Candidat temporaire v2: 3 270 documents, 183 789 passages, corpus réel inchangé |
-| Installation | Installer le checkout et l'extra MCP | Wheel 0.2.0 testé hors du checkout |
+| Installation | Installer le checkout, l'extra MCP et les assistants | Wheel 0.2.0 testé hors checkout; setup transactionnel testé avec HOME et clients factices |
 | Assistants | Acquérir, rechercher et exporter depuis Claude Code ou Codex | Trois skills globaux découverts par un canari Codex frais; projection Claude présente, canari bloqué par l'authentification locale |
 
 `catalog.sqlite3` et `search-v1.sqlite3` répondent à deux besoins différents.
@@ -75,7 +77,7 @@ directement des VTT et conserve les passages horodatés. Aucun des deux ne doit
 |---|---|---|
 | Revue humaine de la pertinence | La technique est validée, pas la qualité éditoriale des résultats | Juger les requêtes de l'artefact P2 et enregistrer `PASS` ou `FAIL` |
 | Routage implicite Claude Code/Codex | Les calibrations disjointes conservent des faux positifs ou perdent des requêtes légitimes | Nouveau mécanisme seulement si un besoin d'invocation implicite est démontré; les skills explicites sont utilisables maintenant |
-| Installation globale | La source `62aa9ca` et la release partagée `60cbcac…` sont actives; le wheel fonctionne dans un environnement isolé | Installer le runtime puis les agents et MCP seulement après leurs approbations digest distinctes; reconnecter Claude avant son canari |
+| Application globale | La source `62aa9ca`, la release partagée `60cbcac…` et le setup local sont prêts | Capturer les préimages live, approuver le digest, appliquer le runtime puis `setup assistants --apply`; reconnecter Claude avant son canari |
 | Découpage LLM des longs transcripts | Insights et Shorts utilisent actuellement les 10 000 premiers caractères | Mesurer les pertes sur des articles réels, puis définir chunking et fusion |
 | Canari MLX réel | Le routage et le chargement paresseux sont testés sans allocation de modèle | Exécuter une génération courte avec un modèle MLX installé sur la machine cible |
 | UI locale | CLI et MCP couvrent déjà la recherche locale | Documenter une friction répétée lors de recherches réelles |
@@ -98,7 +100,7 @@ uv lock --check
 git diff --check
 ```
 
-Résultat observé sur le socle fonctionnel `4aff073` : `508 passed, 10 subtests passed`.
+Résultat observé le 30 août 2026 sur la branche de travail : `520 passed, 10 subtests passed`.
 
 ### 2. Tranche locale de 50 VTT
 
@@ -151,10 +153,13 @@ uv run --extra mcp pytest -q tests/test_mcp_server.py
 ```
 
 Le premier test ouvre un vrai client MCP en mémoire. Le smoke construit un
-wheel depuis une copie propre, teste l'installation sans MCP, puis avec l'extra
-MCP. Il exécute `doctor`, `acquire --dry-run`, `export`, `index`, `search`,
-l'entrypoint stdio et exactement quatre outils MCP. Aucun appel réel à YouTube,
-Ollama, MLX ou un fournisseur cloud n'est inclus dans ce gate.
+wheel depuis une copie propre, vérifie les assets d'assistants, teste
+l'installation sans MCP, puis avec l'extra MCP. Il exécute `doctor`,
+`acquire --dry-run`, `export`, `index`, `search`, l'entrypoint stdio et
+exactement quatre outils MCP. Les tests de setup couvrent séparément le
+dry-run, les conflits, l'installation, le rollback et la vérification avec deux
+clients factices. Aucun appel réel à YouTube, Ollama, MLX ou un fournisseur
+cloud n'est inclus dans ces gates.
 
 ## Documents associés
 
