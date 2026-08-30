@@ -1,0 +1,36 @@
+examples/prompt-claude-code.md
+  s_0a442347250965::t_20c3d2acb09d7e 106
+examples/README.md
+  s_0a442347250965::t_20c3d2acb09d7e 17
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_43a9ec75034d49 5,103
+tests/test_agent_assets.py
+  s_0a442347250965::t_20c3d2acb09d7e 25,221-232
+  s_95392a6b844626::t_a1210428621bda 233-234
+examples/agent-prompts.md
+  s_0a442347250965::t_20c3d2acb09d7e 1,3,5,8-10,13,16-19,22,25-28,31,34-37,40,43-47,50,53-56,59,62-64,67,70-73,76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "6fd40fe783247a2e14ebacffdedae417c4abd507",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_95392a6b844626": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04821-7023-7112-aeb8-f4aa59348ce9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
