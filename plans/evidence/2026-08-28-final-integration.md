@@ -80,14 +80,16 @@ même release
 `60cbcac1db3728e861560cd945e614bca0b8b0e8404acadddc8d57e1b46be1eb`,
 et `scripts/check.mjs` retourne `issues: []`.
 
-La source globale live reste à
-`e760a8116310c793ebef40318072a5eab777b3ba`. Le bundle Git exact, son hash et le
-manifeste d'approbation sont conservés dans
+La source globale a été avancée par fast-forward de
+`e760a8116310c793ebef40318072a5eab777b3ba` vers
+`62aa9ca053c9bc7c03564ffb08864d5d02f8f8b6` le 30 août 2026, après vérification
+du digest approuvé. Le bundle Git exact, son hash et le manifeste d'approbation
+sont conservés dans
 [`global-candidate-62aa9ca`](global-candidate-62aa9ca/approval-source-candidate.json).
 Le digest utilise une sérialisation JSON récursive avec clés triées, puis
 SHA-256. L'application prévue vérifie le bundle, récupère sa ref et exige un
 fast-forward exact vers `62aa9ca`.
-L'approbation d'intégration attendue est:
+L'approbation d'intégration consommée était:
 
 ```text
 GO APPLY YT GLOBAL CANDIDATE 3e6146fb1740d63593d64c65b317248d4638e14de0735d0afe6b09fc4d68d6eb
@@ -102,8 +104,12 @@ L'approbation d'activation attendue, distincte de l'intégration du code, est:
 GO INSTALL SHARED cbd58f0a09d95e9ba676b1f9271f9fec9c2966ac2ef8dc9223d45167ef52f296
 ```
 
-Ces deux approbations sont sensibles au drift. Une modification du HEAD global,
-du bundle ou d'une préimage live impose de reconstruire les digests.
+Après intégration, la suite complète passe encore avec 144 tests sur 144 et le
+check de la release `60cbcac…` retourne `issues: []`. La transaction partagée a
+été re-préparée sur les préimages live et conserve le digest `cbd58f0a…`.
+
+L'approbation partagée reste sensible au drift. Une modification de sa release
+candidate ou d'une préimage live impose de reconstruire son digest.
 
 Deux limites restent documentées. Un déplacement de snapshot entre volumes
 peut échouer avec `EXDEV`, sans mutation destructive. Les anciens journaux de

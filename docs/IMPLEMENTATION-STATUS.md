@@ -4,8 +4,8 @@
 - **Socle fonctionnel :** intégration `4aff073`; la branche locale reste non poussée
 - **Validation locale :** 508 tests et 10 sous-tests réussis
 - **Wheel :** installation minimale et extra MCP validés hors checkout, offline
-- **Candidat global :** `62aa9ca` construit sur la source live `e760a81`, 144 tests réussis, release inerte `60cbcac…`; aucune installation globale appliquée
-- **Gate global :** bundle et manifest vérifiés; l'application attend l'approbation exacte du digest `3e6146fb…`
+- **Source globale :** fast-forward approuvé de `e760a81` vers `62aa9ca`, puis 144 tests réussis
+- **Gate global suivant :** release `60cbcac…` vérifiée avec `issues: []`; son activation attend l'approbation exacte du digest partagé `cbd58f0a…`
 - **Routage implicite :** `FAIL`; le meilleur candidat disjoint atteint 30/30 positifs et 0 confusion, mais déclenche encore 5/15 requêtes interdites
 
 YT Insights sait maintenant collecter des sous-titres YouTube, produire des
@@ -74,7 +74,7 @@ directement des VTT et conserve les passages horodatés. Aucun des deux ne doit
 |---|---|---|
 | Revue humaine de la pertinence | La technique est validée, pas la qualité éditoriale des résultats | Juger les requêtes de l'artefact P2 et enregistrer `PASS` ou `FAIL` |
 | Routage implicite Claude Code/Codex | Les calibrations disjointes conservent des faux positifs ou perdent des requêtes légitimes | Nouveau mécanisme seulement si un besoin d'invocation implicite est démontré; les skills explicites sont utilisables maintenant |
-| Installation globale | Le candidat source passe 144 tests, le wheel fonctionne dans un environnement isolé et aucune release n'est activée | Approuver exactement le digest du candidat source, appliquer et revérifier, puis reconstruire le gate de la transaction partagée |
+| Installation globale | Le candidat source `62aa9ca` est intégré et passe 144 tests; le wheel fonctionne dans un environnement isolé et aucune release n'est encore activée | Approuver exactement le digest partagé `cbd58f0a…`; runtime et intégrations conservent ensuite leurs gates distincts |
 | Découpage LLM des longs transcripts | Insights et Shorts utilisent actuellement les 10 000 premiers caractères | Mesurer les pertes sur des articles réels, puis définir chunking et fusion |
 | Canari MLX réel | Le routage et le chargement paresseux sont testés sans allocation de modèle | Exécuter une génération courte avec un modèle MLX installé sur la machine cible |
 | UI locale | CLI et MCP couvrent déjà la recherche locale | Documenter une friction répétée lors de recherches réelles |
