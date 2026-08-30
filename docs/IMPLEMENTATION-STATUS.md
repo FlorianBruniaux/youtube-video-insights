@@ -5,7 +5,8 @@
 - **Validation locale :** 508 tests et 10 sous-tests réussis
 - **Wheel :** installation minimale et extra MCP validés hors checkout, offline
 - **Source globale :** fast-forward approuvé de `e760a81` vers `62aa9ca`, puis 144 tests réussis
-- **Gate global suivant :** release `60cbcac…` vérifiée avec `issues: []`; son activation attend l'approbation exacte du digest partagé `cbd58f0a…`
+- **Release partagée :** `60cbcac…` active via la transaction `shared-cbd58f0a09d9-64a8fa11-a6a4-4d3f-a114-f87e188e1153`; check live `issues: []`
+- **Canaris assistants :** Codex frais voit les trois skills YouTube; Claude reste `UNKNOWN` car son CLI local n'est pas connecté
 - **Routage implicite :** `FAIL`; le meilleur candidat disjoint atteint 30/30 positifs et 0 confusion, mais déclenche encore 5/15 requêtes interdites
 
 YT Insights sait maintenant collecter des sous-titres YouTube, produire des
@@ -61,7 +62,7 @@ flowchart LR
 | Accès LLM | Interroger catalogue et passages depuis un client MCP | Quatre outils read-only implémentés |
 | Corpus complet | Construire l'index de tous les VTT après contrôle disque | Candidat temporaire v2: 3 270 documents, 183 789 passages, corpus réel inchangé |
 | Installation | Installer le checkout et l'extra MCP | Wheel 0.2.0 testé hors du checkout |
-| Assistants | Acquérir, rechercher et exporter depuis Claude Code ou Codex | Trois skills portables et un agent read-only par client; invocation explicite |
+| Assistants | Acquérir, rechercher et exporter depuis Claude Code ou Codex | Trois skills globaux découverts par un canari Codex frais; projection Claude présente, canari bloqué par l'authentification locale |
 
 `catalog.sqlite3` et `search-v1.sqlite3` répondent à deux besoins différents.
 Le catalogue conserve l'inventaire opérationnel. L'index de recherche dérive
@@ -74,7 +75,7 @@ directement des VTT et conserve les passages horodatés. Aucun des deux ne doit
 |---|---|---|
 | Revue humaine de la pertinence | La technique est validée, pas la qualité éditoriale des résultats | Juger les requêtes de l'artefact P2 et enregistrer `PASS` ou `FAIL` |
 | Routage implicite Claude Code/Codex | Les calibrations disjointes conservent des faux positifs ou perdent des requêtes légitimes | Nouveau mécanisme seulement si un besoin d'invocation implicite est démontré; les skills explicites sont utilisables maintenant |
-| Installation globale | Le candidat source `62aa9ca` est intégré et passe 144 tests; le wheel fonctionne dans un environnement isolé et aucune release n'est encore activée | Approuver exactement le digest partagé `cbd58f0a…`; runtime et intégrations conservent ensuite leurs gates distincts |
+| Installation globale | La source `62aa9ca` et la release partagée `60cbcac…` sont actives; le wheel fonctionne dans un environnement isolé | Installer le runtime puis les agents et MCP seulement après leurs approbations digest distinctes; reconnecter Claude avant son canari |
 | Découpage LLM des longs transcripts | Insights et Shorts utilisent actuellement les 10 000 premiers caractères | Mesurer les pertes sur des articles réels, puis définir chunking et fusion |
 | Canari MLX réel | Le routage et le chargement paresseux sont testés sans allocation de modèle | Exécuter une génération courte avec un modèle MLX installé sur la machine cible |
 | UI locale | CLI et MCP couvrent déjà la recherche locale | Documenter une friction répétée lors de recherches réelles |

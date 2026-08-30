@@ -117,7 +117,7 @@ preview obligatoire pour channel/playlist
 | B2 | `TERMINÉ` | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | Trois validateurs officiels et tests de portabilité au vert |
 | B3 | `REJETÉ` | Skills et agents natifs terminés; candidat disjoint à 30/30 positifs et 0 confusion, mais 5/15 activations interdites | Conserver l'invocation explicite; rouvrir seulement avec un mécanisme différent et un besoin observé |
 | C1 | `TERMINÉ` | Fast-forward approuvé de `e760a81` vers `62aa9ca`; 144/144 tests et check de la release `60cbcac…` au vert après intégration | Source globale intégrée le 30 août 2026; aucune activation de release dans cette étape |
-| C2 | `EN ATTENTE D'APPROBATION` | Transaction partagée de huit opérations re-préparée sur les préimages live; digest inchangé, instructions byte-identiques, skills et index privé candidats | Exiger `GO INSTALL SHARED cbd58f0a…`; runtime et intégrations gardent leurs approbations séparées |
+| C2 | `TERMINÉ` | Release `60cbcac…`, index privé et projections de skills activés par huit opérations journalisées; check live au vert et trois skills visibles dans un Codex frais | Transaction `shared-cbd58f0a09d9-64a8fa11-a6a4-4d3f-a114-f87e188e1153`; canari Claude encore `UNKNOWN` faute de connexion |
 | D1 | `TERMINÉ` | Choix explicite Ollama, MLX, cc-bridge, Anthropic ou endpoint compatible | Canari MLX et Ollama réels séparés des tests sans réseau |
 
 Les détails exécutables sont dans le [plan runtime](plans/2026-08-28-09-agent-ready-runtime.md), le [plan d'intégration globale](plans/2026-08-28-10-claude-codex-global-integration.md) et le [suivi parallèle](plans/PARALLEL-SESSIONS.md).

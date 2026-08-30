@@ -627,9 +627,14 @@ the exact wheel SHA-256 tested in Task 8. Record the runtime journal,
 `uv tool list`, binary paths, `yt-insights --version` and the redacted output of
 `yt-insights doctor --json`.
 
-- [ ] **Step 3: Install the shared release**
+- [x] **Step 3: Install the shared release**
 
 Run `scripts/install.mjs install` with `GO INSTALL SHARED <digest>`. Report the release ID and journal path immediately.
+
+Installé le 30 août 2026 avec le digest `cbd58f0a…`. Release active
+`60cbcac…`, transaction
+`shared-cbd58f0a09d9-64a8fa11-a6a4-4d3f-a114-f87e188e1153`, huit opérations
+appliquées et check live `issues: []`.
 
 - [ ] **Step 4: Install agents and MCP**
 
@@ -643,6 +648,10 @@ codex mcp get yt-insights
 ```
 
 Start a new Claude Code session and a new Codex session. Confirm the three skills and the native researcher agent appear in each supported selector.
+
+Résultat partiel du 30 août 2026: un Codex éphémère frais découvre les trois
+skills. Le canari Claude n'a pas démarré car le CLI local n'est pas connecté;
+la découverte Claude et les agents restent donc `UNKNOWN`.
 
 - [ ] **Step 6: Run five parity queries**
 

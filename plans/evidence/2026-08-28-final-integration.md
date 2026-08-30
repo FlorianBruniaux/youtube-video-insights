@@ -98,7 +98,7 @@ GO APPLY YT GLOBAL CANDIDATE 3e6146fb1740d63593d64c65b317248d4638e14de0735d0afe6
 La transaction partagée a aussi été préparée sans mutation globale à partir
 des préimages live et d'un index privé de 287 projets. Elle couvre huit
 opérations. Les fichiers `CLAUDE.md` et `AGENTS.md` restent byte-identiques.
-L'approbation d'activation attendue, distincte de l'intégration du code, est:
+L'approbation d'activation consommée, distincte de l'intégration du code, était:
 
 ```text
 GO INSTALL SHARED cbd58f0a09d95e9ba676b1f9271f9fec9c2966ac2ef8dc9223d45167ef52f296
@@ -111,6 +111,14 @@ check de la release `60cbcac…` retourne `issues: []`. La transaction partagée
 L'approbation partagée reste sensible au drift. Une modification de sa release
 candidate ou d'une préimage live impose de reconstruire son digest.
 
+La transaction partagée a été installée le 30 août 2026 sous l'identifiant
+`shared-cbd58f0a09d9-64a8fa11-a6a4-4d3f-a114-f87e188e1153`. Son journal est à
+`~/.local/state/ai-agents/journals/shared-cbd58f0a09d9-64a8fa11-a6a4-4d3f-a114-f87e188e1153.json`.
+Les huit opérations sont appliquées, la release active est `60cbcac…` et le
+check live retourne `issues: []`. Un Codex éphémère frais voit les trois skills
+YouTube. Le canari Claude reste `UNKNOWN` car le CLI local répond `Not logged
+in` avant toute évaluation des skills.
+
 Deux limites restent documentées. Un déplacement de snapshot entre volumes
 peut échouer avec `EXDEV`, sans mutation destructive. Les anciens journaux de
 schéma 1 dépourvus de `rollbackPostimage` et `restored` ne sont pas compatibles
@@ -120,6 +128,8 @@ avec la reprise renforcée.
 
 1. Donner un verdict humain `PASS` ou `FAIL` aux requêtes P2 sur un article réel.
 2. Exécuter un canari court avec un modèle Ollama installé.
+3. Reconnecter Claude Code et exécuter son canari de découverte des trois skills.
+4. Préparer puis approuver séparément l'installation runtime et les intégrations MCP.
 3. Exécuter un canari court avec un modèle MLX installé.
 4. Approuver ou refuser l'intégration du candidat global avec son digest exact.
 5. Après intégration et nouvelle vérification, approuver ou refuser la transaction partagée avec son digest distinct.
