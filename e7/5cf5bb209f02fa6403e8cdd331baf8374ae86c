@@ -1,0 +1,38 @@
+src/yt_insights/research/assessment.py
+  s_0a442347250965::t_6c7da6ac92e969 16-17,19-20,40,79,151,160,175-179,191,305,307,350-351,367-368
+src/yt_insights/cli_setup.py
+  s_0a442347250965::t_c97a5ee0fd9106 7,11,67,79,86-87,90-91,93
+src/yt_insights/research/models.py
+  s_0a442347250965::t_6c7da6ac92e969 73,142
+src/yt_insights/research/acquisition.py
+  s_0a442347250965::t_6c7da6ac92e969 5,89
+tests/research/test_assessment.py
+  s_0a442347250965::t_6c7da6ac92e969 6-8,27-33
+  s_0a442347250965::t_968853d56dda44 444
+src/yt_insights/assistant_setup.py
+  s_0a442347250965::t_102e835ff22971 15-17,486,752,760,762,765,776,779,789,791,794,853,916,928,962,1284,1313,1317-1320,1327-1329,1331-1335,1344-1345,1490-1498,1545-1546
+tests/research/test_research_acquisition.py
+  s_0a442347250965::t_6c7da6ac92e969 193
+src/yt_insights/research/discovery.py
+  s_0a442347250965::t_01bbf100a0203b 5-6,9,13-18
+tests/research/test_models.py
+  s_0a442347250965::t_a92cbe77be6186 3
+tests/test_assistant_setup.py
+  s_0a442347250965::t_24383bd201fea0 6,9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "e75cf5bb209f02fa6403e8cdd331baf8374ae86c",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
