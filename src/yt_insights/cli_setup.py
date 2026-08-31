@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import cast
 
 import click
 
@@ -83,11 +82,10 @@ def assistants_command(
         click.echo(json.dumps(payload, sort_keys=True))
     else:
         click.echo(f"Assistant setup: {payload['status']}")
-        operations = cast(list[dict[str, object]], payload.get("operations", []))
-        for operation in operations:
+        for operation in payload["operations"]:
             target = operation.get("target", operation.get("client", ""))
             click.echo(f"  {operation['kind']}: {target} [{operation['status']}]")
-        conflicts = cast(list[str], payload.get("conflicts", []))
+        conflicts = payload.get("conflicts", [])
         if conflicts:
             click.echo("Conflicts:", err=True)
             for conflict in conflicts:

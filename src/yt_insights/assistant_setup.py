@@ -15,7 +15,7 @@ import subprocess
 from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Literal, NotRequired, TypedDict
 
 Client = Literal["claude", "codex"]
 Mode = Literal["dry-run", "apply", "verify"]
@@ -115,6 +115,41 @@ class PublicationConflict(ValueError):
     def __init__(self, message: str, *, recovery_paths: tuple[str, ...] = ()) -> None:
         super().__init__(message)
         self.recovery_paths = recovery_paths
+
+
+class AssistantSetupOperation(TypedDict):
+    kind: str
+    status: str
+    target: NotRequired[str]
+    client: NotRequired[Client]
+    name: NotRequired[str]
+
+
+class AssistantSetupCleanupFailure(TypedDict):
+    client: Client
+    error: str
+
+
+class AssistantSetupPayload(TypedDict):
+    mode: Mode
+    clients: list[Client]
+    assets_only: bool
+    operations: list[AssistantSetupOperation]
+    status: NotRequired[str]
+    data_root: NotRequired[str]
+    mcp_command: NotRequired[str]
+    conflicts: NotRequired[list[str]]
+    existing_clients: NotRequired[list[Client]]
+    invalid_assets: NotRequired[list[str]]
+    invalid_manifest: NotRequired[str | None]
+    missing_clients: NotRequired[list[Client]]
+    error: NotRequired[str]
+    recovery_paths: NotRequired[list[str]]
+    failed_client_cleanup: NotRequired[list[AssistantSetupCleanupFailure]]
+    created_files: NotRequired[int]
+    upgraded_files: NotRequired[int]
+    registered_clients: NotRequired[list[Client]]
+    cleanup_pending: NotRequired[list[str]]
 
 
 def _asset_root() -> Path:
@@ -1575,18 +1610,23 @@ def _operation_payload(
     states: dict[Path, AssetState],
     *,
     include_mcp: bool,
-) -> list[dict[str, str]]:
-    operations = [
-        {
-            "kind": "copy",
-            "target": str(asset.target),
-            "status": states[asset.target].status,
-        }
+) -> list[AssistantSetupOperation]:
+    operations: list[AssistantSetupOperation] = [
+        AssistantSetupOperation(
+            kind="copy",
+            target=str(asset.target),
+            status=states[asset.target].status,
+        )
         for asset in assets
     ]
     if include_mcp:
         operations.extend(
-            {"kind": "mcp", "client": client, "name": MCP_NAME, "status": "planned"}
+            AssistantSetupOperation(
+                kind="mcp",
+                client=client,
+                name=MCP_NAME,
+                status="planned",
+            )
             for client in clients
         )
     return operations
@@ -1597,7 +1637,7 @@ def _run_assets_only(
     clients: tuple[Client, ...],
     mode: Mode,
     home: Path,
-) -> tuple[dict[str, object], int]:
+) -> tuple[AssistantSetupPayload, int]:
     assets = _assets(home, clients)
     ownership = _ownership_manifest(home)
     states = {
@@ -1609,7 +1649,7 @@ def _run_assets_only(
         states,
         include_mcp=False,
     )
-    base: dict[str, object] = {
+    base: AssistantSetupPayload = {
         "mode": mode,
         "clients": list(clients),
         "assets_only": True,
@@ -1622,7 +1662,8 @@ def _run_assets_only(
         conflicts.insert(0, str(ownership.path))
 
     if mode == "dry-run":
-        base.update(status="blocked" if conflicts else "planned", conflicts=conflicts)
+        base["status"] = "blocked" if conflicts else "planned"
+        base["conflicts"] = conflicts
         return base, 1 if conflicts else 0
 
     if mode == "verify":
@@ -1637,15 +1678,16 @@ def _run_assets_only(
             for asset in assets
         )
         valid = not invalid_assets and manifest_valid
-        base.update(
-            status="verified" if valid else "invalid",
-            invalid_assets=invalid_assets,
-            invalid_manifest=None if manifest_valid else str(ownership.path),
+        base["status"] = "verified" if valid else "invalid"
+        base["invalid_assets"] = invalid_assets
+        base["invalid_manifest"] = (
+            None if manifest_valid else str(ownership.path)
         )
         return base, 0 if valid else 1
 
     if conflicts:
-        base.update(status="blocked", conflicts=conflicts)
+        base["status"] = "blocked"
+        base["conflicts"] = conflicts
         return base, 1
 
     try:
@@ -1660,20 +1702,18 @@ def _run_assets_only(
             home,
             list(getattr(error, "recovery_paths", ())),
         )
-        base.update(
-            status="rolled_back",
-            error=str(error),
-            recovery_paths=recovery_paths,
-        )
+        base["status"] = "rolled_back"
+        base["error"] = str(error)
+        base["recovery_paths"] = recovery_paths
         return base, 1
 
     cleanup_pending = _finish_asset_transaction(transaction)
-    base.update(
-        status="installed",
-        created_files=len(transaction.created),
-        upgraded_files=sum(state.status == "upgrade" for state in states.values()),
-        cleanup_pending=cleanup_pending,
+    base["status"] = "installed"
+    base["created_files"] = len(transaction.created)
+    base["upgraded_files"] = sum(
+        state.status == "upgrade" for state in states.values()
     )
+    base["cleanup_pending"] = cleanup_pending
     return base, 0
 
 
@@ -1685,7 +1725,7 @@ def run_assistant_setup(
     mode: Mode,
     assets_only: bool = False,
     home: Path | None = None,
-) -> tuple[dict[str, object], int]:
+) -> tuple[AssistantSetupPayload, int]:
     """Plan, apply, or verify the assistant integration.
 
     The returned integer is a process-style status code. Errors are deliberately
@@ -1708,7 +1748,7 @@ def run_assistant_setup(
         asset.target: _asset_state(asset, target_home, ownership) for asset in assets
     }
     operations = _operation_payload(assets, clients, states, include_mcp=True)
-    base: dict[str, object] = {
+    base: AssistantSetupPayload = {
         "mode": mode,
         "clients": list(clients),
         "assets_only": False,
@@ -1723,7 +1763,8 @@ def run_assistant_setup(
         ]
         if ownership.status == "conflict":
             conflicts.insert(0, str(ownership.path))
-        base.update(status="blocked" if conflicts else "planned", conflicts=conflicts)
+        base["status"] = "blocked" if conflicts else "planned"
+        base["conflicts"] = conflicts
         return base, 1 if conflicts else 0
 
     conflicts = [
@@ -1732,7 +1773,9 @@ def run_assistant_setup(
     if ownership.status == "conflict":
         conflicts.insert(0, str(ownership.path))
     if mode == "apply" and conflicts:
-        base.update(status="blocked", conflicts=conflicts, existing_clients=[])
+        base["status"] = "blocked"
+        base["conflicts"] = conflicts
+        base["existing_clients"] = []
         return base, 1
 
     registrations = {
@@ -1752,17 +1795,19 @@ def run_assistant_setup(
         )
         missing_clients = [name for name, registered in registrations.items() if not registered]
         valid = not invalid_assets and manifest_valid and not missing_clients
-        base.update(
-            status="verified" if valid else "invalid",
-            invalid_assets=invalid_assets,
-            invalid_manifest=None if manifest_valid else str(ownership.path),
-            missing_clients=missing_clients,
+        base["status"] = "verified" if valid else "invalid"
+        base["invalid_assets"] = invalid_assets
+        base["invalid_manifest"] = (
+            None if manifest_valid else str(ownership.path)
         )
+        base["missing_clients"] = missing_clients
         return base, 0 if valid else 1
 
     existing_clients = [name for name, registered in registrations.items() if registered]
     if conflicts or existing_clients:
-        base.update(status="blocked", conflicts=conflicts, existing_clients=existing_clients)
+        base["status"] = "blocked"
+        base["conflicts"] = conflicts
+        base["existing_clients"] = existing_clients
         return base, 1
 
     transaction: AssetTransaction | None = None
@@ -1789,7 +1834,7 @@ def run_assistant_setup(
                 )
             registered.append(name)
     except Exception as error:
-        failed_client_cleanup: list[dict[str, str]] = []
+        failed_client_cleanup: list[AssistantSetupCleanupFailure] = []
         recovery_paths: list[str] = []
         try:
             for name in reversed(attempted):
@@ -1808,23 +1853,21 @@ def run_assistant_setup(
         if isinstance(error, PublicationConflict):
             recovery_paths.extend(error.recovery_paths)
         recovery_paths = _home_relative_paths(target_home, recovery_paths)
-        base.update(
-            status="rolled_back",
-            error=str(error),
-            recovery_paths=sorted(set(recovery_paths)),
-            failed_client_cleanup=sorted(
-                failed_client_cleanup,
-                key=lambda item: (item["client"], item["error"]),
-            ),
+        base["status"] = "rolled_back"
+        base["error"] = str(error)
+        base["recovery_paths"] = sorted(set(recovery_paths))
+        base["failed_client_cleanup"] = sorted(
+            failed_client_cleanup,
+            key=lambda item: (item["client"], item["error"]),
         )
         return base, 1
 
     cleanup_pending = _finish_asset_transaction(transaction)
-    base.update(
-        status="installed",
-        created_files=len(transaction.created),
-        upgraded_files=sum(state.status == "upgrade" for state in states.values()),
-        registered_clients=list(registered),
-        cleanup_pending=cleanup_pending,
+    base["status"] = "installed"
+    base["created_files"] = len(transaction.created)
+    base["upgraded_files"] = sum(
+        state.status == "upgrade" for state in states.values()
     )
+    base["registered_clients"] = list(registered)
+    base["cleanup_pending"] = cleanup_pending
     return base, 0
