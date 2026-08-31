@@ -1,0 +1,23 @@
+tests/test_cli_research.py
+  s_0a442347250965::t_fc9d833ad7c08b 339,359-397,401-408
+tests/research/test_workflow.py
+  s_0a442347250965::t_fc9d833ad7c08b 312-359
+src/yt_insights/research/workflow.py
+  s_0a442347250965::t_9b8e25c2068426 232,234-237
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "c37c17a55a51d605206fed0ca2625e332e48fd9c",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
