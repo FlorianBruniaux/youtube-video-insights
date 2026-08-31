@@ -1442,7 +1442,7 @@ verify Claude Code and Codex both discover the new skill and stop at the same
 mandatory confirmation states. If a client cannot be run, record `UNKNOWN`, not
 `PASS`.
 
-- [ ] **Step 6: Review and commit final integration**
+- [x] **Step 6: Review and commit final integration**
 
 Request code review against the spec, fix all blockers and major findings, rerun
 the complete gates, then commit only the reconciled files:
@@ -1462,16 +1462,16 @@ isolated branch without staging the primary checkout's unrelated files. Push
 
 ## Definition of Done
 
-- [ ] Phase 0 query and gate artifacts are replayable and SHA-bound.
-- [ ] Pilot relevance, discovery, and performance gates are recorded as `PASS`, `FAIL`, or `UNKNOWN`; unresolved gates block global activation claims, not exact user-approved local acquisition.
-- [ ] Assessment, store, and discovery streams pass independently.
-- [ ] Every research cycle asks the user whether evidence is sufficient.
-- [ ] Discovery and acquisition require two separate persisted decisions.
-- [ ] Only exact approved IDs are acquired, at most five per cycle.
-- [ ] Partial failure and stale revision scenarios are recoverable and tested.
-- [ ] Dossiers are deterministic, versioned, safe, and excluded from source search.
-- [ ] Existing MCP and native researcher remain read-only.
-- [ ] Repository-local Claude Code and Codex skill assets pass static validation.
-- [ ] Fresh-client runtime status is recorded as `PASS`, `FAIL`, or `UNKNOWN`.
-- [ ] Full tests, Ruff, mypy, packaging, and diff checks pass at the final SHA.
-- [ ] Main is merged and pushed only after unrelated primary-checkout changes are rechecked and preserved.
+- [x] Phase 0 query and gate artifacts are replayable and SHA-bound.
+- [x] Pilot relevance, discovery, and performance gates are recorded as `PASS`, `FAIL`, or `UNKNOWN`; unresolved gates block global activation claims, not exact user-approved local acquisition.
+- [x] Assessment, store, and discovery streams pass independently.
+- [x] Every research cycle asks the user whether evidence is sufficient.
+- [x] Discovery and acquisition require two separate persisted decisions.
+- [x] Only exact approved IDs are acquired, at most five per cycle.
+- [x] Partial failure and stale revision scenarios are recoverable and tested.
+- [x] Dossiers are deterministic, versioned, safe, and excluded from source search.
+- [x] Existing MCP and native researcher remain read-only.
+- [x] Repository-local Claude Code and Codex skill assets pass static validation.
+- [x] Fresh-client runtime status is recorded as `PASS`, `FAIL`, or `UNKNOWN`.
+- [x] Full tests, Ruff, mypy, packaging, and diff checks pass at the final SHA.
+- [ ] Main is merged and pushed only after unrelated primary-checkout changes are rechecked and preserved. Pending the release step.

@@ -44,7 +44,7 @@ The repository already provides the required lower-level primitives:
 - portable Claude Code and Codex skills for acquisition, read-only research,
   and export.
 
-The following capabilities do not exist yet:
+The delivered workflow adds these capabilities:
 
 - topic-based YouTube discovery;
 - local coverage and freshness assessment;
@@ -53,7 +53,7 @@ The following capabilities do not exist yet:
 - an orchestrated acquire, refresh, and reassess loop;
 - a canonical versioned research dossier.
 
-The new workflow must compose existing application functions. It must not put
+The workflow composes existing application functions. It does not put
 research orchestration inside the existing MCP server, catalogue module, or
 acquisition module.
 
@@ -190,32 +190,55 @@ Required fields:
 ```json
 {
   "schema_version": 1,
-  "session_id": "019...",
-  "revision": 1,
-  "topic": "Local AI inference cost optimization",
-  "queries": ["local LLM inference cost"],
-  "freshness": {
-    "profile": "fast",
-    "maximum_age_days": 14,
-    "last_successful_discovery_at": null,
-    "stale": true,
-    "reason": "never_checked"
+  "session": {
+    "session_id": "019...",
+    "topic": "Local AI inference cost optimization",
+    "queries": ["local LLM inference cost"],
+    "languages": ["en"],
+    "freshness_profile": "fast",
+    "discovery_fingerprint": "0123456789abcdef...",
+    "state": "awaiting_sufficiency_confirmation",
+    "revision": 1,
+    "retry_target": null,
+    "created_at": "2026-08-31T12:00:00+00:00",
+    "updated_at": "2026-08-31T12:00:00+00:00"
   },
-  "coverage": {
-    "matched_passages": 20,
-    "matched_videos": 8,
-    "distinct_channels": 4,
-    "queries_with_zero_hits": [],
-    "newest_source_published_at": "2026-08-24",
-    "unknown_publication_date_count": 1
+  "assessment": {
+    "created_at": "2026-08-31T12:00:00+00:00",
+    "snapshot": {
+      "search_generation": "0123456789abcdef...",
+      "catalog_generation": "fedcba9876543210..."
+    },
+    "coverage": {
+      "matched_passages": 20,
+      "matched_videos": 8,
+      "distinct_channels": 4,
+      "queries_with_zero_hits": [],
+      "newest_source_published_at": "2026-08-24",
+      "unknown_publication_date_count": 1
+    },
+    "freshness": {
+      "profile": "fast",
+      "maximum_age_days": 14,
+      "last_successful_discovery_at": null,
+      "stale": true,
+      "reason": "never_checked"
+    },
+    "passages": [],
+    "videos": []
   },
-  "state": "awaiting_sufficiency_confirmation",
-  "required_user_action": "confirm_sufficiency_or_refresh"
+  "candidates": null,
+  "required_user_action": "confirm_sufficiency_or_refresh",
+  "error_code": null,
+  "acquisition_history": [],
+  "acquisition_history_truncated": false
 }
 ```
 
-The implementation may add fields in a later schema version. It may not remove,
-rename, or change the meaning of version 1 fields.
+The version 1 top-level contract is the nested structure above. `assessment`
+and `candidates` may be `null` when the current state has no corresponding
+snapshot. The implementation may add fields in a later schema version. It may
+not remove, rename, relocate, or change the meaning of version 1 fields.
 
 Coverage counts use the bounded result snapshots stored for the session, not
 global catalogue counts. The assessment stores the selected passage IDs,
