@@ -1,0 +1,258 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from datetime import UTC, date, datetime
+from pathlib import Path
+
+import pytest
+
+from yt_insights.research.dossier import (
+    DossierExportRequest,
+    export_dossier,
+)
+from yt_insights.research.models import (
+    CandidateStatus,
+    CoverageMetrics,
+    DatabaseSnapshot,
+    FreshnessAssessment,
+    FreshnessProfile,
+    PassageEvidence,
+    QuerySpec,
+    ResearchAcquisitionOutcome,
+    ResearchAssessment,
+    ResearchCandidate,
+)
+from yt_insights.research.store import ResearchStore
+
+
+NOW = datetime(2026, 8, 31, 10, 0, tzinfo=UTC)
+SESSION_ID = "01K4RESEARCH0000000000000000"
+VIDEO_ID = "abc123DEF45"
+WATCH_URL = f"https://www.youtube.com/watch?v={VIDEO_ID}"
+
+
+def _store(tmp_path: Path) -> ResearchStore:
+    return ResearchStore(tmp_path / "research.sqlite3", now=lambda: NOW)
+
+
+def _completed_store(tmp_path: Path) -> ResearchStore:
+    store = _store(tmp_path)
+    store.create_session(
+        session_id=SESSION_ID,
+        topic="Local AI inference",
+        queries=(QuerySpec("local LLM inference"),),
+        languages=("en",),
+        freshness_profile=FreshnessProfile.FAST,
+        discovery_fingerprint="a" * 64,
+    )
+    assessment = ResearchAssessment(
+        created_at=NOW,
+        snapshot=DatabaseSnapshot("search-1", "catalog-1"),
+        coverage=CoverageMetrics(1, 1, 1, ("unanswered query",), date(2026, 8, 30), 0),
+        freshness=FreshnessAssessment(FreshnessProfile.FAST, 14, None, False, "fresh"),
+        passages=(
+            PassageEvidence(
+                query="local LLM inference",
+                passage_id="passage-1",
+                video_id=VIDEO_ID,
+                channel_id="channel-1",
+                rank=1,
+                url=WATCH_URL,
+                excerpt="Local inference keeps models on-device.",
+                source_sha256="b" * 64,
+            ),
+        ),
+        videos=(),
+    )
+    store.record_assessment(SESSION_ID, expected_revision=0, assessment=assessment)
+    store.decide_sufficiency(SESSION_ID, expected_revision=1, sufficient=False, idempotency_key="refresh")
+    candidate = ResearchCandidate(
+        video_id=VIDEO_ID,
+        title="Local inference",
+        channel_id="channel-1",
+        channel_title="Channel",
+        published_at=date(2026, 8, 30),
+        watch_url=WATCH_URL,
+        matched_queries=("local LLM inference",),
+        original_rank=1,
+        status=CandidateStatus.CANDIDATE,
+    )
+    store.record_candidates(SESSION_ID, expected_revision=2, candidates=(candidate,), provider_name="provider", provider_version=1, errors=())
+    store.approve_candidates(SESSION_ID, expected_revision=3, video_ids=(VIDEO_ID,), idempotency_key="approve")
+    store.start_acquisition_attempt(SESSION_ID, expected_revision=4, video_ids=(VIDEO_ID,), idempotency_key="attempt-key", attempt_id="attempt-1")
+    store.record_acquisition_batch(
+        SESSION_ID,
+        expected_revision=4,
+        attempt_id="attempt-1",
+        outcomes=(ResearchAcquisitionOutcome("attempt-1", VIDEO_ID, CandidateStatus.ACQUIRED, None, "c" * 64),),
+    )
+    store.complete_reindexing(SESSION_ID, expected_revision=5)
+    store.record_assessment(SESSION_ID, expected_revision=6, assessment=assessment)
+    store.decide_sufficiency(SESSION_ID, expected_revision=7, sufficient=True, idempotency_key="complete")
+    return store
+
+
+def _request(directory: Path, *, force: bool = False) -> DossierExportRequest:
+    return DossierExportRequest(session_id=SESSION_ID, output_directory=directory, force=force)
+
+
+def test_export_is_byte_identical_and_only_renders_stored_bounded_evidence(tmp_path: Path) -> None:
+    """Changing serialization order, adding a clock, or reading corpus bodies breaks this export."""
+    store = _completed_store(tmp_path)
+
+    first = export_dossier(_request(tmp_path / "one"), store=store, package_version="1.2.3")
+    second = export_dossier(_request(tmp_path / "two"), store=store, package_version="1.2.3")
+
+    first_manifest = (first.directory / "manifest.json").read_bytes()
+    first_dossier = (first.directory / "dossier.md").read_bytes()
+    assert first_manifest == (second.directory / "manifest.json").read_bytes()
+    assert first_dossier == (second.directory / "dossier.md").read_bytes()
+    assert first.to_dict() == {
+        "directory": str(tmp_path / "one"),
+        "manifest_sha256": hashlib.sha256(first_manifest).hexdigest(),
+        "dossier_sha256": hashlib.sha256(first_dossier).hexdigest(),
+    }
+    manifest = json.loads(first_manifest)
+    rendered = first_dossier.decode("utf-8")
+    assert manifest["format_version"] == 1
+    assert manifest["package_version"] == "1.2.3"
+    assert manifest["dossier_sha256"] == hashlib.sha256(first_dossier).hexdigest()
+    assert manifest["evidence"][0]["excerpt"] == "Local inference keeps models on-device."
+    assert manifest["acquisition_outcomes"] == [
+        {
+            "error_code": None,
+            "source_sha256": "c" * 64,
+            "status": "acquired",
+            "video_id": VIDEO_ID,
+        }
+    ]
+    assert manifest["decisions"] == [
+        {"action": "refresh"},
+        {"action": "approve_candidates"},
+        {"action": "sufficient"},
+    ]
+    assert "## Research scope" in rendered
+    assert "## Freshness and coverage" in rendered
+    assert "## Source-backed evidence" in rendered
+    assert "## Newly acquired sources" in rendered
+    assert "## Contradictions" in rendered
+    assert "## Coverage limits" in rendered
+    assert "## Unresolved questions" in rendered
+    assert str(tmp_path) not in first_manifest.decode("utf-8")
+    assert "research.sqlite3" not in first_manifest.decode("utf-8")
+    assert "SELECT " not in first_manifest.decode("utf-8")
+    assert "2026-08-31T10:00:00" in first_manifest.decode("utf-8")
+
+
+def test_export_never_synthesizes_missing_assessment_evidence(tmp_path: Path) -> None:
+    """Inventing passages for a session without an assessment must remain impossible."""
+    store = _store(tmp_path)
+    store.create_session(
+        session_id=SESSION_ID,
+        topic="No assessment",
+        queries=(QuerySpec("missing evidence"),),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.HISTORICAL,
+        discovery_fingerprint="d" * 64,
+    )
+
+    result = export_dossier(_request(tmp_path / "dossier"), store=store, package_version="1.2.3")
+
+    manifest = json.loads((result.directory / "manifest.json").read_text())
+    rendered = (result.directory / "dossier.md").read_text()
+    assert manifest["assessment"] is None
+    assert manifest["evidence"] == []
+    assert "No stored assessment is available." in rendered
+    assert "No source-backed passages were stored." in rendered
+
+
+def test_existing_output_requires_force_and_force_requires_valid_prior_dossier(tmp_path: Path) -> None:
+    """Replacing arbitrary user directories rather than an identified prior dossier must fail."""
+    store = _completed_store(tmp_path)
+    target = tmp_path / "dossier"
+    export_dossier(_request(target), store=store, package_version="1.2.3")
+
+    with pytest.raises(FileExistsError, match="force"):
+        export_dossier(_request(target), store=store, package_version="1.2.3")
+    export_dossier(_request(target, force=True), store=store, package_version="1.2.4")
+    (target / "extra.txt").write_text("user file")
+    with pytest.raises(ValueError, match="validated prior dossier"):
+        export_dossier(_request(target, force=True), store=store, package_version="1.2.5")
+    invalid = tmp_path / "invalid"
+    invalid.mkdir()
+    (invalid / "dossier.md").write_text("not our dossier")
+    (invalid / "manifest.json").write_text(
+        json.dumps({"dossier_sha256": hashlib.sha256(b"not our dossier").hexdigest()})
+    )
+    with pytest.raises(ValueError, match="validated prior dossier"):
+        export_dossier(_request(invalid, force=True), store=store, package_version="1.2.5")
+
+
+def test_export_rejects_unsafe_destination_shapes_and_allows_another_root(tmp_path: Path) -> None:
+    """Following symlinks, accepting traversal, or assuming the project root would make publication unsafe."""
+    store = _completed_store(tmp_path)
+    external_root = tmp_path.parent / f"external-{tmp_path.name}"
+    external_root.mkdir()
+    target = external_root / "copied-dossier"
+
+    result = export_dossier(_request(target), store=store, package_version="1.2.3")
+
+    assert result.directory == target
+    with pytest.raises(ValueError, match="absolute"):
+        export_dossier(_request(Path("relative") / ".." / "escape"), store=store, package_version="1.2.3")
+    with pytest.raises(ValueError, match="traversal"):
+        export_dossier(_request(tmp_path / "nested" / ".." / "escape"), store=store, package_version="1.2.3")
+    not_a_directory = tmp_path / "file-parent"
+    not_a_directory.write_text("file")
+    with pytest.raises(NotADirectoryError):
+        export_dossier(_request(not_a_directory / "dossier"), store=store, package_version="1.2.3")
+    link = tmp_path / "link"
+    link.symlink_to(target, target_is_directory=True)
+    with pytest.raises(ValueError, match="symlink"):
+        export_dossier(_request(link), store=store, package_version="1.2.3")
+
+
+def test_export_preserves_destination_when_publication_is_interrupted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed directory replacement must leave no partially published dossier."""
+    store = _completed_store(tmp_path)
+    target = tmp_path / "dossier"
+    import yt_insights.research.dossier as dossier
+
+    original_rename = dossier.os.rename
+
+    def fail_stage_publish(source: object, destination: object, *args: object, **kwargs: object) -> object:
+        if Path(destination) == target:
+            raise OSError("interrupted publication")
+        return original_rename(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(dossier.os, "rename", fail_stage_publish)
+
+    with pytest.raises(OSError, match="interrupted publication"):
+        export_dossier(_request(target), store=store, package_version="1.2.3")
+
+    assert not target.exists()
+    assert not list(tmp_path.glob(".dossier.staging-*"))
+
+
+def test_export_refuses_a_destination_created_during_publication(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A path swap after validation must not allow an unforced overwrite."""
+    store = _completed_store(tmp_path)
+    target = tmp_path / "dossier"
+    import yt_insights.research.dossier as dossier
+
+    original_rename = dossier.os.rename
+
+    def swap_destination(source: object, destination: object, *args: object, **kwargs: object) -> object:
+        if Path(destination) == target:
+            target.mkdir()
+            (target / "intruder.txt").write_text("do not replace")
+        return original_rename(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(dossier.os, "rename", swap_destination)
+
+    with pytest.raises(FileExistsError, match="destination changed"):
+        export_dossier(_request(target), store=store, package_version="1.2.3")
+
+    assert (target / "intruder.txt").read_text() == "do not replace"
