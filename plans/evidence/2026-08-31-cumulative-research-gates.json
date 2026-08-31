@@ -1,0 +1,79 @@
+{
+  "schema_version": 1,
+  "code_sha": "2430c0fa7002d7827779a11e3117e51f0e975393",
+  "corpus": {
+    "fingerprint_algorithm": "sha256(sorted-relative-vtt-path-and-content-sha256)",
+    "fingerprint": "021c20ab0e21ca189d3478dd218fe8732752deb5cb160409f9258314a8380ba6",
+    "vtt_file_count": 3332,
+    "catalog_sha256_before_after": "d726f26a478c7891c6c46bf9b7660b5cc14f1e39c6f2ee45d7255b1b2684ee7c",
+    "search_sha256_before_after": "0ae7b5f6409408994ba3d0d3e2d509e4a8d7607bd0d950895008e5ff7df16e24"
+  },
+  "gates": {
+    "relevance_pilot": "UNKNOWN",
+    "discovery_probe": "PASS",
+    "refresh_performance": "PASS",
+    "global_activation_ready": false
+  },
+  "relevance_pilot": {
+    "query_count": 4,
+    "distinct_subject_count": 3,
+    "top_k": 10,
+    "expected_rank_1_to_5_judgment_count": 20,
+    "observed_rank_1_to_5_result_count": 0,
+    "observed_null_judgment_count": 0,
+    "packet_status": "UNKNOWN",
+    "representative_index": {
+      "sha256": "9e4d8ff3bc56be56f82416ad0c3c5ca67d72c274f2630a2852952ff4ead8be20",
+      "size_bytes": 10940416,
+      "documents_indexed": 50,
+      "passages_indexed": 3293
+    },
+    "packet_sha256": "2cefde38d43742849ce1e371557eff51f2f1ca7f7b199050432517f1fe7aee10"
+  },
+  "discovery_probe": {
+    "tool": "yt-dlp",
+    "source_prefix": "ytsearch10:",
+    "local_state_unchanged": true,
+    "subjects": [
+      {
+        "subject_id": "ai-in-tech-product-teams",
+        "query": "AI workflows in product and engineering teams",
+        "exit_code": 0,
+        "candidate_count": 10,
+        "publication_dates_available": false
+      },
+      {
+        "subject_id": "local-ai-inference-cost",
+        "query": "local LLM inference cost MLX Ollama",
+        "exit_code": 0,
+        "candidate_count": 10,
+        "publication_dates_available": false
+      },
+      {
+        "subject_id": "ai-code-quality",
+        "query": "AI code quality rules testing code review",
+        "exit_code": 0,
+        "candidate_count": 10,
+        "publication_dates_available": false
+      }
+    ]
+  },
+  "refresh_performance": {
+    "sample_count": 5,
+    "p95_wall_seconds": 47.122951,
+    "threshold_seconds": 60,
+    "incremental_refresh_required": false,
+    "samples": [
+      {"run": 1, "wall_seconds": 43.312936, "exit_code": 0, "validation_exit_code": 0, "documents_indexed": 3332, "passages_indexed": 184636, "database_size_bytes": 553832448, "database_sha256": "80b2cba13a1535271bdd3f5a44752ec3e401ec33d0862d83ae9a3be8fdfb2942"},
+      {"run": 2, "wall_seconds": 45.00072, "exit_code": 0, "validation_exit_code": 0, "documents_indexed": 3332, "passages_indexed": 184636, "database_size_bytes": 553832448, "database_sha256": "62d5a9079006e62db946dc9b351d65de40e82c2791b7ef70ed3fc7fdf215e2e7"},
+      {"run": 3, "wall_seconds": 45.529773, "exit_code": 0, "validation_exit_code": 0, "documents_indexed": 3332, "passages_indexed": 184636, "database_size_bytes": 553832448, "database_sha256": "761af58f50f15ce002b789042f01bc04f955fd1e51ef73c06f88ff51d8b9b9f8"},
+      {"run": 4, "wall_seconds": 47.122951, "exit_code": 0, "validation_exit_code": 0, "documents_indexed": 3332, "passages_indexed": 184636, "database_size_bytes": 553832448, "database_sha256": "e00513d75c0bfb047dba33952b88e57d4f82e4a25f64ee6b560f4a369743dd56"},
+      {"run": 5, "wall_seconds": 43.737817, "exit_code": 0, "validation_exit_code": 0, "documents_indexed": 3332, "passages_indexed": 184636, "database_size_bytes": 553832448, "database_sha256": "04c6e2bc221a548e4b1a95388765a9a30aad0a4e4edfa0013a6abf2b6fe00dba"}
+    ]
+  },
+  "artifacts": {
+    "pilot_queries_sha256": "246bc2b6157a886e7f21f87ca23447a1af8de36b98a9057f6d03e1e50e32c2e4",
+    "raw_evidence_directory": "/private/tmp/yt-insights-task0.dOEsXX",
+    "raw_packet_path": "/private/tmp/yt-insights-task0.dOEsXX/pilot-evaluation-packet.json"
+  }
+}

@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "status": "UNKNOWN",
+  "instructions": [
+    "This file contains real pilot queries only; it is not a reviewed query set.",
+    "Do not generate or infer human judgments.",
+    "Keep the four pilot queries mapped to at least three distinct subjects. The top five results for each query produce exactly twenty pilot result judgments.",
+    "For the release evaluation, keep the four pilot cases and add sixty through one hundred unique cases whose phase is release, covering every required category.",
+    "Only channel and language filters are supported. Use null when a filter does not apply."
+  ],
+  "pilot": {
+    "required_distinct_subjects": 3,
+    "required_query_count": 4,
+    "results_per_query": 5,
+    "required_result_judgment_count": 20,
+    "minimum_relevant_result_count_for_pilot_pass": 16,
+    "relevant_grades": [1, 2],
+    "note": "A pilot pass is not a release pass."
+  },
+  "release": {
+    "minimum_query_case_count": 60,
+    "maximum_query_case_count": 100,
+    "required_categories": [
+      "exact",
+      "natural_question",
+      "paraphrase",
+      "bilingual",
+      "filter",
+      "hostile",
+      "no_answer"
+    ],
+    "required_metrics": ["Recall@5", "MRR@10", "nDCG@10", "zero-result rate"]
+  },
+  "queries": [
+    {
+      "id": "pilot-ai-teams-01",
+      "phase": "pilot",
+      "subject_id": "ai-in-tech-product-teams",
+      "label": "AI workflows in product and engineering teams",
+      "query": "AI product engineering team workflows",
+      "category": "natural_question",
+      "query_language": "en",
+      "filters": {"channel": null, "language": null}
+    },
+    {
+      "id": "pilot-ai-teams-02",
+      "phase": "pilot",
+      "subject_id": "ai-in-tech-product-teams",
+      "label": "AI adoption across product development teams",
+      "query": "AI adoption product development teams",
+      "category": "paraphrase",
+      "query_language": "en",
+      "filters": {"channel": null, "language": null}
+    },
+    {
+      "id": "pilot-local-inference-01",
+      "phase": "pilot",
+      "subject_id": "local-ai-inference-cost",
+      "label": "Cost-efficient local inference with MLX and Ollama",
+      "query": "local LLM inference cost MLX Ollama",
+      "category": "natural_question",
+      "query_language": "en",
+      "filters": {"channel": null, "language": null}
+    },
+    {
+      "id": "pilot-code-quality-01",
+      "phase": "pilot",
+      "subject_id": "ai-code-quality",
+      "label": "AI code quality rules testing and review",
+      "query": "AI code quality rules testing code review",
+      "category": "natural_question",
+      "query_language": "en",
+      "filters": {"channel": null, "language": null}
+    }
+  ]
+}
