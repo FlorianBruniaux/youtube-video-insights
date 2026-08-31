@@ -31,7 +31,7 @@ from .models import (
     discovery_fingerprint,
     normalize_research_text,
 )
-from .store import ResearchStore
+from .store import ResearchRevisionConflict, ResearchStore
 
 _SCHEMA_VERSION = 1
 _DISCOVERY_PROVIDER_NAME = "yt-dlp"
@@ -180,10 +180,15 @@ class ResearchWorkflow:
         session: ResearchSession,
         error_code: str | None = None,
     ) -> ResearchResponse:
-        snapshot = self._store.get_public_snapshot(
-            session.session_id,
-            expected_revision=session.revision,
-        )
+        try:
+            snapshot = self._store.get_public_snapshot(
+                session.session_id,
+                expected_revision=session.revision,
+            )
+        except ResearchRevisionConflict:
+            snapshot = self._store.get_public_snapshot(session.session_id)
+            if snapshot.session.revision <= session.revision:
+                raise
         return self._response_from_snapshot(snapshot, error_code=error_code)
 
     def _response_from_snapshot(

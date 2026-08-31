@@ -160,6 +160,10 @@ _SCHEMA_SQL = {
 }
 
 
+class ResearchRevisionConflict(ValueError):
+    """A public snapshot no longer matches the requested stored revision."""
+
+
 class ResearchStore:
     """Own a portable SQLite file and enforce workflow transitions atomically."""
 
@@ -667,7 +671,7 @@ class ResearchStore:
                 expected_revision is not None
                 and session.revision != expected_revision
             ):
-                raise ValueError("session revision conflict")
+                raise ResearchRevisionConflict("session revision conflict")
             assessment_row = connection.execute(
                 """SELECT payload_json FROM research_assessments
                 WHERE session_id = ? ORDER BY session_revision DESC LIMIT 1""",

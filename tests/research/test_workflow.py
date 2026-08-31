@@ -275,6 +275,41 @@ def test_start_records_a_retryable_local_index_failure_without_an_assessment(tmp
     assert payload["error_code"] == "local_index_unavailable"
 
 
+def test_late_retry_replay_returns_current_completed_snapshot_without_reassessment(
+    tmp_path,
+) -> None:
+    reader = FakeEvidenceReader(fails=True)
+    workflow = _workflow(tmp_path, reader)
+    failed = workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    reader.fails = False
+    recovered = workflow.retry(
+        SESSION_ID,
+        expected_revision=failed.session.revision,
+        idempotency_key="retry-key",
+    )
+    completed = workflow.decide(
+        SESSION_ID,
+        expected_revision=recovered.session.revision,
+        decision="sufficient",
+        idempotency_key="sufficient-key",
+    )
+    passage_calls = tuple(reader.passage_calls)
+
+    replayed = workflow.retry(
+        SESSION_ID,
+        expected_revision=failed.session.revision,
+        idempotency_key="retry-key",
+    )
+
+    assert replayed.to_dict() == completed.to_dict()
+    assert tuple(reader.passage_calls) == passage_calls
+
+
 def test_export_publishes_the_stored_waiting_session_through_the_dossier_service(
     tmp_path,
 ) -> None:
@@ -340,6 +375,71 @@ def test_decide_refresh_persists_discovering_without_calling_the_network_provide
 
     assert response.to_dict()["session"]["state"] == "discovering"
     assert response.to_dict()["error_code"] is None
+
+
+def test_late_refresh_replay_returns_the_current_snapshot_without_rediscovery(
+    tmp_path,
+) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    workflow = _workflow(tmp_path, FakeEvidenceReader(), provider)
+    workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="refresh",
+        idempotency_key="refresh-key",
+    )
+    current = workflow.discover(SESSION_ID, expected_revision=2)
+
+    replayed = workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="refresh",
+        idempotency_key="refresh-key",
+    )
+
+    assert replayed.to_dict() == current.to_dict()
+    assert provider.calls == [((QuerySpec("Local query"),), 10)]
+    with pytest.raises(ValueError, match="idempotency"):
+        workflow.decide(
+            SESSION_ID,
+            expected_revision=1,
+            decision="sufficient",
+            idempotency_key="refresh-key",
+        )
+
+
+def test_immediate_sufficient_replay_remains_identical(tmp_path) -> None:
+    workflow = _workflow(tmp_path, FakeEvidenceReader())
+    workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    completed = workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="sufficient",
+        idempotency_key="sufficient-key",
+    )
+
+    replayed = workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="sufficient",
+        idempotency_key="sufficient-key",
+    )
+
+    assert replayed.to_dict() == completed.to_dict()
 
 
 def test_discover_persists_exact_snapshot_only_after_explicit_refresh(tmp_path) -> None:
@@ -707,8 +807,15 @@ def test_acquire_replay_returns_committed_result_without_redownload(tmp_path) ->
         idempotency_key="acquire-key",
         language="fr",
     )
+    replayed_approval = workflow.approve(
+        SESSION_ID,
+        expected_revision=3,
+        video_ids=(candidate.video_id,),
+        idempotency_key="approve-key",
+    )
 
     assert replayed.to_dict() == completed.to_dict()
+    assert replayed_approval.to_dict() == completed.to_dict()
     assert len(acquisition.calls) == 1
     assert len(refresh_calls) == 1
     with pytest.raises(ValueError, match="payload differs"):
