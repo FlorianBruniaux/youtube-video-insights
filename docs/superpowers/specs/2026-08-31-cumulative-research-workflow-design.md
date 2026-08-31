@@ -140,8 +140,10 @@ The command performs local reads, records the session, and returns
 
 ```console
 yt-insights research status SESSION_ID --json
-yt-insights research decide SESSION_ID sufficient --json
-yt-insights research decide SESSION_ID refresh --json
+yt-insights research decide SESSION_ID sufficient --revision N \
+  --idempotency-key KEY --json
+yt-insights research decide SESSION_ID refresh --revision N \
+  --idempotency-key KEY --json
 ```
 
 `sufficient` completes the evidence-collection loop. `refresh` authorizes
@@ -151,8 +153,10 @@ network discovery only. It does not authorize acquisition.
 
 ```console
 yt-insights research candidates SESSION_ID --json
-yt-insights research approve SESSION_ID VIDEO_ID VIDEO_ID --json
-yt-insights research cancel SESSION_ID --json
+yt-insights research approve SESSION_ID VIDEO_ID VIDEO_ID --revision N \
+  --idempotency-key KEY --json
+yt-insights research cancel SESSION_ID --revision N \
+  --idempotency-key KEY --json
 ```
 
 The workflow returns at most ten candidates. `approve` accepts at most five
@@ -165,7 +169,7 @@ playlist, channel, related-video, or recursive acquisition.
 ### 5.4 Retry and export
 
 ```console
-yt-insights research retry SESSION_ID --json
+yt-insights research retry SESSION_ID --revision N --idempotency-key KEY --json
 yt-insights research export SESSION_ID --output research/TOPIC/DATE-SESSION \
   --json
 ```
@@ -214,10 +218,24 @@ The implementation may add fields in a later schema version. It may not remove,
 rename, or change the meaning of version 1 fields.
 
 Coverage counts use the bounded result snapshots stored for the session, not
-global catalogue counts. The assessment stores the selected passage IDs, video
-IDs, ranks, filters, and query result limits needed to reproduce the diagnostic.
+global catalogue counts. The assessment stores the selected passage IDs,
+bounded excerpts, source artifact hashes, video IDs, ranks, filters, query
+result limits, and opaque database-generation identities needed to reproduce
+the diagnostic.
 Each query stores at most twenty passage hits and twenty video hits. Counts in
 the assessment are unique across all query snapshots by passage ID and video ID.
+
+The reader captures the catalogue and search database identities before the
+first query and validates them again after the last query. If either immutable
+database was replaced during assessment, the assessment fails retryably rather
+than combining generations.
+
+`distinct_channels` counts only canonical channel IDs present on timestamped
+passage evidence. Catalogue-only results may contribute to `matched_videos` and
+publication-date metrics, but a source slug is never presented as a channel
+identity. `unknown_publication_date_count` applies to the bounded catalogue
+video snapshot. These evidence boundaries are included in the response and
+dossier manifest.
 
 Unknown dates remain unknown. They are never treated as recent.
 
@@ -294,6 +312,12 @@ Decisions have an idempotency key derived from session ID, expected revision,
 action, and canonical action payload. Repeating a committed decision returns
 the committed result without applying it twice.
 
+An acquisition command also carries an explicit idempotency key. The store
+reserves one durable acquisition attempt before network access, persists each
+item outcome under that attempt, and returns the existing attempt when the same
+key and payload are replayed. Immutable transcript promotion and cached-source
+detection make a crash between download and outcome persistence retry-safe.
+
 ## 9. Research Database
 
 `research.sqlite3` is a separate, versioned operational database under the
@@ -315,6 +339,8 @@ Version 1 owns these tables:
 | `research_assessments` | Immutable bounded diagnostic snapshots |
 | `research_candidates` | Provider snapshot, original rank, normalized metadata, and candidate status |
 | `research_decisions` | User-approved action and canonical payload |
+| `research_acquisition_attempts` | Durable idempotency identity, revision, status, and batch metadata |
+| `research_acquisition_outcomes` | Per-video status, bounded error code, and source artifact hash |
 | `research_events` | Append-only transition and error history |
 
 The database stores no transcript body, cookies, API keys, model credentials,
@@ -375,9 +401,21 @@ Acquired source files are immutable inputs and are not deleted when a later
 index refresh fails. Existing validated databases remain the active pair. The
 session records the failed refresh and can resume from `reindexing`.
 
-Before enabling the interactive acquisition loop, measure five full-corpus
-refreshes. If p95 exceeds 60 seconds on the reference local corpus, incremental
-refresh becomes a prerequisite for this phase.
+The acquisition service must expose a structured per-video outcome so the
+workflow never classifies free-form diagnostics. A failed search-index
+publication after catalogue publication must restore both the previous search
+index and the previous catalogue before returning failure. Pair rollback is
+validated before the session becomes retryable.
+
+The store persists the whole batch transition atomically, including per-video
+outcomes and source hashes. Explicit store operations cover
+`acquiring -> reindexing`, `reindexing -> assessing`, latest-assessment reads,
+and immutable session-history reads used by status and dossier export.
+
+Before claiming the interactive loop is performance-validated, measure five
+full-corpus refreshes. If p95 exceeds 60 seconds on the reference local corpus,
+the CLI reports a bounded performance warning and incremental refresh becomes a
+prerequisite for global activation, not for an explicitly approved local batch.
 
 ## 12. Versioned Dossiers and Project Export
 
@@ -406,6 +444,12 @@ source-backed evidence item links to a manifest evidence reference.
 The dossier is not automatically generated after the sufficiency decision.
 The assistant asks whether the user wants a dossier, an article draft, a corpus
 export, both, or no additional output.
+
+`research export` implements only the deterministic dossier. After an explicit
+choice, the main assistant session may use that dossier to draft an article and
+may call the existing exact-video exporter for selected source transcripts.
+Those assistant outputs remain outside the deterministic research CLI contract
+and require explicit destination paths.
 
 Copying a dossier into the current Claude Code or Codex project is an explicit
 export. Existing files are never overwritten without `--force`. Absolute local
@@ -492,7 +536,9 @@ until after implementation.
 - the existing complete test suite passes from a clean isolated worktree;
 - exactly twenty top-five results across at least three real subjects receive a
   human relevance judgment;
-- relevance passes at 16/20 or higher before automated candidate acquisition;
+- relevance passes at 16/20 or higher before retrieval quality is marked
+  validated; exact user-approved local acquisition remains available while the
+  gate is `UNKNOWN` or `FAIL`;
 - three no-write topic discovery probes return at least five plausible distinct
   candidates per subject, or the local provider is rejected;
 - five full-corpus refresh measurements determine whether incremental indexing
@@ -525,7 +571,7 @@ reverts unrelated files.
 
 ## 17. Acceptance Criteria
 
-The cumulative research workflow is complete when all of these conditions hold:
+The implementation is complete when all of these conditions hold:
 
 - every research start records a durable session;
 - local assessment performs no network access;
@@ -541,8 +587,12 @@ The cumulative research workflow is complete when all of these conditions hold:
 - source catalogue and generated dossier provenance remain separate;
 - versioned dossiers contain no absolute local paths or secrets;
 - existing tests and all new tests pass;
-- the human relevance gate reaches at least 16/20;
-- fresh Claude Code and Codex sessions demonstrate the same workflow.
+- gate artifacts report `PASS`, `FAIL`, or `UNKNOWN` without changing the
+  explicit approval boundaries.
+
+Global activation is complete only when the human relevance gate reaches at
+least 16/20, refresh performance is measured, discovery probes pass, and fresh
+Claude Code and Codex sessions demonstrate the same workflow.
 
 ## 18. Explicitly Deferred Work
 
