@@ -1,0 +1,49 @@
+tests/research/test_store.py
+  s_0a442347250965::t_33e79a2e348340 301-327,384,386-392,423-424,426-427
+  s_0a442347250965::t_b5a266b0e1dc18 385,420-422
+  s_0a442347250965::t_72aa25be12fd23 23-27,250-252,265-300,372,382-383,393-419,425,428-450
+  s_d00f706886252a::t_14fa0d6914643a 451-452
+src/yt_insights/research/store.py
+  s_0a442347250965::t_ed0c67497fafb1 739-740,758
+  s_0a442347250965::t_dc7c4755cd7cdf 722,735,738
+  s_0a442347250965::t_c034929df6a286 15,17,172-186,708-709,711-721,723-726,734,736-737,741-757,759-778
+  s_0a442347250965::t_f1526491b64d88 727-733
+tests/web/test_application.py
+  s_0a442347250965::t_0ef27d8a3ff86e 22-23,136,166,722-727
+  s_0a442347250965::t_f089e612a701d7 3-4,26,378-419,753-861
+  s_0ec99a6f0a98af::t_ceb8f2c96beda7 862-863
+src/yt_insights/web/application.py
+  s_0a442347250965::t_2609bcbb121d4d 19,563-566
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "bfdb19e40709c19069b4080545889ca149137624",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_0ec99a6f0a98af": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05a11-ab47-7c03-98c3-d1024ae27e9c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_d00f706886252a": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05978-0217-70e3-9f15-f91549dba1ca",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
