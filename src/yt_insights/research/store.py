@@ -128,6 +128,11 @@ _SCHEMA_INDEXES = {
 
 _CASCADE_SESSION_FOREIGN_KEY_TABLES = frozenset({"research_queries", "research_languages", "research_assessments", "research_candidates", "research_decisions", "research_acquisition_attempts", "research_events"})
 
+_SCHEMA_SQL = {
+    statement.split("TABLE ", 1)[1].split("(", 1)[0].strip(): re.sub(r"\s+", " ", statement).strip().casefold()
+    for statement in _SCHEMA
+}
+
 
 class ResearchStore:
     """Own a portable SQLite file and enforce workflow transitions atomically."""
@@ -251,8 +256,8 @@ class ResearchStore:
             return tuple(_candidate_from_json(row[0]) for row in rows)
 
     def approve_candidates(self, session_id: str, *, expected_revision: int, video_ids: tuple[str, ...], idempotency_key: str) -> ResearchSession:
-        if not isinstance(video_ids, tuple) or not video_ids or len(set(video_ids)) != len(video_ids):
-            raise ValueError("video IDs must be a non-empty tuple without duplicates")
+        if not isinstance(video_ids, tuple) or not 1 <= len(video_ids) <= 5 or len(set(video_ids)) != len(video_ids):
+            raise ValueError("video IDs must contain between 1 and 5 unique values")
         payload = {"video_ids": list(video_ids)}
         def operation(connection: sqlite3.Connection) -> ResearchSession:
             replayed = self._idempotent_decision(connection, idempotency_key, session_id, expected_revision, "approve_candidates", payload)
@@ -434,6 +439,9 @@ class ResearchStore:
         if versions != [_SCHEMA_VERSION] or tables != set(_SCHEMA_COLUMNS):
             raise ValueError("database schema is unsupported")
         for table, expected_columns in _SCHEMA_COLUMNS.items():
+            table_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)).fetchone()
+            if table_sql is None or re.sub(r"\s+", " ", table_sql[0]).strip().casefold() != _SCHEMA_SQL[table]:
+                raise ValueError("database schema is unsupported")
             columns = tuple((row[1], row[2], row[3], row[5]) for row in connection.execute(f"PRAGMA table_info({table})"))
             indexes = set()
             for index in connection.execute(f"PRAGMA index_list({table})"):
@@ -499,12 +507,51 @@ class ResearchStore:
         if row is None:
             return None
         stored = json.loads(row["payload_json"])
-        if row["session_id"] != session_id or row["expected_revision"] != expected_revision or row["action"] != action or stored.get("request") != payload:
+        if row["session_id"] != session_id or row["expected_revision"] != expected_revision or row["action"] != action:
+            raise ValueError("idempotency key payload differs")
+        if "request" not in stored:
+            if stored != payload:
+                raise ValueError("idempotency key payload differs")
+            return self._legacy_decision_result(connection, row)
+        if stored.get("request") != payload:
             raise ValueError("idempotency key payload differs")
         result = stored.get("result")
         if not isinstance(result, dict):
             raise ValueError("stored decision result is invalid")
         return _session_from_payload(result)
+
+    def _legacy_decision_result(self, connection: sqlite3.Connection, decision: sqlite3.Row) -> ResearchSession:
+        target_revision = decision["expected_revision"] + 1
+        revision = 0
+        event_row: sqlite3.Row | None = None
+        for event in connection.execute("SELECT from_state, to_state, event_code, created_at FROM research_events WHERE session_id = ? ORDER BY event_id", (decision["session_id"],)):
+            if event["from_state"] is not None and event["from_state"] != event["to_state"]:
+                revision += 1
+            if revision == target_revision:
+                event_row = event
+                break
+        if event_row is None or event_row["event_code"] != decision["action"]:
+            raise ValueError("legacy decision result is unavailable")
+        current = self._session(connection, decision["session_id"])
+        target = ResearchState(event_row["to_state"])
+        action = {
+            ResearchState.AWAITING_SUFFICIENCY: RequiredUserAction.CONFIRM_SUFFICIENCY_OR_REFRESH,
+            ResearchState.AWAITING_CANDIDATES: RequiredUserAction.APPROVE_CANDIDATES_OR_CANCEL,
+        }.get(target)
+        return ResearchSession(
+            session_id=current.session_id,
+            topic=current.topic,
+            queries=current.queries,
+            languages=current.languages,
+            freshness_profile=current.freshness_profile,
+            discovery_fingerprint=current.discovery_fingerprint,
+            state=target,
+            required_user_action=action,
+            revision=target_revision,
+            retry_target=None,
+            created_at=current.created_at,
+            updated_at=_datetime(event_row["created_at"]),
+        )
 
     def _candidate_revision(self, connection: sqlite3.Connection, session_id: str) -> int:
         row = connection.execute("SELECT MAX(snapshot_revision) FROM research_candidates WHERE session_id = ?", (session_id,)).fetchone()

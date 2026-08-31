@@ -73,14 +73,14 @@ def _assessment() -> ResearchAssessment:
     )
 
 
-def _candidate(*, status: CandidateStatus = CandidateStatus.CANDIDATE) -> ResearchCandidate:
+def _candidate(*, video_id: str = VIDEO_ID, status: CandidateStatus = CandidateStatus.CANDIDATE) -> ResearchCandidate:
     return ResearchCandidate(
-        video_id=VIDEO_ID,
+        video_id=video_id,
         title="Local inference",
         channel_id="channel-1",
         channel_title="Channel",
         published_at=date(2026, 8, 30),
-        watch_url=WATCH_URL,
+        watch_url=f"https://www.youtube.com/watch?v={video_id}",
         matched_queries=("local LLM inference",),
         original_rank=1,
         status=status,
@@ -149,6 +149,27 @@ def test_idempotent_decision_replay_returns_its_committed_result_after_progress(
     assert store.get_session(SESSION_ID).state is ResearchState.AWAITING_CANDIDATES
 
 
+def test_legacy_raw_decision_payload_replays_its_historical_result(tmp_path: object) -> None:
+    """A v1 raw request row must replay the original transition after later progress."""
+    store = _store(tmp_path)
+    _create(store)
+    store.record_assessment(SESSION_ID, expected_revision=0, assessment=_assessment())
+    committed = store.decide_sufficiency(SESSION_ID, expected_revision=1, sufficient=False, idempotency_key="legacy-refresh")
+    store.record_candidates(SESSION_ID, expected_revision=2, candidates=(_candidate(),), provider_name="p", provider_version=1, errors=())
+    database = tmp_path / "research.sqlite3"
+    with sqlite3.connect(database) as connection:  # type: ignore[arg-type]
+        connection.execute("UPDATE research_decisions SET payload_json = ? WHERE idempotency_key = ?", ('{"sufficient":false}', "legacy-refresh"))
+    legacy_store = ResearchStore(database, now=lambda: NOW)  # type: ignore[arg-type]
+
+    replayed = legacy_store.decide_sufficiency(SESSION_ID, expected_revision=1, sufficient=False, idempotency_key="legacy-refresh")
+
+    assert replayed == committed
+    assert replayed.state is ResearchState.DISCOVERING
+    assert replayed.revision == 2
+    with pytest.raises(ValueError, match="idempotency"):
+        legacy_store.decide_sufficiency(SESSION_ID, expected_revision=1, sufficient=True, idempotency_key="legacy-refresh")
+
+
 def test_sufficient_assessment_completes_without_discovery(tmp_path: object) -> None:
     """Changing the sufficient branch must not enter discovery."""
     store = _store(tmp_path)
@@ -210,6 +231,21 @@ def test_candidate_acquisition_and_reindexing_lifecycle_is_durable(tmp_path: obj
         ResearchState.REINDEXING,
         ResearchState.ASSESSING,
     ]
+
+
+def test_approve_candidates_rejects_more_than_five_ids(tmp_path: object) -> None:
+    """Approving six discoveries must fail before acquisition can start."""
+    store = _store(tmp_path)
+    _create(store)
+    store.record_assessment(SESSION_ID, expected_revision=0, assessment=_assessment())
+    store.decide_sufficiency(SESSION_ID, expected_revision=1, sufficient=False, idempotency_key="refresh")
+    video_ids = tuple(f"vid0000000{number}" for number in range(1, 7))
+    store.record_candidates(SESSION_ID, expected_revision=2, candidates=tuple(_candidate(video_id=video_id) for video_id in video_ids), provider_name="p", provider_version=1, errors=())
+
+    with pytest.raises(ValueError, match="between 1 and 5"):
+        store.approve_candidates(SESSION_ID, expected_revision=3, video_ids=video_ids, idempotency_key="approve-six")
+
+    assert store.get_session(SESSION_ID).state is ResearchState.AWAITING_CANDIDATES
 
 
 def test_invalid_transition_has_no_persisted_side_effect(tmp_path: object) -> None:
@@ -282,6 +318,28 @@ def test_existing_v1_schema_with_missing_unique_and_foreign_key_is_rejected(tmp_
                 query_text TEXT NOT NULL, normalized_query TEXT NOT NULL
             )"""
         )
+
+    with pytest.raises(ValueError, match="schema"):
+        ResearchStore(database)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    "replacement",
+    [
+        "topic TEXT NOT NULL CHECK (length(topic) > 0)",
+        "topic TEXT NOT NULL DEFAULT ''",
+    ],
+)
+def test_existing_v1_schema_with_hostile_table_sql_is_rejected(tmp_path: object, replacement: str) -> None:
+    """A changed CHECK or DEFAULT is incompatible even when PRAGMA columns match."""
+    store = _store(tmp_path)
+    database = tmp_path / "research.sqlite3"
+    del store
+    with sqlite3.connect(database) as connection:  # type: ignore[arg-type]
+        original_sql = connection.execute("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'research_sessions'").fetchone()[0]
+        connection.execute("PRAGMA foreign_keys=OFF")
+        connection.execute("DROP TABLE research_sessions")
+        connection.execute(original_sql.replace("topic TEXT NOT NULL", replacement))
 
     with pytest.raises(ValueError, match="schema"):
         ResearchStore(database)  # type: ignore[arg-type]
