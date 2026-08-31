@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -125,6 +126,8 @@ class FakeStore:
         self.session = _session()
         self.missing = False
         self.error: Exception | None = None
+        self.history = SimpleNamespace(decisions=(), acquisition_attempts=())
+        self.history_calls: list[str] = []
 
     def list_sessions(self, *, limit: int, offset: int) -> tuple[ResearchSession, ...]:
         self.calls.append((limit, offset))
@@ -138,6 +141,10 @@ class FakeStore:
             raise ValueError("session does not exist")
         return self.session
 
+    def get_session_history(self, session_id: str) -> object:
+        self.history_calls.append(session_id)
+        return self.history
+
 
 class FakeExports:
     def list_exports(self, *, limit: int) -> dict[str, object]:
@@ -147,6 +154,7 @@ class FakeExports:
 class FakeWorkflow:
     def __init__(self) -> None:
         self.error: Exception | None = None
+        self.before_result: Callable[[], None] | None = None
         self.start_calls: list[
             tuple[str, tuple[str, ...], tuple[str, ...], FreshnessProfile]
         ] = []
@@ -159,6 +167,8 @@ class FakeWorkflow:
         self.export_calls: list[tuple[object, str]] = []
 
     def _result(self) -> FakeResponse:
+        if self.before_result is not None:
+            self.before_result()
         if self.error is not None:
             raise self.error
         return FakeResponse()
@@ -524,6 +534,123 @@ def test_unexpected_workflow_value_error_inside_job_is_operation_failed(
     assert result == {"schema_version": 1, "error": {"code": "operation_failed"}}
 
 
+def test_revision_race_inside_queued_work_is_stale_revision(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(state=ResearchState.DISCOVERING, revision=5)
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/discovery",
+            '{"expected_revision":5}',
+        )
+    )
+    services.workflow.before_result = lambda: setattr(
+        services.store,
+        "session",
+        _session(state=ResearchState.AWAITING_CANDIDATES, revision=6),
+    )
+    services.workflow.error = ValueError("private domain race")
+
+    result = services.jobs.submissions[0][1]()
+
+    assert response.status == 202
+    assert result == {"schema_version": 1, "error": {"code": "stale_revision"}}
+
+
+def test_state_race_inside_queued_work_is_workflow_conflict(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(state=ResearchState.DISCOVERING, revision=5)
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/discovery",
+            '{"expected_revision":5}',
+        )
+    )
+    services.workflow.before_result = lambda: setattr(
+        services.store,
+        "session",
+        _session(state=ResearchState.AWAITING_CANDIDATES, revision=5),
+    )
+    services.workflow.error = ValueError("private domain race")
+
+    result = services.jobs.submissions[0][1]()
+
+    assert response.status == 202
+    assert result == {
+        "schema_version": 1,
+        "error": {"code": "workflow_conflict"},
+    }
+
+
+def test_queued_acquisition_preserves_an_exact_durable_replay(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(
+        state=ResearchState.AWAITING_SUFFICIENCY,
+        revision=9,
+    )
+    services.store.history = SimpleNamespace(
+        decisions=(),
+        acquisition_attempts=(
+            SimpleNamespace(
+                idempotency_key="acquisition-1",
+                revision=6,
+                language="fr",
+                cookies_from_browser=None,
+                status="completed",
+            ),
+        ),
+    )
+
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/acquisition",
+            '{"expected_revision":6,"idempotency_key":"acquisition-1","language":"fr"}',
+        )
+    )
+
+    assert response.status == 202
+    result = services.jobs.submissions[0][1]()
+    assert result["session"]["revision"] == 5
+    assert services.workflow.acquisition_calls == [
+        (SESSION_ID, 6, "acquisition-1", "fr")
+    ]
+
+
+def test_queued_retry_preserves_an_exact_durable_replay(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(state=ResearchState.COMPLETED, revision=10)
+    services.store.history = SimpleNamespace(
+        acquisition_attempts=(),
+        decisions=(
+            SimpleNamespace(
+                idempotency_key="retry-1",
+                action="retry",
+                payload_json=json.dumps(
+                    {
+                        "request": {"expected_revision": 7},
+                        "result": {"session_id": SESSION_ID},
+                    }
+                ),
+            ),
+        ),
+    )
+
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/retry",
+            '{"expected_revision":7,"idempotency_key":"retry-1"}',
+        )
+    )
+
+    assert response.status == 202
+    result = services.jobs.submissions[0][1]()
+    assert result["session"]["revision"] == 5
+    assert services.workflow.retry_calls == [(SESSION_ID, 7, "retry-1")]
+
+
 def test_missing_or_incompatible_queued_session_fails_before_submission(
     services: SimpleNamespace,
 ) -> None:
@@ -552,7 +679,7 @@ def test_missing_or_incompatible_queued_session_fails_before_submission(
     assert services.jobs.submissions == []
 
 
-def test_missing_or_stale_synchronous_mutation_fails_before_workflow(
+def test_missing_synchronous_mutation_skips_workflow_and_stale_is_reclassified(
     services: SimpleNamespace,
 ) -> None:
     services.store.missing = True
@@ -567,6 +694,7 @@ def test_missing_or_stale_synchronous_mutation_fails_before_workflow(
     services.store.session = _session(
         state=ResearchState.AWAITING_SUFFICIENCY, revision=6
     )
+    services.workflow.error = ValueError("private stale detail")
     stale = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/decisions",
@@ -579,7 +707,9 @@ def test_missing_or_stale_synchronous_mutation_fails_before_workflow(
     assert missing.json_body["error"] == {"code": "not_found"}
     assert stale.status == 409
     assert stale.json_body["error"] == {"code": "stale_revision"}
-    assert services.workflow.decision_calls == []
+    assert services.workflow.decision_calls == [
+        (SESSION_ID, 5, "refresh", "decision-1")
+    ]
 
 
 def test_missing_session_and_unexpected_store_value_error_are_distinct(
@@ -632,6 +762,108 @@ def test_unexpected_synchronous_workflow_value_error_is_internal(
         "error": {"code": "internal_error"},
     }
     assert b"/Users/private" not in response.body
+
+
+def test_synchronous_wrong_state_is_workflow_conflict(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(state=ResearchState.DISCOVERING, revision=5)
+    services.workflow.error = ValueError("session is in another state")
+
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/decisions",
+            '{"expected_revision":5,"decision":"refresh",'
+            '"idempotency_key":"decision-1"}',
+        )
+    )
+
+    assert response.status == 409
+    assert response.json_body == {
+        "schema_version": 1,
+        "error": {"code": "workflow_conflict"},
+    }
+
+
+def test_synchronous_post_preflight_revision_race_is_stale(
+    services: SimpleNamespace,
+) -> None:
+    services.workflow.before_result = lambda: setattr(
+        services.store,
+        "session",
+        _session(state=ResearchState.DISCOVERING, revision=6),
+    )
+    services.workflow.error = ValueError("private domain race")
+
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/decisions",
+            '{"expected_revision":5,"decision":"refresh",'
+            '"idempotency_key":"decision-1"}',
+        )
+    )
+
+    assert response.status == 409
+    assert response.json_body["error"] == {"code": "stale_revision"}
+
+
+def test_synchronous_post_preflight_state_race_is_workflow_conflict(
+    services: SimpleNamespace,
+) -> None:
+    services.workflow.before_result = lambda: setattr(
+        services.store,
+        "session",
+        _session(state=ResearchState.DISCOVERING, revision=5),
+    )
+    services.workflow.error = ValueError("private domain race")
+
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/decisions",
+            '{"expected_revision":5,"decision":"refresh",'
+            '"idempotency_key":"decision-1"}',
+        )
+    )
+
+    assert response.status == 409
+    assert response.json_body["error"] == {"code": "workflow_conflict"}
+
+
+def test_synchronous_decision_allows_the_domain_to_authorize_exact_replay(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(
+        state=ResearchState.AWAITING_CANDIDATES,
+        revision=7,
+    )
+
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/decisions",
+            '{"expected_revision":5,"decision":"refresh",'
+            '"idempotency_key":"decision-1"}',
+        )
+    )
+
+    assert response.status == 200
+    assert services.workflow.decision_calls == [
+        (SESSION_ID, 5, "refresh", "decision-1")
+    ]
+
+
+def test_export_wrong_state_is_workflow_conflict(services: SimpleNamespace) -> None:
+    services.store.session = _session(state=ResearchState.ACQUIRING, revision=5)
+    services.workflow.error = ValueError("not exportable")
+
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/exports",
+            '{"force":false}',
+        )
+    )
+
+    assert response.status == 409
+    assert response.json_body["error"] == {"code": "workflow_conflict"}
 
 
 def test_session_creation_replays_same_key_and_rejects_changed_payload(

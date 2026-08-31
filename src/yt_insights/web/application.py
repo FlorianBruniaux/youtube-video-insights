@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 import sqlite3
@@ -10,7 +11,7 @@ from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Protocol, TypeVar, runtime_checkable
 
 from yt_insights.catalog import CatalogError
 from yt_insights.research.dossier import DossierExportRequest, DossierExportResult
@@ -60,7 +61,9 @@ _SESSION_ACTION_ROUTE = re.compile(
 )
 _JOB_ROUTE = re.compile(r"/api/v1/jobs/([^/]+)")
 _MAX_REPLAY_RECORDS = 100
+_DECISION_STATES = frozenset({ResearchState.AWAITING_SUFFICIENCY})
 _DISCOVERY_STATES = frozenset({ResearchState.DISCOVERING})
+_APPROVAL_STATES = frozenset({ResearchState.AWAITING_CANDIDATES})
 _ACQUISITION_STATES = frozenset({ResearchState.ACQUIRING})
 _RETRY_STATES = frozenset(
     {
@@ -71,6 +74,14 @@ _RETRY_STATES = frozenset(
         ResearchState.AWAITING_SUFFICIENCY,
     }
 )
+_EXPORT_STATES = frozenset(
+    {
+        ResearchState.AWAITING_SUFFICIENCY,
+        ResearchState.AWAITING_CANDIDATES,
+        ResearchState.COMPLETED,
+    }
+)
+_T = TypeVar("_T")
 
 
 class ResourceNotFound(Exception):
@@ -342,15 +353,16 @@ class WebApplication:
         action = match.group(2)
         if action == "decisions":
             parsed_decision = parse_decision(request.body)
-            self._require_session_revision(
+            response = self._synchronous_research_operation(
                 session_id,
                 expected_revision=parsed_decision.expected_revision,
-            )
-            response = self._workflow.decide(
-                session_id,
-                expected_revision=parsed_decision.expected_revision,
-                decision=parsed_decision.decision,
-                idempotency_key=parsed_decision.idempotency_key,
+                compatible_states=_DECISION_STATES,
+                operation=lambda: self._workflow.decide(
+                    session_id,
+                    expected_revision=parsed_decision.expected_revision,
+                    decision=parsed_decision.decision,
+                    idempotency_key=parsed_decision.idempotency_key,
+                ),
             )
             return WebResponse.json(200, response.to_dict())
         if action == "discovery":
@@ -366,15 +378,16 @@ class WebApplication:
             )
         if action == "approvals":
             parsed_approval = parse_approval(request.body)
-            self._require_session_revision(
+            response = self._synchronous_research_operation(
                 session_id,
                 expected_revision=parsed_approval.expected_revision,
-            )
-            response = self._workflow.approve(
-                session_id,
-                expected_revision=parsed_approval.expected_revision,
-                video_ids=parsed_approval.video_ids,
-                idempotency_key=parsed_approval.idempotency_key,
+                compatible_states=_APPROVAL_STATES,
+                operation=lambda: self._workflow.approve(
+                    session_id,
+                    expected_revision=parsed_approval.expected_revision,
+                    video_ids=parsed_approval.video_ids,
+                    idempotency_key=parsed_approval.idempotency_key,
+                ),
             )
             return WebResponse.json(200, response.to_dict())
         if action == "acquisition":
@@ -385,6 +398,12 @@ class WebApplication:
                 parsed_acquisition.expected_revision,
                 _ACQUISITION_STATES,
                 lambda: self._workflow.acquire(
+                    session_id,
+                    expected_revision=parsed_acquisition.expected_revision,
+                    idempotency_key=parsed_acquisition.idempotency_key,
+                    language=parsed_acquisition.language,
+                ),
+                replay=lambda: self._is_acquisition_replay(
                     session_id,
                     expected_revision=parsed_acquisition.expected_revision,
                     idempotency_key=parsed_acquisition.idempotency_key,
@@ -403,15 +422,24 @@ class WebApplication:
                     expected_revision=parsed_retry.expected_revision,
                     idempotency_key=parsed_retry.idempotency_key,
                 ),
+                replay=lambda: self._is_retry_replay(
+                    session_id,
+                    expected_revision=parsed_retry.expected_revision,
+                    idempotency_key=parsed_retry.idempotency_key,
+                ),
             )
         parsed_export = parse_export(request.body)
         request_factory = self._export_request_factory
         if request_factory is None:
             return _error(503, "exports_unavailable")
-        self._require_session(session_id)
-        result = self._workflow.export(
-            request_factory(session_id, parsed_export.force),
-            package_version=self._package_version,
+        result = self._synchronous_research_operation(
+            session_id,
+            expected_revision=None,
+            compatible_states=_EXPORT_STATES,
+            operation=lambda: self._workflow.export(
+                request_factory(session_id, parsed_export.force),
+                package_version=self._package_version,
+            ),
         )
         return WebResponse.json(
             200,
@@ -428,20 +456,31 @@ class WebApplication:
         expected_revision: int,
         compatible_states: frozenset[ResearchState],
         operation: Callable[[], ResearchResponse],
+        replay: Callable[[], bool] | None = None,
     ) -> WebResponse:
-        self._require_session_state(
+        self._require_session_state_or_replay(
             session_id,
             expected_revision=expected_revision,
             compatible_states=compatible_states,
+            replay=replay,
         )
 
         def guarded_operation() -> Mapping[str, object]:
             try:
-                self._require_session_state(
+                self._require_session_state_or_replay(
                     session_id,
                     expected_revision=expected_revision,
                     compatible_states=compatible_states,
+                    replay=replay,
                 )
+            except ResearchRevisionConflict:
+                return _job_error("stale_revision")
+            except ResourceNotFound:
+                return _job_error("not_found")
+            except WorkflowConflict:
+                return _job_error("workflow_conflict")
+
+            try:
                 return operation().to_dict()
             except ResearchRevisionConflict:
                 return _job_error("stale_revision")
@@ -450,9 +489,130 @@ class WebApplication:
             except WorkflowConflict:
                 return _job_error("workflow_conflict")
             except ValueError:
-                return _job_error("operation_failed")
+                return self._queued_workflow_value_error(
+                    session_id,
+                    expected_revision=expected_revision,
+                    compatible_states=compatible_states,
+                )
 
         return self._queued(kind, guarded_operation)
+
+    def _require_session_state_or_replay(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        compatible_states: frozenset[ResearchState],
+        replay: Callable[[], bool] | None,
+    ) -> None:
+        try:
+            self._require_session_state(
+                session_id,
+                expected_revision=expected_revision,
+                compatible_states=compatible_states,
+            )
+        except (ResearchRevisionConflict, WorkflowConflict):
+            if replay is None or not replay():
+                raise
+
+    def _is_acquisition_replay(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+        language: str,
+    ) -> bool:
+        history = self._research_store.get_session_history(session_id)
+        return any(
+            attempt.idempotency_key == idempotency_key
+            and attempt.revision == expected_revision
+            and attempt.language == language
+            and attempt.cookies_from_browser is None
+            and attempt.status in {"running", "failed_retryable", "completed"}
+            for attempt in history.acquisition_attempts
+        )
+
+    def _is_retry_replay(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+    ) -> bool:
+        history = self._research_store.get_session_history(session_id)
+        for decision in history.decisions:
+            if (
+                decision.idempotency_key != idempotency_key
+                or decision.action != "retry"
+            ):
+                continue
+            try:
+                payload = json.loads(decision.payload_json)
+            except json.JSONDecodeError:
+                return False
+            return isinstance(payload, dict) and payload.get("request") == {
+                "expected_revision": expected_revision
+            }
+        return False
+
+    def _synchronous_research_operation(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int | None,
+        compatible_states: frozenset[ResearchState],
+        operation: Callable[[], _T],
+    ) -> _T:
+        self._require_session(session_id)
+        try:
+            return operation()
+        except ResearchRevisionConflict:
+            raise
+        except ValueError as exc:
+            code = self._workflow_value_error_code(
+                session_id,
+                expected_revision=expected_revision,
+                compatible_states=compatible_states,
+            )
+            if code == "stale_revision":
+                raise ResearchRevisionConflict() from exc
+            if code == "workflow_conflict":
+                raise WorkflowConflict() from exc
+            raise
+
+    def _queued_workflow_value_error(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        compatible_states: frozenset[ResearchState],
+    ) -> Mapping[str, object]:
+        try:
+            code = self._workflow_value_error_code(
+                session_id,
+                expected_revision=expected_revision,
+                compatible_states=compatible_states,
+            )
+        except ResourceNotFound:
+            return _job_error("not_found")
+        except (ValueError, sqlite3.Error):
+            return _job_error("operation_failed")
+        return _job_error(code or "operation_failed")
+
+    def _workflow_value_error_code(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int | None,
+        compatible_states: frozenset[ResearchState],
+    ) -> str | None:
+        session = self._require_session(session_id)
+        if expected_revision is not None and session.revision != expected_revision:
+            return "stale_revision"
+        if session.state not in compatible_states:
+            return "workflow_conflict"
+        return None
 
     def _require_session_state(
         self,
