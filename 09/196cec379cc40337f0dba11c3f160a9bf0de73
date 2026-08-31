@@ -1,0 +1,22 @@
+tests/research/test_end_to_end.py
+  s_0a442347250965::t_011a735df20990 517
+  s_0a442347250965::t_9ca92cd3025e74 1-450,458-494,509-516,523-638,640-731
+  s_0a442347250965::t_6d7acb11e37e7d 451-457,495-508,518-522
+  s_0a442347250965::t_fea68aac3ab552 639
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "09196cec379cc40337f0dba11c3f160a9bf0de73",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
