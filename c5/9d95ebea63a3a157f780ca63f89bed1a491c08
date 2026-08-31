@@ -1,0 +1,59 @@
+docs/claude-code.md
+  s_0a442347250965::t_fd21218093b8cb 50-61,72,79-81
+  s_95392a6b844626::t_34496ebaccb927 82
+plans/specs/AGENT-PLATFORM.md
+  s_0a442347250965::t_fd21218093b8cb 49-57,95-100
+ROADMAP.md
+  s_0a442347250965::t_e201c426ed7c65 28
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_e201c426ed7c65 26-27,31,52,56,62-67
+  s_0a442347250965::t_ca5addf00a5fd9 121-125
+  s_0df90997879182::t_a0ff544e4aa13f 68
+README.md
+  s_0a442347250965::t_1a22cadbe9a1c4 101-102,105-106,593-598,612-614,617-619
+  s_0a442347250965::t_45669bbdeea3e0 39
+  s_0df90997879182::t_980b7c20503cd3 620
+CHANGELOG.md
+  s_0a442347250965::t_d3927236524ba8 22-27
+llms.txt
+  s_0a442347250965::t_ca5addf00a5fd9 170-173
+  s_0a442347250965::t_d3927236524ba8 40,52-59
+INSTALL.md
+  s_0a442347250965::t_83acecbddfc943 188-198,227-229
+docs/assets/cumulative-research-workflow.mmd
+  s_0a442347250965::t_e201c426ed7c65 9-10,13-14
+plans/PARALLEL-SESSIONS.md
+  s_0a442347250965::t_45669bbdeea3e0 53,61
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "c59d95ebea63a3a157f780ca63f89bed1a491c08",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_0df90997879182": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd73a-588d-7f03-ab50-494ca0e95848",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_95392a6b844626": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04821-7023-7112-aeb8-f4aa59348ce9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
