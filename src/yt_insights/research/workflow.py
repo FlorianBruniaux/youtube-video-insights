@@ -229,9 +229,12 @@ class ResearchWorkflow:
         expected_revision: int,
         idempotency_key: str,
     ) -> ResearchResponse:
-        """Cancel a session only while it awaits candidate approval."""
+        """Cancel candidate approval, or replay its exact prior cancellation."""
         session = self._store.get_session(session_id)
-        if session.state is not ResearchState.AWAITING_CANDIDATES:
+        if session.state not in {
+            ResearchState.AWAITING_CANDIDATES,
+            ResearchState.CANCELLED,
+        }:
             raise ValueError("session is not awaiting candidate approval")
         session = self._store.cancel(
             session_id,

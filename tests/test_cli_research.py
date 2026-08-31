@@ -336,7 +336,7 @@ def test_research_approve_rejects_unknown_and_stale_candidate_selection(
     }
 
 
-def test_research_cancel_accepts_only_the_waiting_candidate_state(
+def test_research_cancel_replays_only_the_original_candidate_decision(
     tmp_path, monkeypatch
 ) -> None:
     _configure_discovery_workflow(tmp_path, monkeypatch, (_candidate("zyx987WVUT0"),))
@@ -356,9 +356,56 @@ def test_research_cancel_accepts_only_the_waiting_candidate_state(
             "--json",
         ],
     )
+    replayed = runner.invoke(
+        cli,
+        [
+            "research",
+            "cancel",
+            session_id,
+            "--revision",
+            "3",
+            "--idempotency-key",
+            "cancel-key",
+            "--json",
+        ],
+    )
+    changed_payload = runner.invoke(
+        cli,
+        [
+            "research",
+            "cancel",
+            session_id,
+            "--revision",
+            "4",
+            "--idempotency-key",
+            "cancel-key",
+            "--json",
+        ],
+    )
+    new_key = runner.invoke(
+        cli,
+        [
+            "research",
+            "cancel",
+            session_id,
+            "--revision",
+            "4",
+            "--idempotency-key",
+            "different-cancel-key",
+            "--json",
+        ],
+    )
 
     assert cancelled.exit_code == 0, cancelled.output
     assert json.loads(cancelled.output)["session"]["state"] == "cancelled"
+    assert replayed.exit_code == 0, replayed.output
+    assert json.loads(replayed.output) == json.loads(cancelled.output)
+    for rejected in (changed_payload, new_key):
+        assert rejected.exit_code == 1
+        assert json.loads(rejected.output) == {
+            "error": {"code": "research_candidate_decision_unavailable"},
+            "schema_version": 1,
+        }
 
 
 def test_research_cancel_rejects_sufficiency_confirmation_state(

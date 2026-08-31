@@ -309,6 +309,54 @@ def test_cancel_rejects_the_sufficiency_confirmation_state(tmp_path) -> None:
         )
 
 
+def test_cancel_replays_only_the_original_candidate_decision(tmp_path) -> None:
+    candidate = _candidate()
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        FakeDiscoveryProvider(DiscoveryResult("yt-dlp", 1, (candidate,), (), True)),
+    )
+    workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=(),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="refresh",
+        idempotency_key="refresh-key",
+    )
+    workflow.discover(SESSION_ID, expected_revision=2)
+
+    cancelled = workflow.cancel(
+        SESSION_ID,
+        expected_revision=3,
+        idempotency_key="cancel-key",
+    )
+    replayed = workflow.cancel(
+        SESSION_ID,
+        expected_revision=3,
+        idempotency_key="cancel-key",
+    )
+
+    assert cancelled.to_dict()["session"]["state"] == "cancelled"
+    assert replayed.to_dict()["session"] == cancelled.to_dict()["session"]
+    with pytest.raises(ValueError, match="idempotency"):
+        workflow.cancel(
+            SESSION_ID,
+            expected_revision=4,
+            idempotency_key="cancel-key",
+        )
+    with pytest.raises(ValueError, match="transition"):
+        workflow.cancel(
+            SESSION_ID,
+            expected_revision=4,
+            idempotency_key="different-cancel-key",
+        )
+
+
 def test_candidates_approve_and_cancel_use_current_snapshot_and_revision(tmp_path) -> None:
     candidate = _candidate()
     provider = FakeDiscoveryProvider(
