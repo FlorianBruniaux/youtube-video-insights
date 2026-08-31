@@ -9,7 +9,7 @@ import stat
 import os
 import tempfile
 from dataclasses import asdict, dataclass
-from enum import Enum
+from enum import Enum, StrEnum
 from pathlib import Path
 from typing import Any, Callable, Iterable
 from urllib.parse import parse_qs, urlparse
@@ -43,6 +43,27 @@ class SourceKind(str, Enum):
     PLAYLIST = "playlist"
     CHANNEL = "channel"
     BATCH = "batch"
+
+
+class AcquisitionItemStatus(StrEnum):
+    ACQUIRED = "acquired"
+    ALREADY_PRESENT = "already_present"
+    NO_TRANSCRIPT = "no_transcript"
+    FAILED_RETRYABLE = "failed_retryable"
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionItemReport:
+    video_id: str
+    status: AcquisitionItemStatus
+    error_code: str | None = None
+    source_sha256: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class IndexRefreshReport:
+    catalog_published: bool
+    search_published: bool
 
 
 @dataclass(frozen=True)
@@ -84,6 +105,7 @@ class AcquisitionReport:
     insights_ready: int
     failures: tuple[str, ...]
     exclusions: tuple[str, ...] = ()
+    items: tuple[AcquisitionItemReport, ...] = ()
 
     @property
     def exit_code(self) -> int:
@@ -97,6 +119,15 @@ class AcquisitionReport:
         payload = asdict(self)
         payload["failures"] = list(self.failures)
         payload["exclusions"] = list(self.exclusions)
+        payload["items"] = [
+            {
+                "video_id": item.video_id,
+                "status": item.status.value,
+                "error_code": item.error_code,
+                "source_sha256": item.source_sha256,
+            }
+            for item in self.items
+        ]
         payload["exit_code"] = self.exit_code
         return payload
 
@@ -614,20 +645,42 @@ def _validate_published_search_pair(
     SQLiteFtsIndex(destination / database_name).status()
 
 
-def _refresh_indexes(plan: AcquisitionPlan) -> None:
+def _remove_regular_at(parent_fd: int, name: str) -> None:
+    """Remove one confined regular file and fsync its held parent directory."""
+    try:
+        details = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    if not stat.S_ISREG(details.st_mode):
+        raise ValueError(f"rollback target is not a regular file: {name}")
+    os.unlink(name, dir_fd=parent_fd)
+    os.fsync(parent_fd)
+
+
+def _require_absent_at(parent_fd: int, name: str) -> None:
+    try:
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    raise RuntimeError(f"database rollback did not remove active file: {name}")
+
+
+def rebuild_and_publish_indexes(data_paths: DataPaths) -> IndexRefreshReport:
     """Build both SQLite databases privately and publish via held parent dirfds."""
     from .catalog import Catalog, catalog_writer_lock
     from .search.corpus import scan_corpus
     from .search.sqlite_fts import SQLiteFtsIndex
 
-    catalog_path = plan.data_paths.catalog_database
-    search_path = plan.data_paths.search_database
+    _validate_confined_file_target(data_paths.catalog_database, data_paths.root)
+    _validate_confined_file_target(data_paths.search_database, data_paths.root)
+    catalog_path = data_paths.catalog_database
+    search_path = data_paths.search_database
     with (
         _confined_directory(
-            plan.data_paths.root, catalog_path.parent, create=True
+            data_paths.root, catalog_path.parent, create=True
         ) as catalog_parent_fd,
         _confined_directory(
-            plan.data_paths.root, search_path.parent, create=True
+            data_paths.root, search_path.parent, create=True
         ) as search_parent_fd,
         tempfile.TemporaryDirectory(prefix="yt-insights-indexes-") as staging_name,
     ):
@@ -652,13 +705,13 @@ def _refresh_indexes(plan: AcquisitionPlan) -> None:
 
             catalog = Catalog(staged_catalog)
             try:
-                catalog.import_corpus(plan.data_paths.root)
+                catalog.import_corpus(data_paths.root)
                 catalog.checkpoint()
             finally:
                 catalog.close()
             Catalog.validate_database(staged_catalog)
 
-            manifest = scan_corpus(plan.data_paths.root, limit=None)
+            manifest = scan_corpus(data_paths.root, limit=None)
             staged_index = SQLiteFtsIndex(staged_search)
             rebuilt = staged_index.rebuild(manifest)
             if staged_index.status() != rebuilt:
@@ -680,7 +733,7 @@ def _refresh_indexes(plan: AcquisitionPlan) -> None:
             )
 
             _require_directory_identity(
-                plan.data_paths.root, catalog_path.parent, catalog_parent_fd
+                data_paths.root, catalog_path.parent, catalog_parent_fd
             )
             _reject_nonempty_catalog_wal(catalog_parent_fd, catalog_path.name)
             try:
@@ -708,12 +761,18 @@ def _refresh_indexes(plan: AcquisitionPlan) -> None:
                         catalog_parent_fd, catalog_path.name, restored_catalog
                     )
                     Catalog.validate_database(restored_catalog)
+                    _reject_nonempty_catalog_wal(
+                        catalog_parent_fd, catalog_path.name
+                    )
+                else:
+                    _remove_regular_at(catalog_parent_fd, catalog_path.name)
+                    _require_absent_at(catalog_parent_fd, catalog_path.name)
                 raise ValueError(
                     "catalog post-publication validation failed"
                 ) from exc
 
             _require_directory_identity(
-                plan.data_paths.root, search_path.parent, search_parent_fd
+                data_paths.root, search_path.parent, search_parent_fd
             )
             pinned_receipt: _PinnedRegularFile | None = None
             database_published = False
@@ -723,7 +782,7 @@ def _refresh_indexes(plan: AcquisitionPlan) -> None:
                     search_parent_fd, receipt.name
                 )
                 _require_directory_identity(
-                    plan.data_paths.root, search_path.parent, search_parent_fd
+                    data_paths.root, search_path.parent, search_parent_fd
                 )
                 _replace_regular_file(
                     staged_search,
@@ -741,23 +800,46 @@ def _refresh_indexes(plan: AcquisitionPlan) -> None:
                     staging / "published-search",
                 )
             except Exception as exc:
-                if database_published and old_search is not None:
-                    _replace_regular_file(
-                        old_search, search_parent_fd, search_path.name
-                    )
-                    if (
-                        _snapshot_valid_search_pair(
-                            search_parent_fd,
-                            search_path.name,
-                            staging / "restored-search",
+                previous_pair = old_catalog is not None and old_search is not None
+                try:
+                    if previous_pair:
+                        _replace_regular_file(
+                            old_catalog, catalog_parent_fd, catalog_path.name
                         )
-                        is None
-                    ):
-                        raise RuntimeError(
-                            "search receipt/database rollback validation failed"
-                        ) from exc
-                if pinned_receipt is not None:
-                    _remove_pinned_name(search_parent_fd, pinned_receipt)
+                        if database_published:
+                            _replace_regular_file(
+                                old_search, search_parent_fd, search_path.name
+                            )
+                        restored_catalog_dir = staging / "restored-pair-catalog"
+                        restored_catalog_dir.mkdir()
+                        restored_catalog = restored_catalog_dir / catalog_path.name
+                        _copy_regular_at(
+                            catalog_parent_fd, catalog_path.name, restored_catalog
+                        )
+                        Catalog.validate_database(restored_catalog)
+                        _reject_nonempty_catalog_wal(
+                            catalog_parent_fd, catalog_path.name
+                        )
+                        if (
+                            _snapshot_valid_search_pair(
+                                search_parent_fd,
+                                search_path.name,
+                                staging / "restored-pair-search",
+                            )
+                            is None
+                        ):
+                            raise RuntimeError(
+                                "catalog/search rollback validation failed"
+                            ) from exc
+                    else:
+                        _remove_regular_at(catalog_parent_fd, catalog_path.name)
+                        _require_absent_at(catalog_parent_fd, catalog_path.name)
+                        if database_published:
+                            _remove_regular_at(search_parent_fd, search_path.name)
+                            _require_absent_at(search_parent_fd, search_path.name)
+                finally:
+                    if pinned_receipt is not None:
+                        _remove_pinned_name(search_parent_fd, pinned_receipt)
                 raise ValueError(
                     "search receipt/database publication validation failed: "
                     f"{type(exc).__name__}: {exc}"
@@ -765,6 +847,7 @@ def _refresh_indexes(plan: AcquisitionPlan) -> None:
             finally:
                 if pinned_receipt is not None:
                     pinned_receipt.close()
+    return IndexRefreshReport(catalog_published=True, search_published=True)
 
 
 def execute_acquisition(
@@ -782,6 +865,7 @@ def execute_acquisition(
         download = download_subtitles
     failures = [f"source ({plan.source}): {message}" for message in plan.discovery_errors]
     ready_by_id: dict[str, list[_VttSnapshot]] = {}
+    items: list[AcquisitionItemReport] = []
 
     for video, url in zip(plan.selected_videos, plan.selected_urls):
         try:
@@ -790,7 +874,15 @@ def execute_acquisition(
             )
         except ValueError as exc:
             failures.append(f"{video.video_id} ({video.title}): {exc}")
+            items.append(
+                AcquisitionItemReport(
+                    video.video_id,
+                    AcquisitionItemStatus.FAILED_RETRYABLE,
+                    error_code="cache_read_failed",
+                )
+            )
             continue
+        already_present = bool(cached)
         result = DownloadResult(vtt_files=[snapshot.path for snapshot in cached])
         if not cached:
             try:
@@ -809,6 +901,13 @@ def execute_acquisition(
             )
         except ValueError as exc:
             failures.append(f"{video.video_id} ({video.title}): {exc}")
+            items.append(
+                AcquisitionItemReport(
+                    video.video_id,
+                    AcquisitionItemStatus.FAILED_RETRYABLE,
+                    error_code="cache_read_failed",
+                )
+            )
             continue
         if ready:
             ready_by_id[video.video_id] = ready
@@ -818,6 +917,27 @@ def execute_acquisition(
         if diagnostics or not ready:
             details = "; ".join(diagnostics) or "no requested subtitle file was produced"
             failures.append(f"{video.video_id} ({video.title}): {details}")
+        source_sha256 = hashlib.sha256(ready[0].content).hexdigest() if ready else None
+        if already_present:
+            status = AcquisitionItemStatus.ALREADY_PRESENT
+            error_code = None
+        elif result.returncode or result.errors:
+            status = AcquisitionItemStatus.FAILED_RETRYABLE
+            error_code = "download_failed"
+        elif ready:
+            status = AcquisitionItemStatus.ACQUIRED
+            error_code = None
+        else:
+            status = AcquisitionItemStatus.NO_TRANSCRIPT
+            error_code = "no_transcript"
+        items.append(
+            AcquisitionItemReport(
+                video.video_id,
+                status,
+                error_code=error_code,
+                source_sha256=source_sha256,
+            )
+        )
 
     all_vtts = [snapshot for snapshots in ready_by_id.values() for snapshot in snapshots]
     insights_ready = 0
@@ -900,13 +1020,7 @@ def execute_acquisition(
 
     if refresh_indexes and all_vtts:
         try:
-            _validate_confined_file_target(
-                plan.data_paths.catalog_database, plan.data_paths.root
-            )
-            _validate_confined_file_target(
-                plan.data_paths.search_database, plan.data_paths.root
-            )
-            _refresh_indexes(plan)
+            rebuild_and_publish_indexes(plan.data_paths)
         except Exception as exc:
             failures.append(f"index: {type(exc).__name__}: {exc}")
 
@@ -916,4 +1030,5 @@ def execute_acquisition(
         insights_ready=insights_ready,
         failures=tuple(failures),
         exclusions=plan.exclusions,
+        items=tuple(items),
     )

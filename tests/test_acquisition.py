@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import fcntl
 import os
@@ -211,6 +212,90 @@ def test_execute_counts_cached_and_failed_videos_with_identity(tmp_path: Path) -
         "bbb123DEF45 (Unavailable): ERROR: subtitles unavailable; "
         "yt-dlp exited with status 1",
     )
+
+
+def test_execute_reports_each_video_status_and_source_hash(tmp_path: Path) -> None:
+    import yt_insights.acquisition as acquisition
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    videos = (
+        VideoInfo("aaa123DEF45", "Cached", "20260820"),
+        VideoInfo("bbb123DEF45", "Acquired", "20260819"),
+        VideoInfo("ccc123DEF45", "No transcript", "20260818"),
+        VideoInfo("ddd123DEF45", "Retryable", "20260817"),
+    )
+    plan = build_acquisition_plan(
+        source="https://www.youtube.com/playlist?list=PL123",
+        data_paths=paths,
+        slug="playlist",
+        discovered=videos,
+    )
+    plan.transcripts_dir.mkdir(parents=True)
+    cached_content = b"WEBVTT\nCached evidence\n"
+    (plan.transcripts_dir / "20260820 - Cached [aaa123DEF45].fr.vtt").write_bytes(
+        cached_content
+    )
+    acquired_content = b"WEBVTT\nAcquired evidence\n"
+
+    def fake_download(source: str, output_dir: Path, **_: object) -> DownloadResult:
+        if "bbb123DEF45" in source:
+            acquired = output_dir / "20260819 - Acquired [bbb123DEF45].fr.vtt"
+            acquired.write_bytes(acquired_content)
+            return DownloadResult(vtt_files=[acquired])
+        if "ccc123DEF45" in source:
+            return DownloadResult()
+        return DownloadResult(errors=["ERROR: temporary failure"], returncode=1)
+
+    report = execute_acquisition(plan, download=fake_download, refresh_indexes=False)
+
+    assert report.items == (
+        acquisition.AcquisitionItemReport(
+            "aaa123DEF45",
+            acquisition.AcquisitionItemStatus.ALREADY_PRESENT,
+            source_sha256=hashlib.sha256(cached_content).hexdigest(),
+        ),
+        acquisition.AcquisitionItemReport(
+            "bbb123DEF45",
+            acquisition.AcquisitionItemStatus.ACQUIRED,
+            source_sha256=hashlib.sha256(acquired_content).hexdigest(),
+        ),
+        acquisition.AcquisitionItemReport(
+            "ccc123DEF45",
+            acquisition.AcquisitionItemStatus.NO_TRANSCRIPT,
+            error_code="no_transcript",
+        ),
+        acquisition.AcquisitionItemReport(
+            "ddd123DEF45",
+            acquisition.AcquisitionItemStatus.FAILED_RETRYABLE,
+            error_code="download_failed",
+        ),
+    )
+    assert report.to_dict()["items"] == [
+        {
+            "video_id": "aaa123DEF45",
+            "status": "already_present",
+            "error_code": None,
+            "source_sha256": hashlib.sha256(cached_content).hexdigest(),
+        },
+        {
+            "video_id": "bbb123DEF45",
+            "status": "acquired",
+            "error_code": None,
+            "source_sha256": hashlib.sha256(acquired_content).hexdigest(),
+        },
+        {
+            "video_id": "ccc123DEF45",
+            "status": "no_transcript",
+            "error_code": "no_transcript",
+            "source_sha256": None,
+        },
+        {
+            "video_id": "ddd123DEF45",
+            "status": "failed_retryable",
+            "error_code": "download_failed",
+            "source_sha256": None,
+        },
+    ]
 
 
 def test_execute_rejects_cache_directory_swapped_to_symlink(tmp_path: Path) -> None:
@@ -830,6 +915,114 @@ def test_execute_restores_old_search_pair_when_receipt_changes_after_db_publish(
     assert report.exit_code == 4
     assert any("receipt" in failure for failure in report.failures)
     assert SQLiteFtsIndex(paths.search_database).status() == old_status
+
+
+def test_refresh_restores_both_previous_databases_when_search_validation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.acquisition as acquisition
+    from yt_insights.catalog import Catalog
+    from yt_insights.search.sqlite_fts import SQLiteFtsIndex
+
+    paths, _, old_search_status, old_receipts = _valid_search_pair(tmp_path)
+    old_catalog = paths.catalog_database.read_bytes()
+    old_search = paths.search_database.read_bytes()
+    extra = paths.transcripts / "20260821 - New [new123ABCDE].fr.vtt"
+    extra.write_text("WEBVTT\nNew evidence\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        acquisition,
+        "_validate_published_search_pair",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("forced failure")),
+    )
+
+    with pytest.raises(ValueError, match="search.*publication validation failed"):
+        acquisition.rebuild_and_publish_indexes(paths)
+
+    assert paths.catalog_database.read_bytes() == old_catalog
+    assert paths.search_database.read_bytes() == old_search
+    Catalog.validate_database(paths.catalog_database)
+    assert SQLiteFtsIndex(paths.search_database).status() == old_search_status
+    assert {
+        path.name
+        for path in paths.search_database.parent.glob(
+            f".{paths.search_database.name}.*.receipt.json"
+        )
+    } == old_receipts
+
+
+def test_refresh_removes_both_new_databases_when_no_previous_pair_exists(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.acquisition as acquisition
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.transcripts.mkdir(parents=True)
+    (paths.transcripts / "20260820 - New [aaa123DEF45].fr.vtt").write_text(
+        "WEBVTT\nNew evidence\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(
+        acquisition,
+        "_validate_published_search_pair",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("forced failure")),
+    )
+
+    with pytest.raises(ValueError, match="search.*publication validation failed"):
+        acquisition.rebuild_and_publish_indexes(paths)
+
+    assert not paths.catalog_database.exists()
+    assert not paths.search_database.exists()
+    assert not tuple(
+        paths.search_database.parent.glob(
+            f".{paths.search_database.name}.*.receipt.json"
+        )
+    )
+
+
+def test_public_refresh_returns_validated_pair_report(tmp_path: Path) -> None:
+    import yt_insights.acquisition as acquisition
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.transcripts.mkdir(parents=True)
+    (paths.transcripts / "20260820 - New [aaa123DEF45].fr.vtt").write_text(
+        "WEBVTT\nNew evidence\n", encoding="utf-8"
+    )
+
+    assert acquisition.rebuild_and_publish_indexes(paths) == (
+        acquisition.IndexRefreshReport(
+            catalog_published=True,
+            search_published=True,
+        )
+    )
+
+
+def test_refresh_removes_new_catalog_when_its_public_validation_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import yt_insights.acquisition as acquisition
+    from yt_insights.catalog import Catalog
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.transcripts.mkdir(parents=True)
+    (paths.transcripts / "20260820 - New [aaa123DEF45].fr.vtt").write_text(
+        "WEBVTT\nNew evidence\n", encoding="utf-8"
+    )
+    original_validate = Catalog.validate_database
+
+    def fail_published_catalog(database_path: Path) -> None:
+        if database_path.parent.name == "published-catalog":
+            raise ValueError("forced catalogue validation failure")
+        original_validate(database_path)
+
+    monkeypatch.setattr(
+        Catalog, "validate_database", staticmethod(fail_published_catalog)
+    )
+
+    with pytest.raises(ValueError, match="catalog post-publication validation failed"):
+        acquisition.rebuild_and_publish_indexes(paths)
+
+    assert not paths.catalog_database.exists()
+    assert not paths.search_database.exists()
 
 
 def test_execute_counts_cached_insight_without_resolving_backend(tmp_path: Path) -> None:
