@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import subprocess
 import sys
 import tomllib
+from pathlib import Path
 
 from click.testing import CliRunner
 
 from yt_insights.cli import cli
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 

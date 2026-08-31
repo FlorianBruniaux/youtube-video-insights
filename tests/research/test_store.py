@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta, timezone
 import json
 import sqlite3
+from datetime import UTC, date, datetime, timedelta, timezone
 
 import pytest
 
@@ -21,7 +21,6 @@ from yt_insights.research.models import (
     VideoEvidence,
 )
 from yt_insights.research.store import ResearchStore
-
 
 NOW = datetime(2026, 8, 31, 10, 0, tzinfo=UTC)
 SESSION_ID = "01K4RESEARCH0000000000000000"
@@ -478,10 +477,12 @@ def test_attempt_execution_lock_is_exclusive_and_released_automatically(
     store = _store(tmp_path)
     contender = ResearchStore(tmp_path / "research.sqlite3")  # type: ignore[operator]
 
-    with store.acquisition_execution_lock("attempt-1") as first_claimed:
-        with contender.acquisition_execution_lock("attempt-1") as second_claimed:
-            assert first_claimed is True
-            assert second_claimed is False
+    with (
+        store.acquisition_execution_lock("attempt-1") as first_claimed,
+        contender.acquisition_execution_lock("attempt-1") as second_claimed,
+    ):
+        assert first_claimed is True
+        assert second_claimed is False
 
     with contender.acquisition_execution_lock("attempt-1") as recovered:
         assert recovered is True

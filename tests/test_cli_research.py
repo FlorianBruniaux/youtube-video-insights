@@ -1214,7 +1214,7 @@ def test_research_export_rejects_missing_config_and_relative_explicit_paths_befo
 
     monkeypatch.setattr(cli_research, "_workflow", unexpected_workflow)
 
-    result = CliRunner().invoke(cli, list(arguments) + ["--json"], env=environment)
+    result = CliRunner().invoke(cli, [*arguments, "--json"], env=environment)
 
     assert result.exit_code == 1
     assert json.loads(result.output) == {
