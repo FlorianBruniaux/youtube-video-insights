@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import sqlite3
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -17,8 +19,11 @@ from yt_insights.research.models import (
     ResearchState,
 )
 from yt_insights.research.store import (
+    DecisionReplay,
+    DecisionReplayStatus,
     ResearchIdempotencyConflict,
     ResearchRevisionConflict,
+    ResearchStore,
 )
 from yt_insights.search.models import SearchQuery
 from yt_insights.search.sqlite_fts import SearchIndexNotFound
@@ -128,7 +133,7 @@ class FakeStore:
         self.session = _session()
         self.missing = False
         self.error: Exception | None = None
-        self.decision_replay: ResearchSession | None = None
+        self.decision_replay: DecisionReplay | None = None
         self.decision_replay_error: Exception | None = None
         self.decision_replay_calls: list[tuple[str, int, str, object, str]] = []
         self.acquisition_replay: object | None = None
@@ -158,7 +163,7 @@ class FakeStore:
         action: str,
         request: object,
         idempotency_key: str,
-    ) -> ResearchSession | None:
+    ) -> DecisionReplay | None:
         self.decision_replay_calls.append(
             (session_id, expected_revision, action, request, idempotency_key)
         )
@@ -368,6 +373,48 @@ def services() -> SimpleNamespace:
 
 def _post(path: str, payload: str) -> WebRequest:
     return WebRequest("POST", path, {}, {}, payload.encode("utf-8"))
+
+
+def _claimed_retry_application(
+    tmp_path: Path,
+    services: SimpleNamespace,
+) -> tuple[ResearchStore, WebApplication, int, Path]:
+    database = tmp_path / "research.sqlite3"
+    store = ResearchStore(database)
+    store.create_session(
+        session_id=SESSION_ID,
+        topic="Local AI inference",
+        queries=(QuerySpec("local LLM inference"),),
+        languages=("en",),
+        freshness_profile=FreshnessProfile.FAST,
+        discovery_fingerprint="a" * 64,
+    )
+    failed = store.record_failure(
+        SESSION_ID,
+        expected_revision=0,
+        retry_target=ResearchState.ASSESSING,
+        error_code="provider_timeout",
+    )
+    store.claim_retry(
+        SESSION_ID,
+        expected_revision=failed.revision,
+        idempotency_key="retry-in-progress",
+    )
+    app = WebApplication(
+        search=services.search,
+        catalog=services.catalog,
+        workflow=services.workflow,
+        research_store=store,
+        exports=services.exports,
+        jobs=services.jobs,
+        source_acquisition=services.sources,
+        export_request_factory=lambda session_id, force: SimpleNamespace(
+            session_id=session_id,
+            force=force,
+        ),
+        package_version="0.2.0",
+    )
+    return store, app, failed.revision, database
 
 
 def test_search_delegates_to_existing_service(services: SimpleNamespace) -> None:
@@ -672,9 +719,12 @@ def test_queued_retry_preserves_an_exact_durable_replay(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     services.store.session = _session(state=ResearchState.COMPLETED, revision=10)
-    services.store.decision_replay = _session(
-        state=ResearchState.ASSESSING,
-        revision=8,
+    services.store.decision_replay = DecisionReplay(
+        DecisionReplayStatus.COMPLETED,
+        _session(
+            state=ResearchState.ASSESSING,
+            revision=8,
+        ),
     )
     monkeypatch.setattr(
         services.store,
@@ -698,6 +748,117 @@ def test_queued_retry_preserves_an_exact_durable_replay(
         (SESSION_ID, 7, "retry", {"expected_revision": 7}, "retry-1"),
     ]
     assert services.store.get_calls == [SESSION_ID, SESSION_ID]
+
+
+def test_queued_retry_admits_a_real_in_progress_reservation_without_history(
+    tmp_path: Path,
+    services: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, app, expected_revision, _database = _claimed_retry_application(
+        tmp_path,
+        services,
+    )
+    monkeypatch.setattr(
+        store,
+        "get_session_history",
+        lambda _session_id: pytest.fail("full session history was loaded"),
+    )
+
+    response = app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/retry",
+            json.dumps(
+                {
+                    "expected_revision": expected_revision,
+                    "idempotency_key": "retry-in-progress",
+                }
+            ),
+        )
+    )
+
+    assert response.status == 202
+    result = services.jobs.submissions[0][1]()
+    assert result["session"]["revision"] == 5
+    assert services.workflow.retry_calls == [
+        (SESSION_ID, expected_revision, "retry-in-progress")
+    ]
+
+
+def test_real_retry_replay_payload_mismatch_remains_stale_without_history(
+    tmp_path: Path,
+    services: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, app, expected_revision, _database = _claimed_retry_application(
+        tmp_path,
+        services,
+    )
+    monkeypatch.setattr(
+        store,
+        "get_session_history",
+        lambda _session_id: pytest.fail("full session history was loaded"),
+    )
+
+    response = app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/retry",
+            json.dumps(
+                {
+                    "expected_revision": expected_revision - 1,
+                    "idempotency_key": "retry-in-progress",
+                }
+            ),
+        )
+    )
+
+    assert response.status == 409
+    assert response.json_body["error"] == {"code": "stale_revision"}
+    assert services.jobs.submissions == []
+
+
+def test_real_retry_replay_corrupt_null_envelope_is_internal_without_history(
+    tmp_path: Path,
+    services: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store, app, expected_revision, database = _claimed_retry_application(
+        tmp_path,
+        services,
+    )
+    with sqlite3.connect(database) as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM research_decisions WHERE idempotency_key = ?",
+            ("retry-in-progress",),
+        ).fetchone()
+        assert row is not None
+        envelope = json.loads(row[0])
+        envelope["claim"] = None
+        connection.execute(
+            "UPDATE research_decisions SET payload_json = ? WHERE idempotency_key = ?",
+            (json.dumps(envelope), "retry-in-progress"),
+        )
+    monkeypatch.setattr(
+        store,
+        "get_session_history",
+        lambda _session_id: pytest.fail("full session history was loaded"),
+    )
+
+    response = app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/retry",
+            json.dumps(
+                {
+                    "expected_revision": expected_revision,
+                    "idempotency_key": "retry-in-progress",
+                }
+            ),
+        )
+    )
+
+    assert response.status == 500
+    assert response.json_body["error"] == {"code": "internal_error"}
+    assert services.jobs.submissions == []
 
 
 @pytest.mark.parametrize(

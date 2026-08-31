@@ -12,8 +12,9 @@ import sqlite3
 import stat
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager, suppress
-from dataclasses import asdict, is_dataclass, replace
+from dataclasses import asdict, dataclass, is_dataclass, replace
 from datetime import UTC, date, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Any, TypeVar
 
@@ -166,6 +167,21 @@ class ResearchRevisionConflict(ValueError):
 
 class ResearchIdempotencyConflict(ValueError):
     """An existing durable replay key belongs to another request payload."""
+
+
+class DecisionReplayStatus(Enum):
+    """Classify the result of one indexed durable decision lookup."""
+
+    COMPLETED = "completed"
+    RETRY_IN_PROGRESS = "retry_in_progress"
+
+
+@dataclass(frozen=True, slots=True)
+class DecisionReplay:
+    """One completed decision result or a valid unfinished retry claim."""
+
+    status: DecisionReplayStatus
+    session: ResearchSession
 
 
 class ResearchStore:
@@ -689,17 +705,77 @@ class ResearchStore:
         action: str,
         request: object,
         idempotency_key: str,
-    ) -> ResearchSession | None:
-        """Return one exact persisted decision result by primary key."""
+    ) -> DecisionReplay | None:
+        """Return one exact completed result or unfinished retry by primary key."""
         with self._connection() as connection:
-            return self._idempotent_decision(
-                connection,
-                idempotency_key,
-                session_id,
-                expected_revision,
-                action,
-                request,
-                recover_legacy=False,
+            row = connection.execute(
+                "SELECT * FROM research_decisions WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if row is None:
+                return None
+            if (
+                row["session_id"] != session_id
+                or row["expected_revision"] != expected_revision
+                or row["action"] != action
+            ):
+                raise ResearchIdempotencyConflict("idempotency key payload differs")
+            stored = json.loads(row["payload_json"])
+            if not isinstance(stored, dict):
+                raise ValueError("stored decision result is invalid")
+            if "request" not in stored:
+                if stored.keys() & {
+                    "claim",
+                    "error_code",
+                    "result",
+                    "retry_target",
+                }:
+                    raise ValueError("stored decision result is invalid")
+                if stored != request:
+                    raise ResearchIdempotencyConflict("idempotency key payload differs")
+                return None
+            if stored.get("request") != request:
+                raise ResearchIdempotencyConflict("idempotency key payload differs")
+            if "result" not in stored:
+                raise ValueError("stored decision result is invalid")
+            result = stored.get("result")
+            if isinstance(result, dict):
+                try:
+                    session = _session_from_payload(result)
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError("stored decision result is invalid") from exc
+                if session.session_id != session_id:
+                    raise ValueError("stored decision result is invalid")
+                return DecisionReplay(DecisionReplayStatus.COMPLETED, session)
+            if result is not None or action != "retry":
+                raise ValueError("stored decision result is invalid")
+            claim_payload = stored.get("claim")
+            target_value = stored.get("retry_target")
+            error_code = stored.get("error_code")
+            if (
+                not isinstance(claim_payload, dict)
+                or not isinstance(target_value, str)
+                or "error_code" not in stored
+                or (error_code is not None and not _is_error_code(error_code))
+            ):
+                raise ValueError("stored decision result is invalid")
+            try:
+                claim = _session_from_payload(claim_payload)
+                target = ResearchState(target_value)
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("stored decision result is invalid") from exc
+            if (
+                target not in set(_FAILURE_RETRY_TARGETS.values())
+                or claim.session_id != session_id
+                or claim.revision <= expected_revision
+                or claim.state is not target
+                or claim.required_user_action is not None
+                or claim.retry_target is not None
+            ):
+                raise ValueError("stored decision result is invalid")
+            return DecisionReplay(
+                DecisionReplayStatus.RETRY_IN_PROGRESS,
+                claim,
             )
 
     def get_acquisition_replay(

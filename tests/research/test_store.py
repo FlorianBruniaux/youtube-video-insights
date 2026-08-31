@@ -20,7 +20,11 @@ from yt_insights.research.models import (
     ResearchState,
     VideoEvidence,
 )
-from yt_insights.research.store import ResearchStore
+from yt_insights.research.store import (
+    DecisionReplayStatus,
+    ResearchIdempotencyConflict,
+    ResearchStore,
+)
 
 NOW = datetime(2026, 8, 31, 10, 0, tzinfo=UTC)
 SESSION_ID = "01K4RESEARCH0000000000000000"
@@ -243,7 +247,9 @@ def test_get_decision_replay_returns_only_the_indexed_persisted_result(
         idempotency_key="refresh",
     )
 
-    assert replayed == committed
+    assert replayed is not None
+    assert replayed.status is DecisionReplayStatus.COMPLETED
+    assert replayed.session == committed
     assert (
         store.get_decision_replay(
             SESSION_ID,
@@ -254,6 +260,69 @@ def test_get_decision_replay_returns_only_the_indexed_persisted_result(
         )
         is None
     )
+
+
+def test_get_decision_replay_identifies_an_in_progress_retry_reservation(
+    tmp_path: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    _create(store)
+    failed = store.record_failure(
+        SESSION_ID,
+        expected_revision=0,
+        retry_target=ResearchState.ASSESSING,
+        error_code="provider_timeout",
+    )
+    reservation = store.claim_retry(
+        SESSION_ID,
+        expected_revision=failed.revision,
+        idempotency_key="retry-in-progress",
+    )
+    monkeypatch.setattr(
+        store,
+        "get_session_history",
+        lambda _session_id: pytest.fail("full session history was loaded"),
+    )
+
+    replayed = store.get_decision_replay(
+        SESSION_ID,
+        expected_revision=failed.revision,
+        action="retry",
+        request={"expected_revision": failed.revision},
+        idempotency_key="retry-in-progress",
+    )
+
+    assert replayed is not None
+    assert replayed.status is DecisionReplayStatus.RETRY_IN_PROGRESS
+    assert replayed.session == reservation.session
+
+
+def test_get_decision_replay_rejects_an_in_progress_retry_request_mismatch(
+    tmp_path: object,
+) -> None:
+    store = _store(tmp_path)
+    _create(store)
+    failed = store.record_failure(
+        SESSION_ID,
+        expected_revision=0,
+        retry_target=ResearchState.ASSESSING,
+        error_code="provider_timeout",
+    )
+    store.claim_retry(
+        SESSION_ID,
+        expected_revision=failed.revision,
+        idempotency_key="retry-in-progress",
+    )
+
+    with pytest.raises(ResearchIdempotencyConflict, match="idempotency"):
+        store.get_decision_replay(
+            SESSION_ID,
+            expected_revision=failed.revision,
+            action="retry",
+            request={"expected_revision": failed.revision + 1},
+            idempotency_key="retry-in-progress",
+        )
 
 
 def test_get_decision_replay_rejects_a_reused_key_with_changed_identity_or_payload(
@@ -300,7 +369,7 @@ def test_get_decision_replay_rejects_a_reused_key_with_changed_identity_or_paylo
         },
     )
     for mismatch in mismatches:
-        with pytest.raises(ValueError, match="idempotency"):
+        with pytest.raises(ResearchIdempotencyConflict, match="idempotency"):
             store.get_decision_replay(
                 mismatch["session_id"],
                 expected_revision=mismatch["expected_revision"],
@@ -308,6 +377,77 @@ def test_get_decision_replay_rejects_a_reused_key_with_changed_identity_or_paylo
                 request=mismatch["request"],
                 idempotency_key="refresh",
             )
+
+
+@pytest.mark.parametrize(
+    "corruption",
+    (
+        "missing_request",
+        "missing_result",
+        "missing_claim",
+        "missing_error_code",
+        "wrong_claim_session",
+        "invalid_retry_target",
+        "non_retry_action",
+    ),
+)
+def test_get_decision_replay_rejects_corrupt_null_result_envelopes(
+    tmp_path: object,
+    corruption: str,
+) -> None:
+    store = _store(tmp_path)
+    _create(store)
+    failed = store.record_failure(
+        SESSION_ID,
+        expected_revision=0,
+        retry_target=ResearchState.ASSESSING,
+        error_code="provider_timeout",
+    )
+    store.claim_retry(
+        SESSION_ID,
+        expected_revision=failed.revision,
+        idempotency_key="retry-in-progress",
+    )
+    database = tmp_path / "research.sqlite3"  # type: ignore[operator]
+    action = "retry"
+    with sqlite3.connect(database) as connection:
+        row = connection.execute(
+            "SELECT payload_json FROM research_decisions WHERE idempotency_key = ?",
+            ("retry-in-progress",),
+        ).fetchone()
+        assert row is not None
+        envelope = json.loads(row[0])
+        if corruption == "missing_request":
+            del envelope["request"]
+        elif corruption == "missing_result":
+            del envelope["result"]
+        elif corruption == "missing_claim":
+            del envelope["claim"]
+        elif corruption == "missing_error_code":
+            del envelope["error_code"]
+        elif corruption == "wrong_claim_session":
+            envelope["claim"]["session_id"] = "01K4RESEARCH0000000000000001"
+        elif corruption == "invalid_retry_target":
+            envelope["retry_target"] = ResearchState.COMPLETED.value
+        else:
+            action = "refresh"
+            connection.execute(
+                "UPDATE research_decisions SET action = ? WHERE idempotency_key = ?",
+                (action, "retry-in-progress"),
+            )
+        connection.execute(
+            "UPDATE research_decisions SET payload_json = ? WHERE idempotency_key = ?",
+            (json.dumps(envelope), "retry-in-progress"),
+        )
+
+    with pytest.raises(ValueError, match="stored decision result"):
+        store.get_decision_replay(
+            SESSION_ID,
+            expected_revision=failed.revision,
+            action=action,
+            request={"expected_revision": failed.revision},
+            idempotency_key="retry-in-progress",
+        )
 
 
 def test_legacy_raw_decision_payload_replays_its_historical_result(tmp_path: object) -> None:

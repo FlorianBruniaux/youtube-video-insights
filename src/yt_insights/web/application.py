@@ -16,6 +16,7 @@ from yt_insights.catalog import CatalogError
 from yt_insights.research.dossier import DossierExportRequest, DossierExportResult
 from yt_insights.research.models import ResearchSession, ResearchState
 from yt_insights.research.store import (
+    DecisionReplayStatus,
     ResearchIdempotencyConflict,
     ResearchRevisionConflict,
     ResearchStore,
@@ -559,7 +560,10 @@ class WebApplication:
             )
         except ResearchIdempotencyConflict:
             return False
-        return replay is not None
+        return replay is not None and replay.status in {
+            DecisionReplayStatus.COMPLETED,
+            DecisionReplayStatus.RETRY_IN_PROGRESS,
+        }
 
     def _synchronous_research_operation(
         self,
