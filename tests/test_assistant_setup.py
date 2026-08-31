@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shutil
 
 from click.testing import CliRunner
 
@@ -11,6 +12,7 @@ from yt_insights.cli import cli
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+OWNERSHIP_MANIFEST = Path(".agents/.yt-insights-assistant-assets-v1.json")
 ASSET_PAIRS = {
     ".agents/skills/youtube-acquire/SKILL.md": "skills/youtube-acquire/SKILL.md",
     ".agents/skills/youtube-acquire/agents/openai.yaml": (
@@ -115,6 +117,16 @@ def _arguments(corpus: Path, server: Path, mode: str | None) -> list[str]:
 
 def _assets_only_arguments(mode: str) -> list[str]:
     return ["setup", "assistants", "--client", "both", "--assets-only", mode, "--json"]
+
+
+def _changed_asset_root(tmp_path: Path, relative: str, content: str) -> Path:
+    root = tmp_path / "changed-assets"
+    shutil.copytree(
+        REPOSITORY_ROOT / "src" / "yt_insights" / "assistant_assets",
+        root,
+    )
+    (root / relative).write_text(content, encoding="utf-8")
+    return root
 
 
 def test_root_cli_registers_setup_command() -> None:
@@ -392,6 +404,306 @@ def test_assets_only_apply_needs_no_data_root_or_executable_and_ignores_mcp_stat
     assert (
         home / ".agents" / "skills" / "youtube-cumulative-research" / "SKILL.md"
     ).is_file()
+    manifest = json.loads((home / OWNERSHIP_MANIFEST).read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 1
+    assert set(manifest) == {"schema_version", "assets"}
+    assert set(manifest["assets"]) == set(ASSET_PAIRS)
+    assert all(
+        len(digest) == 64 and set(digest) <= set("0123456789abcdef")
+        for digest in manifest["assets"].values()
+    )
+
+
+def test_assets_only_dry_run_and_apply_upgrade_a_managed_asset(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(
+        cli,
+        _assets_only_arguments("--apply"),
+        env=env,
+        catch_exceptions=False,
+    )
+    assert installed.exit_code == 0, installed.output
+
+    relative = "skills/youtube-cumulative-research/SKILL.md"
+    target = home / ".agents" / relative
+    old_bytes = target.read_bytes()
+    manifest_before = (home / OWNERSHIP_MANIFEST).read_bytes()
+    changed_root = _changed_asset_root(tmp_path, relative, "managed upgrade\n")
+    monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
+
+    preview = runner.invoke(
+        cli,
+        _assets_only_arguments("--dry-run"),
+        env=env,
+        catch_exceptions=False,
+    )
+    assert preview.exit_code == 0, preview.output
+    preview_payload = json.loads(preview.output)
+    operation = next(
+        item for item in preview_payload["operations"] if item["target"] == str(target)
+    )
+    assert operation["status"] == "upgrade"
+    assert target.read_bytes() == old_bytes
+    assert (home / OWNERSHIP_MANIFEST).read_bytes() == manifest_before
+
+    upgraded = runner.invoke(
+        cli,
+        _assets_only_arguments("--apply"),
+        env=env,
+        catch_exceptions=False,
+    )
+    assert upgraded.exit_code == 0, upgraded.output
+    assert json.loads(upgraded.output)["upgraded_files"] == 1
+    assert target.read_text(encoding="utf-8") == "managed upgrade\n"
+    new_manifest = json.loads((home / OWNERSHIP_MANIFEST).read_text(encoding="utf-8"))
+    assert new_manifest["assets"][f".agents/{relative}"] != json.loads(
+        manifest_before
+    )["assets"][f".agents/{relative}"]
+
+
+def test_assets_only_missing_manifest_cannot_authorize_an_upgrade(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+    (home / OWNERSHIP_MANIFEST).unlink()
+
+    relative = "skills/youtube-cumulative-research/SKILL.md"
+    target = home / ".agents" / relative
+    before = target.read_bytes()
+    changed_root = _changed_asset_root(tmp_path, relative, "untrusted upgrade\n")
+    monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "blocked"
+    assert payload["conflicts"] == [str(target)]
+    assert target.read_bytes() == before
+    assert not (home / OWNERSHIP_MANIFEST).exists()
+
+
+def test_assets_only_corrupt_manifest_blocks_all_writes(tmp_path: Path) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+    manifest = home / OWNERSHIP_MANIFEST
+    manifest.write_bytes(b"not-json\n")
+    before = {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "blocked"
+    assert payload["conflicts"] == [str(manifest)]
+    assert before == {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
+
+
+def test_assets_only_customized_managed_asset_is_not_upgraded(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+
+    relative = "skills/youtube-cumulative-research/SKILL.md"
+    target = home / ".agents" / relative
+    target.write_text("user customization\n", encoding="utf-8")
+    changed_root = _changed_asset_root(tmp_path, relative, "packaged upgrade\n")
+    monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
+    manifest_before = (home / OWNERSHIP_MANIFEST).read_bytes()
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "blocked"
+    assert payload["conflicts"] == [str(target)]
+    assert target.read_text(encoding="utf-8") == "user customization\n"
+    assert (home / OWNERSHIP_MANIFEST).read_bytes() == manifest_before
+
+
+def test_assets_only_concurrent_change_aborts_before_upgrade(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+
+    relative = "skills/youtube-cumulative-research/SKILL.md"
+    target = home / ".agents" / relative
+    changed_root = _changed_asset_root(tmp_path, relative, "packaged upgrade\n")
+    monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
+    manifest_before = (home / OWNERSHIP_MANIFEST).read_bytes()
+    original_snapshot = assistant_setup._snapshot_file
+    changed = False
+
+    def change_after_inspection(path: Path):
+        nonlocal changed
+        result = original_snapshot(path)
+        if path == target and not changed:
+            changed = True
+            target.write_text("concurrent customization\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(assistant_setup, "_snapshot_file", change_after_inspection)
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    assert json.loads(result.output)["status"] == "rolled_back"
+    assert target.read_text(encoding="utf-8") == "concurrent customization\n"
+    assert (home / OWNERSHIP_MANIFEST).read_bytes() == manifest_before
+    assert not tuple(target.parent.glob(f".{target.name}.backup.*"))
+
+
+def test_assets_only_concurrent_change_to_identical_asset_fails_closed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+
+    target = home / ".agents" / "skills" / "youtube-research" / "SKILL.md"
+    manifest_before = (home / OWNERSHIP_MANIFEST).read_bytes()
+    original_snapshot = assistant_setup._snapshot_file
+    changed = False
+
+    def change_after_inspection(path: Path):
+        nonlocal changed
+        result = original_snapshot(path)
+        if path == target and not changed:
+            changed = True
+            target.write_text("concurrent customization\n", encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(assistant_setup, "_snapshot_file", change_after_inspection)
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    assert json.loads(result.output)["status"] == "rolled_back"
+    assert target.read_text(encoding="utf-8") == "concurrent customization\n"
+    assert (home / OWNERSHIP_MANIFEST).read_bytes() == manifest_before
+
+
+def test_assets_only_concurrent_manifest_change_fails_closed(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+
+    manifest = home / OWNERSHIP_MANIFEST
+    original_snapshot = assistant_setup._snapshot_file
+    changed = False
+
+    def change_after_inspection(path: Path):
+        nonlocal changed
+        result = original_snapshot(path)
+        if path == manifest and not changed:
+            changed = True
+            manifest.write_text('{"concurrent": true}\n', encoding="utf-8")
+        return result
+
+    monkeypatch.setattr(assistant_setup, "_snapshot_file", change_after_inspection)
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    assert json.loads(result.output)["status"] == "rolled_back"
+    assert manifest.read_text(encoding="utf-8") == '{"concurrent": true}\n'
+
+
+def test_assets_only_mid_upgrade_failure_restores_assets_and_manifest(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+
+    changed_root = tmp_path / "changed-assets"
+    shutil.copytree(
+        REPOSITORY_ROOT / "src" / "yt_insights" / "assistant_assets",
+        changed_root,
+    )
+    for relative, content in (
+        ("skills/youtube-acquire/SKILL.md", "first upgrade\n"),
+        ("skills/youtube-acquire/agents/openai.yaml", "second upgrade\n"),
+    ):
+        (changed_root / relative).write_text(content, encoding="utf-8")
+    monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
+    before = {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
+    original_replace = assistant_setup._replace_managed_file
+    calls = 0
+
+    def fail_second_replacement(
+        target: Path,
+        content: bytes,
+        expected: assistant_setup.FileSnapshot,
+    ) -> assistant_setup.ReplacedFile:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("synthetic second upgrade failure")
+        return original_replace(target, content, expected)
+
+    monkeypatch.setattr(
+        assistant_setup,
+        "_replace_managed_file",
+        fail_second_replacement,
+    )
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    assert json.loads(result.output)["status"] == "rolled_back"
+    assert before == {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
+    assert not tuple(home.rglob("*.backup.*"))
+
+
+def test_assets_only_publication_failure_restores_preimage_without_backup_leak(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+
+    relative = "skills/youtube-cumulative-research/SKILL.md"
+    target = home / ".agents" / relative
+    changed_root = _changed_asset_root(tmp_path, relative, "packaged upgrade\n")
+    monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
+    before = {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
+    original_link = assistant_setup.os.link
+
+    def fail_new_publication(source: Path | str, destination: Path | str) -> None:
+        source_path = Path(source)
+        if Path(destination) == target and f".{target.name}.new." in source_path.name:
+            raise OSError("synthetic publication failure")
+        original_link(source, destination)
+
+    monkeypatch.setattr(assistant_setup.os, "link", fail_new_publication)
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    assert json.loads(result.output)["status"] == "rolled_back"
+    assert before == {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
+    assert not tuple(home.rglob("*.backup.*"))
 
 
 def test_assets_only_never_resolves_or_invokes_mcp_tools(

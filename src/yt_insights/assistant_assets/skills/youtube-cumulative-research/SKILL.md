@@ -12,6 +12,7 @@ Run this workflow in the main session because discovery and approved acquisition
 - Start with `yt-insights research start "TOPIC" --query "QUERY" --freshness-profile standard --json`. Use one to eight explicit queries. Do not add hidden query expansion.
 - Resume with `yt-insights research status SESSION_ID --json`. Preserve the returned session ID and revision exactly.
 - Treat invalid JSON or an unknown schema as unverified state. Stop, show a bounded error, and do not infer a command, revision, candidate, or result.
+- For every command after the first response, use the latest revision returned by the previous JSON response. Generate a fresh idempotency key for every distinct mutation. Reuse a key only to replay the exact same request with the same session, revision, action, and payload.
 
 Present the recorded queries, freshness profile, coverage counts, newest relevant source date, last successful discovery date, unknown dates, and explicit coverage limits. Keep claims tied to stored evidence, source hashes, and timestamped URLs.
 
@@ -21,7 +22,7 @@ Interpret `required_user_action` literally:
 
 - For `confirm_sufficiency_or_refresh`, ask whether the current evidence is sufficient or whether the user wants newer YouTube candidates. Record the answer with `yt-insights research decide SESSION_ID sufficient|refresh --revision REVISION --idempotency-key KEY --json`.
 - A `refresh` decision authorizes discovery only. Run `yt-insights research discover SESSION_ID --revision REVISION --json`, then use `yt-insights research candidates SESSION_ID --json` to present at most ten candidates with ID, title, channel, publication date, matched query, and URL.
-- For `approve_candidates_or_cancel`, ask the user to select one to five exact candidate IDs or cancel. Never approve candidates on the user's behalf. Repeat only the selected IDs, unchanged, in `yt-insights research approve SESSION_ID VIDEO_ID... --revision REVISION --idempotency-key KEY --json`. Use `yt-insights research cancel` only when the user chooses to cancel.
+- For `approve_candidates_or_cancel`, ask the user to select one to five exact candidate IDs or cancel. Never approve candidates on the user's behalf. Repeat only the selected IDs, unchanged, in `yt-insights research approve SESSION_ID VIDEO_ID... --revision REVISION --idempotency-key KEY --json`. Use `yt-insights research cancel SESSION_ID --revision REVISION --idempotency-key KEY --json` only when the user chooses to cancel.
 
 After approval, acquire only the exact approved video IDs with `yt-insights research acquire SESSION_ID --revision REVISION --idempotency-key KEY --json`. Do not substitute a missing video, expand to a playlist or channel, or add related videos. Present per-video outcomes, the refreshed assessment, and the sufficiency question again.
 

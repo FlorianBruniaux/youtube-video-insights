@@ -203,6 +203,13 @@ def test_cumulative_research_skill_preserves_human_approval_boundaries() -> None
         assert action in body
     assert "Never approve candidates on the user's behalf" in body
     assert "exact approved video IDs" in body
+    assert "latest revision returned by the previous JSON response" in body
+    assert "fresh idempotency key for every distinct mutation" in body
+    assert "Reuse a key only to replay the exact same request" in body
+    assert (
+        "yt-insights research cancel SESSION_ID --revision REVISION "
+        "--idempotency-key KEY --json"
+    ) in body
     assert "dossier, an article draft, a corpus export, both, or nothing else" in body
     assert "relevance gate" in body
     assert "global activation" in body
