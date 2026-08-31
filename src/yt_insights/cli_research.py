@@ -3,16 +3,21 @@
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
+from datetime import UTC
 from pathlib import Path
 from uuid import uuid4
 
 import click
 
+from . import __version__
 from .catalog import Catalog
 from .config import load_config
 from .research.acquisition import ResearchAcquisitionService
 from .research.assessment import SQLiteEvidenceReader
 from .research.discovery import YtDlpDiscoveryProvider
+from .research.dossier import DossierExportRequest, DossierExportResult
 from .research.models import FreshnessProfile
 from .research.store import ResearchStore
 from .research.workflow import (
@@ -472,6 +477,108 @@ def retry_command(
         )
         return
     _emit(response, as_json=as_json, warnings=_gate_warnings())
+
+
+def _explicit_export_path(value: str) -> Path:
+    if not isinstance(value, str) or not value or "\x00" in value:
+        raise ValueError("export output is invalid")
+    destination = Path(value)
+    if not destination.is_absolute() or ".." in destination.parts:
+        raise ValueError("export output must be an absolute confined path")
+    return destination
+
+
+def _topic_slug(topic: str) -> str:
+    ascii_topic = unicodedata.normalize("NFKD", topic).encode(
+        "ascii", "ignore"
+    ).decode("ascii")
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_topic.casefold()).strip("-")
+    return slug[:64].rstrip("-") or "research"
+
+
+def _emit_export(result: DossierExportResult, *, as_json: bool) -> None:
+    if as_json:
+        click.echo(_json({"schema_version": 1, **result.to_dict()}))
+        return
+    click.echo(f"Directory: {result.directory}")
+    click.echo(f"Manifest SHA-256: {result.manifest_sha256}")
+    click.echo(f"Dossier SHA-256: {result.dossier_sha256}")
+
+
+@research_group.command("export")
+@click.argument("session_id")
+@click.option("--output", default=None, metavar="DIRECTORY")
+@click.option("--force", is_flag=True, help="Replace a validated prior dossier.")
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="Emit stable machine-readable JSON.",
+)
+def export_command(
+    session_id: str,
+    output: str | None,
+    force: bool,
+    as_json: bool,
+) -> None:
+    """Export stored evidence without generating model-authored prose."""
+    if output is not None:
+        try:
+            output_directory = _explicit_export_path(output)
+        except (TypeError, ValueError):
+            _error(
+                as_json=as_json,
+                code="invalid_export_request",
+                message="Research export request is invalid.",
+            )
+            return
+    else:
+        try:
+            configured_root = load_config({}).research_output_root
+            if (
+                configured_root is None
+                or not configured_root.is_absolute()
+                or configured_root.is_symlink()
+                or not configured_root.is_dir()
+            ):
+                raise ValueError("research output root is not configured")
+        except (OSError, RuntimeError, TypeError, ValueError):
+            _error(
+                as_json=as_json,
+                code="invalid_export_request",
+                message="Research export requires an absolute configured output root or --output.",
+            )
+            return
+        output_directory = configured_root
+
+    try:
+        workflow = _workflow()
+        if output is None:
+            response = workflow.status(session_id)
+            topic_directory = output_directory / _topic_slug(response.session.topic)
+            topic_directory.mkdir(mode=0o755, exist_ok=True)
+            created_date = (
+                response.session.created_at.astimezone(UTC).date().isoformat()
+            )
+            output_directory = topic_directory / (
+                f"{created_date}-{response.session.session_id}"
+            )
+        result = workflow.export(
+            DossierExportRequest(
+                session_id=session_id,
+                output_directory=output_directory,
+                force=force,
+            ),
+            package_version=__version__,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        _error(
+            as_json=as_json,
+            code="research_export_unavailable",
+            message="Research export is unavailable for this session or destination.",
+        )
+        return
+    _emit_export(result, as_json=as_json)
 
 
 def _gate_warnings() -> tuple[str, ...]:

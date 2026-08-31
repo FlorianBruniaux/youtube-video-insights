@@ -11,6 +11,7 @@ from yt_insights.paths import DataPaths
 from yt_insights.research.acquisition import CandidateAcquisitionOutcome
 from yt_insights.research.assessment import AssessmentRetryableError
 from yt_insights.research.discovery import DiscoveryResult
+from yt_insights.research.dossier import DossierExportRequest
 from yt_insights.research.models import (
     CandidateStatus,
     DatabaseSnapshot,
@@ -267,6 +268,53 @@ def test_start_records_a_retryable_local_index_failure_without_an_assessment(tmp
     assert payload["session"]["revision"] == 1
     assert payload["assessment"] is None
     assert payload["error_code"] == "local_index_unavailable"
+
+
+def test_export_publishes_the_stored_waiting_session_through_the_dossier_service(
+    tmp_path,
+) -> None:
+    """Removing workflow delegation must make the public export operation disappear."""
+    workflow = _workflow(tmp_path, FakeEvidenceReader())
+    workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    target = tmp_path / "dossier"
+
+    result = workflow.export(
+        DossierExportRequest(SESSION_ID, target),
+        package_version="0.2.0",
+    )
+
+    assert result.directory == target
+    assert (target / "manifest.json").is_file()
+    assert (target / "dossier.md").is_file()
+    assert len(result.manifest_sha256) == 64
+    assert len(result.dossier_sha256) == 64
+
+
+def test_export_leaves_nonexportable_state_validation_to_the_dossier_service(
+    tmp_path,
+) -> None:
+    """Bypassing the dossier service must not make an assessing session exportable."""
+    store = ResearchStore(tmp_path / "research.sqlite3", now=lambda: NOW)
+    store.create_session(
+        session_id=SESSION_ID,
+        topic="Local evidence",
+        queries=(QuerySpec("Local query"),),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.FAST,
+        discovery_fingerprint="a" * 64,
+    )
+    workflow = _workflow(tmp_path, FakeEvidenceReader(), store=store)
+
+    with pytest.raises(ValueError, match="completed or waiting"):
+        workflow.export(
+            DossierExportRequest(SESSION_ID, tmp_path / "dossier"),
+            package_version="0.2.0",
+        )
 
 
 def test_decide_refresh_persists_discovering_without_calling_the_network_provider(tmp_path) -> None:

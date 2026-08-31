@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 
 import pytest
 from click.testing import CliRunner
@@ -915,3 +916,244 @@ def test_research_acquisition_gate_warnings_are_bounded_and_do_not_block() -> No
         "gate_global_activation_not_ready",
         "gate_code_sha_unverified",
     )
+
+
+def test_research_export_json_uses_explicit_absolute_output_and_force(
+    tmp_path, monkeypatch
+) -> None:
+    from yt_insights import __version__
+
+    _configure_discovery_workflow(
+        tmp_path,
+        monkeypatch,
+        (_candidate("zyx987WVUT0"),),
+    )
+    runner = CliRunner()
+    started = runner.invoke(cli, ["research", "start", "Local evidence", "--json"])
+    session_id = json.loads(started.output)["session"]["session_id"]
+    target = tmp_path / "explicit-dossier"
+    arguments = [
+        "research",
+        "export",
+        session_id,
+        "--output",
+        str(target),
+        "--json",
+    ]
+
+    exported = runner.invoke(
+        cli,
+        arguments,
+        env={"YT_INSIGHTS_RESEARCH_OUTPUT_ROOT": str(tmp_path / "unused-root")},
+    )
+    existing = runner.invoke(cli, arguments)
+    forced = runner.invoke(cli, [*arguments[:-1], "--force", "--json"])
+
+    assert exported.exit_code == 0, exported.output
+    payload = json.loads(exported.output)
+    assert exported.output == json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ) + "\n"
+    assert payload == {
+        "directory": str(target),
+        "dossier_sha256": hashlib.sha256(
+            (target / "dossier.md").read_bytes()
+        ).hexdigest(),
+        "manifest_sha256": hashlib.sha256(
+            (target / "manifest.json").read_bytes()
+        ).hexdigest(),
+        "schema_version": 1,
+    }
+    assert (
+        json.loads((target / "manifest.json").read_text())["package_version"]
+        == __version__
+    )
+    assert "Is this evidence sufficient" not in exported.output
+    assert existing.exit_code == 1
+    assert json.loads(existing.output) == {
+        "error": {"code": "research_export_unavailable"},
+        "schema_version": 1,
+    }
+    assert forced.exit_code == 0, forced.output
+
+
+def test_research_export_derives_bounded_topic_path_from_session_creation_date(
+    tmp_path, monkeypatch
+) -> None:
+    from yt_insights import cli_research
+
+    created_at = datetime(2026, 7, 4, 23, 30, tzinfo=UTC)
+    session_id = "01K4RESEARCH0000000000000000"
+    output_root = tmp_path / "tracked-research"
+    output_root.mkdir()
+    workflow = ResearchWorkflow(
+        store=ResearchStore(
+            tmp_path / "research.sqlite3", now=lambda: created_at
+        ),
+        evidence_reader=FakeEvidenceReader(),
+        data_paths=DataPaths.from_root(tmp_path / "data"),
+        now=lambda: created_at,
+        session_id_factory=lambda: session_id,
+    )
+    monkeypatch.setattr(cli_research, "_workflow", lambda: workflow)
+    runner = CliRunner()
+    topic = "État de l'art de l'IA locale / qualité du code"
+    started = runner.invoke(cli, ["research", "start", topic, "--json"])
+    assert started.exit_code == 0, started.output
+
+    exported = runner.invoke(
+        cli,
+        ["research", "export", session_id, "--json"],
+        env={"YT_INSIGHTS_RESEARCH_OUTPUT_ROOT": str(output_root)},
+    )
+
+    expected = (
+        output_root
+        / "etat-de-l-art-de-l-ia-locale-qualite-du-code"
+        / f"2026-07-04-{session_id}"
+    )
+    assert exported.exit_code == 0, exported.output
+    assert json.loads(exported.output)["directory"] == str(expected)
+    assert expected.is_dir()
+
+
+@pytest.mark.parametrize(
+    ("arguments", "environment"),
+    (
+        (("research", "export", "session"), {}),
+        (
+            (
+                "research",
+                "export",
+                "session",
+                "--output",
+                "relative/dossier",
+            ),
+            {"YT_INSIGHTS_RESEARCH_OUTPUT_ROOT": "/must/not/be/used"},
+        ),
+    ),
+)
+def test_research_export_rejects_missing_config_and_relative_explicit_paths_before_workflow(
+    tmp_path, monkeypatch, arguments: tuple[str, ...], environment: dict[str, str]
+) -> None:
+    from yt_insights import cli_research
+    from yt_insights import config as config_module
+
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", tmp_path / "missing.toml")
+    monkeypatch.delenv("YT_INSIGHTS_RESEARCH_OUTPUT_ROOT", raising=False)
+
+    def unexpected_workflow() -> object:
+        raise AssertionError("invalid export requests must not open research state")
+
+    monkeypatch.setattr(cli_research, "_workflow", unexpected_workflow)
+
+    result = CliRunner().invoke(cli, list(arguments) + ["--json"], env=environment)
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {
+        "error": {"code": "invalid_export_request"},
+        "schema_version": 1,
+    }
+
+
+def test_research_export_rejects_a_symlink_configured_root_before_workflow(
+    tmp_path, monkeypatch
+) -> None:
+    from yt_insights import cli_research
+    from yt_insights import config as config_module
+
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", tmp_path / "missing.toml")
+    private_target = tmp_path / "PRIVATE-CONFIGURED-ROOT-CANARY"
+    private_target.mkdir()
+    configured_link = tmp_path / "configured-link"
+    configured_link.symlink_to(private_target, target_is_directory=True)
+
+    def unexpected_workflow() -> object:
+        raise AssertionError("a symlink output root must not open research state")
+
+    monkeypatch.setattr(cli_research, "_workflow", unexpected_workflow)
+    result = CliRunner().invoke(
+        cli,
+        ["research", "export", "session", "--json"],
+        env={"YT_INSIGHTS_RESEARCH_OUTPUT_ROOT": str(configured_link)},
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {
+        "error": {"code": "invalid_export_request"},
+        "schema_version": 1,
+    }
+    assert list(private_target.iterdir()) == []
+
+
+def test_research_export_bounds_missing_session_and_symlink_failures(
+    tmp_path, monkeypatch
+) -> None:
+    _configure_discovery_workflow(
+        tmp_path,
+        monkeypatch,
+        (_candidate("zyx987WVUT0"),),
+    )
+    runner = CliRunner()
+    started = runner.invoke(cli, ["research", "start", "Local evidence", "--json"])
+    session_id = json.loads(started.output)["session"]["session_id"]
+    private_target = tmp_path / "PRIVATE-TARGET-CANARY"
+    private_target.mkdir()
+    link = tmp_path / "linked-dossier"
+    link.symlink_to(private_target, target_is_directory=True)
+
+    missing = runner.invoke(
+        cli,
+        [
+            "research",
+            "export",
+            "missing-session",
+            "--output",
+            str(tmp_path / "missing"),
+            "--json",
+        ],
+    )
+    symlink = runner.invoke(
+        cli,
+        [
+            "research",
+            "export",
+            session_id,
+            "--output",
+            str(link),
+            "--json",
+        ],
+    )
+
+    for result in (missing, symlink):
+        assert result.exit_code == 1
+        assert json.loads(result.output) == {
+            "error": {"code": "research_export_unavailable"},
+            "schema_version": 1,
+        }
+        assert "PRIVATE-TARGET-CANARY" not in result.output
+
+
+def test_research_export_human_output_contains_path_and_hashes_without_a_question(
+    tmp_path, monkeypatch
+) -> None:
+    _configure_discovery_workflow(
+        tmp_path,
+        monkeypatch,
+        (_candidate("zyx987WVUT0"),),
+    )
+    runner = CliRunner()
+    started = runner.invoke(cli, ["research", "start", "Local evidence", "--json"])
+    session_id = json.loads(started.output)["session"]["session_id"]
+    target = tmp_path / "human-dossier"
+
+    exported = runner.invoke(
+        cli,
+        ["research", "export", session_id, "--output", str(target)],
+    )
+
+    assert exported.exit_code == 0, exported.output
+    assert f"Directory: {target}" in exported.output
+    assert "Manifest SHA-256: " in exported.output
+    assert "Dossier SHA-256: " in exported.output
+    assert "Is this evidence sufficient" not in exported.output

@@ -15,6 +15,7 @@ from yt_insights.paths import DataPaths
 from .acquisition import ResearchAcquisitionService
 from .assessment import AssessmentRetryableError, EvidenceReader, assess_local
 from .discovery import DiscoveryProvider, DiscoveryResult
+from .dossier import DossierExportRequest, DossierExportResult, export_dossier
 from .models import (
     AcquisitionAttempt,
     CandidateStatus,
@@ -153,6 +154,19 @@ class ResearchWorkflow:
         assessment = self._store.get_latest_assessment(session_id)
         candidates = self._store.list_candidates(session_id)
         return ResearchResponse(session, assessment, candidates or None)
+
+    def export(
+        self,
+        request: DossierExportRequest,
+        *,
+        package_version: str,
+    ) -> DossierExportResult:
+        """Delegate deterministic export and its state checks to the dossier service."""
+        return export_dossier(
+            request,
+            store=self._store,
+            package_version=package_version,
+        )
 
     def decide(
         self,
