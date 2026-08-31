@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import yt_insights.web.readers as readers_module
 from yt_insights.catalog import Catalog
 from yt_insights.downloader import VideoInfo, VideoListResult
 from yt_insights.web.readers import CatalogWebReader, ExportReader
@@ -135,6 +136,9 @@ def test_export_reader_reads_nested_dossiers_and_hides_unsafe_entries(
         ],
         "limit": 10,
         "truncated": False,
+        "inventory_complete": True,
+        "inventory_examined": 6,
+        "inventory_limit": 32,
     }
     assert "linked-topic" not in repr(payload)
     assert "linked-dossier" not in repr(payload)
@@ -165,4 +169,65 @@ def test_export_reader_caps_descriptor_inventory_without_listdir_materialization
         "items": [],
         "limit": 1,
         "truncated": True,
+        "inventory_complete": False,
+        "inventory_examined": 32,
+        "inventory_limit": 32,
     }
+
+
+def test_export_reader_discloses_a_valid_dossier_beyond_its_inventory_budget(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A capped scan must disclose that a valid unexamined dossier may exist."""
+    exports = tmp_path / "exports"
+    for index in range(32):
+        (exports / f"topic-{index:02d}").mkdir(parents=True)
+    hidden = exports / "topic-32" / "2026-08-31-hidden"
+    hidden.mkdir(parents=True)
+    (hidden / "manifest.json").write_text(json.dumps(_manifest()), encoding="utf-8")
+    original_scandir = os.scandir
+
+    class SortedScandir:
+        def __init__(self, descriptor: int) -> None:
+            with original_scandir(descriptor) as entries:
+                self._entries = iter(sorted(entries, key=lambda entry: entry.name))
+
+        def __enter__(self) -> object:
+            return self._entries
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    monkeypatch.setattr(readers_module.os, "scandir", SortedScandir)
+
+    assert ExportReader(exports).list_exports(limit=10) == {
+        "items": [],
+        "limit": 10,
+        "truncated": True,
+        "inventory_complete": False,
+        "inventory_examined": 32,
+        "inventory_limit": 32,
+    }
+
+
+def test_export_reader_stably_sorts_examined_dossiers(tmp_path: Path) -> None:
+    """Directory iteration order must not change the public order of examined dossiers."""
+    exports = tmp_path / "exports" / "topic"
+    first = exports / "2026-08-31-z"
+    second = exports / "2026-08-31-a"
+    for directory, session_id in ((first, "z" * 32), (second, "a" * 32)):
+        directory.mkdir(parents=True)
+        (directory / "manifest.json").write_text(
+            json.dumps(_manifest(session_id=session_id)), encoding="utf-8"
+        )
+
+    payload = ExportReader(exports.parent).list_exports(limit=10)
+
+    items = payload["items"]
+    assert isinstance(items, list)
+    assert all(isinstance(item, dict) for item in items)
+    assert [item["name"] for item in items] == [
+        "2026-08-31-a",
+        "2026-08-31-z",
+    ]
+    assert payload["inventory_complete"] is True

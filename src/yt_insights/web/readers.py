@@ -16,10 +16,9 @@ from yt_insights.catalog import Catalog, CatalogError, ReadOnlyCatalog
 _MAX_PAGE_SIZE: Final = 100
 _MAX_METADATA_VALUES: Final = 20
 _MAX_MANIFEST_BYTES: Final = 64 * 1024
-# Export roots are user-managed directories. These caps bound descriptor work
-# and retained names even if the caller asks for a one-record page.
-_MAX_EXPORT_TOPICS: Final = 32
-_MAX_DOSSIERS_PER_TOPIC: Final = 32
+# Export roots are user-managed directories. This observable inventory limit
+# bounds all direct-child examinations across both hierarchy levels.
+_EXPORT_INVENTORY_LIMIT: Final = 32
 _DIRECTORY_FLAGS: Final = (
     os.O_RDONLY
     | getattr(os, "O_DIRECTORY", 0)
@@ -153,6 +152,30 @@ class CatalogWebReader:
         }
 
 
+class _ExportInventory:
+    """Track one bounded, explicitly partial export-directory inventory."""
+
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.examined = 0
+        self.complete = True
+
+    def names(self, directory_fd: int) -> list[str]:
+        """Return sorted names examined before the fixed global budget ends."""
+        names: list[str] = []
+        try:
+            with os.scandir(directory_fd) as entries:
+                for entry in entries:
+                    if self.examined >= self.limit:
+                        self.complete = False
+                        break
+                    self.examined += 1
+                    names.append(entry.name)
+        except OSError:
+            self.complete = False
+        return sorted(names)
+
+
 class ExportReader:
     """Read safe summaries of locally generated research dossiers."""
 
@@ -162,73 +185,71 @@ class ExportReader:
             raise ValueError("exports path must be absolute")
 
     def list_exports(self, *, limit: int) -> dict[str, object]:
-        """Return safe dossiers from the configured topic/dossier hierarchy."""
+        """Return safe dossiers with explicit bounded-inventory metadata.
+
+        ``inventory_examined`` counts root and topic child entries inspected
+        against ``inventory_limit``. A false ``inventory_complete`` means valid
+        dossiers may remain unexamined, and therefore sets ``truncated``.
+        """
         _require_page(limit, 0)
+        inventory = _ExportInventory(_EXPORT_INVENTORY_LIMIT)
         try:
             root_details = self._exports.lstat()
         except FileNotFoundError:
-            return {"items": [], "limit": limit, "truncated": False}
+            return self._response([], limit=limit, inventory=inventory)
         if stat.S_ISLNK(root_details.st_mode) or not stat.S_ISDIR(root_details.st_mode):
-            return {"items": [], "limit": limit, "truncated": False}
+            return self._response([], limit=limit, inventory=inventory)
         try:
             root_fd = os.open(self._exports, _DIRECTORY_FLAGS)
         except OSError:
-            return {"items": [], "limit": limit, "truncated": False}
+            inventory.complete = False
+            return self._response([], limit=limit, inventory=inventory)
         try:
             opened_root = os.fstat(root_fd)
             if (opened_root.st_dev, opened_root.st_ino) != (
                 root_details.st_dev,
                 root_details.st_ino,
             ):
-                return {"items": [], "limit": limit, "truncated": False}
+                inventory.complete = False
+                return self._response([], limit=limit, inventory=inventory)
             items: list[dict[str, object]] = []
-            topic_names, truncated = self._bounded_names(
-                root_fd, maximum=_MAX_EXPORT_TOPICS
-            )
-            for topic_index, topic_name in enumerate(topic_names):
+            for topic_name in inventory.names(root_fd):
                 topic_fd = self._open_directory(root_fd, topic_name)
                 if topic_fd is None:
                     continue
                 try:
-                    dossier_names, dossiers_truncated = self._bounded_names(
-                        topic_fd, maximum=_MAX_DOSSIERS_PER_TOPIC
-                    )
-                    truncated = truncated or dossiers_truncated
-                    for dossier_index, dossier_name in enumerate(dossier_names):
+                    for dossier_name in inventory.names(topic_fd):
                         item = self._export_item(topic_fd, dossier_name)
-                        if item is None:
-                            continue
-                        items.append(item)
-                        has_unread_names = (
-                            dossier_index < len(dossier_names) - 1
-                            or topic_index < len(topic_names) - 1
-                            or truncated
-                        )
-                        if len(items) >= limit and has_unread_names:
-                            return {
-                                "items": items,
-                                "limit": limit,
-                                "truncated": True,
-                            }
+                        if item is not None:
+                            items.append(item)
                 finally:
                     os.close(topic_fd)
-            return {"items": items, "limit": limit, "truncated": truncated}
+            return self._response(items, limit=limit, inventory=inventory)
         finally:
             os.close(root_fd)
 
     @staticmethod
-    def _bounded_names(directory_fd: int, *, maximum: int) -> tuple[list[str], bool]:
-        """Retain no more than one fixed inventory page of direct children."""
-        names: list[str] = []
-        try:
-            with os.scandir(directory_fd) as entries:
-                for entry in entries:
-                    if len(names) >= maximum:
-                        return (sorted(names), True)
-                    names.append(entry.name)
-        except OSError:
-            return ([], True)
-        return (sorted(names), False)
+    def _response(
+        items: list[dict[str, object]], *, limit: int, inventory: _ExportInventory
+    ) -> dict[str, object]:
+        ordered_items = sorted(
+            items,
+            key=lambda item: (
+                str(item["name"]),
+                str(item["session_id"] or ""),
+                str(item["created_at"] or ""),
+                str(item["manifest_valid"]),
+            ),
+        )
+        truncated = not inventory.complete or len(ordered_items) > limit
+        return {
+            "items": ordered_items[:limit],
+            "limit": limit,
+            "truncated": truncated,
+            "inventory_complete": inventory.complete,
+            "inventory_examined": inventory.examined,
+            "inventory_limit": inventory.limit,
+        }
 
     @staticmethod
     def _open_directory(parent_fd: int, name: str) -> int | None:
