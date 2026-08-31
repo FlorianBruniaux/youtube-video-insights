@@ -45,7 +45,8 @@ from .models import (
 _SCHEMA_VERSION = 1
 _ACQUISITION_HISTORY_INDEX = (
     "CREATE UNIQUE INDEX IF NOT EXISTS research_acquisition_attempts_history "
-    "ON research_acquisition_attempts(session_id, created_at, attempt_id)"
+    "ON research_acquisition_attempts"
+    "(session_id, expected_revision, created_at, attempt_id)"
 )
 _ERROR_CODE = re.compile(r"[\x21-\x7e]{1,100}")
 _T = TypeVar("_T")
@@ -145,7 +146,7 @@ _SCHEMA_INDEXES = {
     "research_acquisition_attempts": frozenset({
         ("pk", ("attempt_id",)),
         ("u", ("idempotency_key",)),
-        ("c", ("session_id", "created_at", "attempt_id")),
+        ("c", ("session_id", "expected_revision", "created_at", "attempt_id")),
     }),
     "research_acquisition_outcomes": frozenset({("pk", ("attempt_id", "video_id"))}),
     "research_events": frozenset(),
@@ -691,7 +692,8 @@ class ResearchStore:
             attempt_rows = connection.execute(
                 """SELECT * FROM research_acquisition_attempts
                 WHERE session_id = ?
-                ORDER BY created_at DESC, attempt_id DESC LIMIT 101""",
+                ORDER BY expected_revision DESC, created_at DESC,
+                attempt_id DESC LIMIT 101""",
                 (session_id,),
             ).fetchall()
             truncated = len(attempt_rows) > 100
@@ -832,11 +834,14 @@ class ResearchStore:
                     return None
                 row = connection.execute(
                     """SELECT * FROM research_acquisition_attempts
-                    WHERE session_id = ? AND status = 'failed_retryable'
-                    ORDER BY created_at DESC, attempt_id DESC LIMIT 1""",
+                    WHERE session_id = ?
+                    ORDER BY expected_revision DESC, created_at DESC,
+                    attempt_id DESC LIMIT 1""",
                     (session_id,),
                 ).fetchone()
-                return None if row is None else self._attempt_from_row(row)
+                if row is None or row["status"] != "failed_retryable":
+                    return None
+                return self._attempt_from_row(row)
             if session.state in {
                 ResearchState.REINDEXING,
                 ResearchState.ASSESSING,
@@ -853,6 +858,17 @@ class ResearchStore:
                 and session.retry_target is not ResearchState.ACQUIRING
             ):
                 return None
+            if session.state is ResearchState.AWAITING_SUFFICIENCY:
+                row = connection.execute(
+                    """SELECT * FROM research_acquisition_attempts
+                    WHERE session_id = ?
+                    ORDER BY expected_revision DESC, created_at DESC,
+                    attempt_id DESC LIMIT 1""",
+                    (session_id,),
+                ).fetchone()
+                if row is None or row["status"] != "failed_retryable":
+                    raise ValueError("session has no recoverable acquisition attempt")
+                return self._attempt_from_row(row)
             status = (
                 "running"
                 if session.state is ResearchState.ACQUIRING
@@ -861,7 +877,8 @@ class ResearchStore:
             row = connection.execute(
                 """SELECT * FROM research_acquisition_attempts
                 WHERE session_id = ? AND status = ?
-                ORDER BY created_at DESC, attempt_id DESC LIMIT 1""",
+                ORDER BY expected_revision DESC, created_at DESC,
+                attempt_id DESC LIMIT 1""",
                 (session_id, status),
             ).fetchone()
             if row is None:
@@ -938,7 +955,8 @@ class ResearchStore:
                 row = connection.execute(
                     """SELECT * FROM research_acquisition_attempts
                     WHERE session_id = ? AND status = ?
-                    ORDER BY created_at DESC, attempt_id DESC LIMIT 1""",
+                    ORDER BY expected_revision DESC, created_at DESC,
+                    attempt_id DESC LIMIT 1""",
                     (session_id, expected_status),
                 ).fetchone()
                 if row is None:
@@ -1134,7 +1152,12 @@ class ResearchStore:
             ):
                 history_index = (
                     "c",
-                    ("session_id", "created_at", "attempt_id"),
+                    (
+                        "session_id",
+                        "expected_revision",
+                        "created_at",
+                        "attempt_id",
+                    ),
                 )
                 if indexes == expected_indexes - {history_index}:
                     expected_indexes = indexes

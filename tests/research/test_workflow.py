@@ -1226,6 +1226,95 @@ def test_partial_acquisition_can_be_accepted_without_retrying_failed_videos(
     assert history.acquisition_attempts[-1].status == "failed_retryable"
 
 
+def test_retry_does_not_resurrect_an_old_partial_attempt_after_new_acquisition(
+    tmp_path,
+) -> None:
+    first = _candidate(video_id="zyx987WVUT0")
+    second = _candidate(video_id="zyx987WVUT1")
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (first, second), (), True)
+    )
+
+    class FirstBatchPartialAcquisition:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.failed_once = False
+
+        def acquire_approved(
+            self,
+            candidates: tuple[ResearchCandidate, ...],
+            *,
+            data_paths: DataPaths,
+            language: str,
+            cookies_from_browser: str | None = None,
+        ) -> tuple[CandidateAcquisitionOutcome, ...]:
+            video_id = candidates[0].video_id
+            self.calls.append(video_id)
+            if video_id == second.video_id and not self.failed_once:
+                self.failed_once = True
+                raise LookupError("private transient failure")
+            return (
+                CandidateAcquisitionOutcome(
+                    video_id,
+                    CandidateStatus.ACQUIRED,
+                    None,
+                    ("b" if video_id == first.video_id else "c") * 64,
+                ),
+            )
+
+    acquisition = FirstBatchPartialAcquisition()
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: None,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(first.video_id, second.video_id),
+    )
+    partial = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="partial-acquire-key",
+        language="en",
+    )
+    discovering = workflow.decide(
+        SESSION_ID,
+        expected_revision=partial.session.revision,
+        decision="refresh",
+        idempotency_key="second-refresh-key",
+    )
+    discovered = workflow.discover(
+        SESSION_ID,
+        expected_revision=discovering.session.revision,
+    )
+    approved = workflow.approve(
+        SESSION_ID,
+        expected_revision=discovered.session.revision,
+        video_ids=(first.video_id, second.video_id),
+        idempotency_key="second-approve-key",
+    )
+    complete = workflow.acquire(
+        SESSION_ID,
+        expected_revision=approved.session.revision,
+        idempotency_key="complete-acquire-key",
+        language="en",
+    )
+    calls_before_retry = tuple(acquisition.calls)
+
+    with pytest.raises(ValueError, match="recoverable acquisition attempt"):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=complete.session.revision,
+            idempotency_key="stale-partial-retry-key",
+        )
+
+    assert tuple(acquisition.calls) == calls_before_retry
+
+
 @pytest.mark.parametrize("failed_stage", ["reindexing", "assessing"])
 def test_partial_attempt_lineage_survives_pipeline_failure_and_retry(
     tmp_path,
@@ -1540,6 +1629,18 @@ def test_public_acquisition_history_is_bounded_and_reports_truncation(tmp_path) 
 
     response = workflow.status(SESSION_ID)
     payload = response.to_dict()
+    with sqlite3.connect(tmp_path / "research.sqlite3") as connection:
+        query_plan = " ".join(
+            str(row[3])
+            for row in connection.execute(
+                """EXPLAIN QUERY PLAN
+                SELECT * FROM research_acquisition_attempts
+                WHERE session_id = ?
+                ORDER BY expected_revision DESC, created_at DESC,
+                attempt_id DESC LIMIT 101""",
+                (SESSION_ID,),
+            )
+        )
 
     assert len(payload["acquisition_history"]) == 100
     assert payload["acquisition_history"][0]["attempt_id"] == "attempt-002"
@@ -1547,6 +1648,9 @@ def test_public_acquisition_history_is_bounded_and_reports_truncation(tmp_path) 
     assert payload["acquisition_history_truncated"] is True
     assert "SECRET-TRUNCATED-CANARY" not in json.dumps(payload)
     assert "SECRET-TRUNCATED-CANARY" not in repr(response)
+    assert "research_acquisition_attempts_history" in query_plan
+    with pytest.raises(ValueError, match="revision conflict"):
+        store.get_public_snapshot(SESSION_ID, expected_revision=0)
 
 
 def test_unexpected_index_database_error_is_bounded_and_retryable(tmp_path) -> None:
