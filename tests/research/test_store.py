@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, date, datetime, timedelta, timezone
+import json
 import sqlite3
 
 import pytest
@@ -224,10 +225,39 @@ def test_candidate_acquisition_and_reindexing_lifecycle_is_durable(tmp_path: obj
     assert store.last_successful_discovery_at("a" * 64) == NOW
     acquiring = store.approve_candidates(SESSION_ID, expected_revision=3, video_ids=(VIDEO_ID,), idempotency_key="approve")
     assert acquiring.state is ResearchState.ACQUIRING
-    attempt = store.start_acquisition_attempt(SESSION_ID, expected_revision=4, video_ids=(VIDEO_ID,), idempotency_key="attempt-key", attempt_id="attempt-1")
-    assert store.start_acquisition_attempt(SESSION_ID, expected_revision=4, video_ids=(VIDEO_ID,), idempotency_key="attempt-key", attempt_id="attempt-1") == attempt
+    reservation = store.start_acquisition_attempt(
+        SESSION_ID,
+        expected_revision=4,
+        video_ids=(VIDEO_ID,),
+        idempotency_key="attempt-key",
+        attempt_id="attempt-1",
+        language="en",
+        cookies_from_browser="firefox",
+    )
+    attempt = reservation.attempt
+    replayed_reservation = store.start_acquisition_attempt(
+        SESSION_ID,
+        expected_revision=4,
+        video_ids=(VIDEO_ID,),
+        idempotency_key="attempt-key",
+        attempt_id="attempt-1",
+        language="en",
+        cookies_from_browser="firefox",
+    )
+    assert reservation.claimed is True
+    assert replayed_reservation == type(reservation)(attempt, False)
+    assert attempt.language == "en"
+    assert attempt.cookies_from_browser == "firefox"
     with pytest.raises(ValueError, match="idempotency"):
-        store.start_acquisition_attempt(SESSION_ID, expected_revision=4, video_ids=(VIDEO_ID,), idempotency_key="attempt-key", attempt_id="attempt-other")
+        store.start_acquisition_attempt(
+            SESSION_ID,
+            expected_revision=4,
+            video_ids=(VIDEO_ID,),
+            idempotency_key="attempt-key",
+            attempt_id="attempt-other",
+            language="en",
+            cookies_from_browser="firefox",
+        )
     reindexing = store.record_acquisition_batch(
         SESSION_ID,
         expected_revision=4,
@@ -254,6 +284,143 @@ def test_candidate_acquisition_and_reindexing_lifecycle_is_durable(tmp_path: obj
         ResearchState.REINDEXING,
         ResearchState.ASSESSING,
     ]
+
+
+def test_failed_acquisition_is_reclaimed_only_by_durable_retry_and_keeps_progress(
+    tmp_path: object,
+) -> None:
+    store = _store(tmp_path)
+    second_id = "def123GHI67"
+    _create(store)
+    store.record_assessment(SESSION_ID, expected_revision=0, assessment=_assessment())
+    store.decide_sufficiency(
+        SESSION_ID,
+        expected_revision=1,
+        sufficient=False,
+        idempotency_key="refresh",
+    )
+    store.record_candidates(
+        SESSION_ID,
+        expected_revision=2,
+        candidates=(_candidate(), _candidate(video_id=second_id)),
+        provider_name="provider",
+        provider_version=1,
+        errors=(),
+    )
+    store.approve_candidates(
+        SESSION_ID,
+        expected_revision=3,
+        video_ids=(VIDEO_ID, second_id),
+        idempotency_key="approve",
+    )
+    reservation = store.start_acquisition_attempt(
+        SESSION_ID,
+        expected_revision=4,
+        video_ids=(VIDEO_ID, second_id),
+        idempotency_key="attempt-key",
+        attempt_id="attempt-1",
+        language="en",
+        cookies_from_browser="firefox:research",
+    )
+    store.record_acquisition_progress(
+        SESSION_ID,
+        expected_revision=4,
+        attempt_id=reservation.attempt.attempt_id,
+        outcomes=(
+            ResearchAcquisitionOutcome(
+                "attempt-1",
+                VIDEO_ID,
+                CandidateStatus.ACQUIRED,
+                None,
+                "c" * 64,
+            ),
+        ),
+    )
+    failed = store.record_acquisition_failure(
+        SESSION_ID,
+        expected_revision=4,
+        attempt_id="attempt-1",
+        error_code="acquisition_unavailable",
+    )
+
+    plain_replay = store.start_acquisition_attempt(
+        SESSION_ID,
+        expected_revision=4,
+        video_ids=(VIDEO_ID, second_id),
+        idempotency_key="attempt-key",
+        attempt_id="attempt-1",
+        language="en",
+        cookies_from_browser="firefox:research",
+    )
+    claimed_retry = store.claim_retry(
+        SESSION_ID,
+        expected_revision=failed.revision,
+        idempotency_key="retry-key",
+    )
+
+    assert plain_replay.claimed is False
+    assert plain_replay.attempt.status == "failed_retryable"
+    assert claimed_retry.claimed is True
+    assert claimed_retry.retry_target is ResearchState.ACQUIRING
+    assert claimed_retry.acquisition_attempt is not None
+    assert claimed_retry.acquisition_attempt.status == "running"
+    assert claimed_retry.acquisition_attempt.video_ids == (VIDEO_ID, second_id)
+    assert claimed_retry.acquisition_attempt.language == "en"
+    assert claimed_retry.acquisition_attempt.cookies_from_browser == "firefox:research"
+    assert store.get_session_history(SESSION_ID).acquisition_outcomes == (
+        ResearchAcquisitionOutcome(
+            "attempt-1",
+            VIDEO_ID,
+            CandidateStatus.ACQUIRED,
+            None,
+            "c" * 64,
+        ),
+    )
+
+    store.record_acquisition_progress(
+        SESSION_ID,
+        expected_revision=claimed_retry.session.revision,
+        attempt_id="attempt-1",
+        outcomes=(
+            ResearchAcquisitionOutcome(
+                "attempt-1",
+                second_id,
+                CandidateStatus.ALREADY_PRESENT,
+                None,
+                "d" * 64,
+            ),
+        ),
+    )
+    completed = store.complete_acquisition_attempt(
+        SESSION_ID,
+        expected_revision=claimed_retry.session.revision,
+        attempt_id="attempt-1",
+    )
+    store.complete_retry(
+        "retry-key",
+        result=completed,
+        error_code=None,
+    )
+    replayed_retry = store.claim_retry(
+        SESSION_ID,
+        expected_revision=failed.revision,
+        idempotency_key="retry-key",
+    )
+
+    assert replayed_retry.claimed is False
+    assert replayed_retry.session == completed
+    assert replayed_retry.error_code is None
+    assert store.get_session(SESSION_ID).state is ResearchState.REINDEXING
+    retry_decision = store.get_session_history(SESSION_ID).decisions[-1]
+    assert json.loads(retry_decision.payload_json)["request"] == {
+        "expected_revision": failed.revision
+    }
+    with pytest.raises(ValueError, match="idempotency"):
+        store.claim_retry(
+            SESSION_ID,
+            expected_revision=completed.revision,
+            idempotency_key="retry-key",
+        )
 
 
 def test_approve_candidates_rejects_more_than_five_ids(tmp_path: object) -> None:

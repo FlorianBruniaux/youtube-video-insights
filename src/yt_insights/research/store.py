@@ -12,6 +12,7 @@ from typing import Any, Callable, TypeVar
 
 from .models import (
     AcquisitionAttempt,
+    AcquisitionReservation,
     CandidateStatus,
     CoverageMetrics,
     DatabaseSnapshot,
@@ -27,6 +28,7 @@ from .models import (
     ResearchCandidate,
     ResearchSession,
     ResearchState,
+    RetryReservation,
     SessionHistory,
     VideoEvidence,
     normalize_research_text,
@@ -288,17 +290,42 @@ class ResearchStore:
             return result
         return self._write(operation)
 
-    def start_acquisition_attempt(self, session_id: str, *, expected_revision: int, video_ids: tuple[str, ...], idempotency_key: str, attempt_id: str) -> AcquisitionAttempt:
+    def start_acquisition_attempt(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        video_ids: tuple[str, ...],
+        idempotency_key: str,
+        attempt_id: str,
+        language: str = "fr",
+        cookies_from_browser: str | None = None,
+    ) -> AcquisitionReservation:
         if not isinstance(video_ids, tuple) or not video_ids or len(set(video_ids)) != len(video_ids):
             raise ValueError("video IDs must be a non-empty tuple without duplicates")
-        payload = {"attempt_id": attempt_id, "video_ids": list(video_ids)}
-        def operation(connection: sqlite3.Connection) -> AcquisitionAttempt:
+        payload = {
+            "attempt_id": attempt_id,
+            # Persist only the yt-dlp browser/profile selector, never cookies.
+            "browser_identifier": cookies_from_browser,
+            "language": language,
+            "original_revision": expected_revision,
+            "video_ids": list(video_ids),
+        }
+
+        def operation(connection: sqlite3.Connection) -> AcquisitionReservation:
             row = connection.execute("SELECT * FROM research_acquisition_attempts WHERE idempotency_key = ?", (idempotency_key,)).fetchone()
             if row is not None:
                 existing = self._attempt_from_row(row)
-                if existing.session_id != session_id or existing.revision != expected_revision or existing.attempt_id != attempt_id or existing.video_ids != video_ids:
+                if (
+                    existing.session_id != session_id
+                    or existing.revision != expected_revision
+                    or existing.attempt_id != attempt_id
+                    or existing.video_ids != video_ids
+                    or existing.language != language
+                    or existing.cookies_from_browser != cookies_from_browser
+                ):
                     raise ValueError("idempotency key payload differs")
-                return existing
+                return AcquisitionReservation(existing, False)
             session = self._expected(connection, session_id, expected_revision, {ResearchState.ACQUIRING})
             now = self._timestamp()
             try:
@@ -309,44 +336,131 @@ class ResearchStore:
             except sqlite3.IntegrityError as exc:
                 raise ValueError("attempt already exists") from exc
             self._event(connection, session_id, session.state, session.state, "acquisition_attempt_started", payload)
-            return AcquisitionAttempt(attempt_id, idempotency_key, session_id, expected_revision, "running", video_ids, _datetime(now), _datetime(now))
+            attempt = AcquisitionAttempt(
+                attempt_id,
+                idempotency_key,
+                session_id,
+                expected_revision,
+                "running",
+                video_ids,
+                language,
+                cookies_from_browser,
+                _datetime(now),
+                _datetime(now),
+            )
+            return AcquisitionReservation(attempt, True)
+        return self._write(operation)
+
+    def record_acquisition_progress(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        attempt_id: str,
+        outcomes: tuple[ResearchAcquisitionOutcome, ...],
+    ) -> None:
+        self._validate_outcomes(outcomes)
+
+        def operation(connection: sqlite3.Connection) -> None:
+            session, attempt = self._active_attempt(
+                connection,
+                session_id,
+                expected_revision,
+                attempt_id,
+            )
+            self._record_acquisition_progress(
+                connection,
+                session,
+                attempt,
+                outcomes,
+            )
+
+        self._write(operation)
+
+    def complete_acquisition_attempt(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        attempt_id: str,
+    ) -> ResearchSession:
+        def operation(connection: sqlite3.Connection) -> ResearchSession:
+            session, attempt = self._active_attempt(
+                connection,
+                session_id,
+                expected_revision,
+                attempt_id,
+            )
+            return self._complete_acquisition_attempt(connection, session, attempt)
+
         return self._write(operation)
 
     def record_acquisition_batch(self, session_id: str, *, expected_revision: int, attempt_id: str, outcomes: tuple[ResearchAcquisitionOutcome, ...]) -> ResearchSession:
+        self._validate_outcomes(outcomes)
+
+        def operation(connection: sqlite3.Connection) -> ResearchSession:
+            session, attempt = self._active_attempt(
+                connection,
+                session_id,
+                expected_revision,
+                attempt_id,
+            )
+            self._record_acquisition_progress(
+                connection,
+                session,
+                attempt,
+                outcomes,
+            )
+            return self._complete_acquisition_attempt(connection, session, attempt)
+
+        return self._write(operation)
+
+    def record_acquisition_failure(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        attempt_id: str,
+        error_code: str,
+    ) -> ResearchSession:
+        if not _is_error_code(error_code):
+            raise ValueError("error code must be 1 to 100 printable ASCII characters")
+
+        def operation(connection: sqlite3.Connection) -> ResearchSession:
+            session, attempt = self._active_attempt(
+                connection,
+                session_id,
+                expected_revision,
+                attempt_id,
+            )
+            now = self._timestamp()
+            connection.execute(
+                "UPDATE research_acquisition_attempts SET status = 'failed_retryable', updated_at = ? WHERE attempt_id = ?",
+                (now, attempt.attempt_id),
+            )
+            return self._transition(
+                connection,
+                session,
+                ResearchState.FAILED_RETRYABLE,
+                "failure_recorded",
+                {
+                    "attempt_id": attempt.attempt_id,
+                    "error_code": error_code,
+                    "retry_target": ResearchState.ACQUIRING.value,
+                },
+                retry_target=ResearchState.ACQUIRING,
+            )
+
+        return self._write(operation)
+
+    def _validate_outcomes(
+        self,
+        outcomes: tuple[ResearchAcquisitionOutcome, ...],
+    ) -> None:
         if not isinstance(outcomes, tuple) or not outcomes:
             raise ValueError("outcomes must be a non-empty tuple")
         if any(outcome.error_code is not None and not _is_error_code(outcome.error_code) for outcome in outcomes):
             raise ValueError("error code must be 1 to 100 printable ASCII characters")
-        def operation(connection: sqlite3.Connection) -> ResearchSession:
-            session = self._expected(connection, session_id, expected_revision, {ResearchState.ACQUIRING})
-            row = connection.execute("SELECT * FROM research_acquisition_attempts WHERE attempt_id = ?", (attempt_id,)).fetchone()
-            if row is None:
-                raise ValueError("acquisition attempt does not exist")
-            attempt = self._attempt_from_row(row)
-            if attempt.session_id != session_id or attempt.revision != expected_revision or attempt.status != "running":
-                raise ValueError("acquisition attempt is not active for this revision")
-            if len({outcome.video_id for outcome in outcomes}) != len(outcomes) or any(outcome.attempt_id != attempt_id for outcome in outcomes):
-                raise ValueError("outcomes must be unique and belong to the attempt")
-            if {outcome.video_id for outcome in outcomes} != set(attempt.video_ids):
-                raise ValueError("outcomes must cover exactly the reserved videos")
-            now = self._timestamp()
-            revision = self._candidate_revision(connection, session_id)
-            candidates = {candidate.video_id: candidate for candidate in self.list_candidates(session_id)}
-            for outcome in outcomes:
-                if outcome.video_id not in candidates:
-                    raise ValueError("outcome video is not a candidate")
-                connection.execute(
-                    "INSERT INTO research_acquisition_outcomes VALUES (?, ?, ?, ?, ?)",
-                    (attempt_id, outcome.video_id, outcome.status.value, outcome.error_code, outcome.source_sha256),
-                )
-                updated = replace(candidates[outcome.video_id], status=outcome.status)
-                connection.execute(
-                    "UPDATE research_candidates SET payload_json = ?, status = ?, updated_at = ? WHERE session_id = ? AND snapshot_revision = ? AND video_id = ?",
-                    (_canonical_json(updated), outcome.status.value, now, session_id, revision, outcome.video_id),
-                )
-            connection.execute("UPDATE research_acquisition_attempts SET status = 'completed', updated_at = ? WHERE attempt_id = ?", (now, attempt_id))
-            return self._transition(connection, session, ResearchState.REINDEXING, "acquisition_batch_recorded", {"attempt_id": attempt_id})
-        return self._write(operation)
 
     def complete_reindexing(self, session_id: str, *, expected_revision: int) -> ResearchSession:
         def operation(connection: sqlite3.Connection) -> ResearchSession:
@@ -375,16 +489,148 @@ class ResearchStore:
         return self._write(operation)
 
     def retry(self, session_id: str, *, expected_revision: int, idempotency_key: str) -> ResearchSession:
+        payload = {"expected_revision": expected_revision}
+
         def operation(connection: sqlite3.Connection) -> ResearchSession:
-            replayed = self._idempotent_decision(connection, idempotency_key, session_id, expected_revision, "retry", {})
+            replayed = self._idempotent_decision(connection, idempotency_key, session_id, expected_revision, "retry", payload)
             if replayed is not None:
                 return replayed
             session = self._expected(connection, session_id, expected_revision, {ResearchState.FAILED_RETRYABLE})
             if session.retry_target not in set(_FAILURE_RETRY_TARGETS.values()):
                 raise ValueError("failed session has no retry target")
-            result = self._transition(connection, session, session.retry_target, "retry", {}, retry_target=None)
-            self._decision(connection, idempotency_key, session_id, expected_revision, "retry", {}, result)
+            result = self._transition(connection, session, session.retry_target, "retry", payload, retry_target=None)
+            self._decision(connection, idempotency_key, session_id, expected_revision, "retry", payload, result)
             return result
+        return self._write(operation)
+
+    def claim_retry(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+    ) -> RetryReservation:
+        request = {"expected_revision": expected_revision}
+
+        def operation(connection: sqlite3.Connection) -> RetryReservation:
+            row = connection.execute(
+                "SELECT * FROM research_decisions WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if row is not None:
+                return self._retry_reservation_from_row(
+                    row,
+                    session_id=session_id,
+                    expected_revision=expected_revision,
+                    request=request,
+                )
+
+            session = self._expected(
+                connection,
+                session_id,
+                expected_revision,
+                {ResearchState.FAILED_RETRYABLE},
+            )
+            target = session.retry_target
+            if target not in set(_FAILURE_RETRY_TARGETS.values()):
+                raise ValueError("failed session has no retry target")
+
+            attempt: AcquisitionAttempt | None = None
+            if target is ResearchState.ACQUIRING:
+                row = connection.execute(
+                    """SELECT * FROM research_acquisition_attempts
+                    WHERE session_id = ? AND status = 'failed_retryable'
+                    ORDER BY created_at DESC, attempt_id DESC LIMIT 1""",
+                    (session_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("failed acquisition has no reclaimable attempt")
+                attempt = self._attempt_from_row(row)
+                now = self._timestamp()
+                connection.execute(
+                    "UPDATE research_acquisition_attempts SET status = 'running', updated_at = ? WHERE attempt_id = ?",
+                    (now, attempt.attempt_id),
+                )
+                attempt = replace(
+                    attempt,
+                    status="running",
+                    updated_at=_datetime(now),
+                )
+
+            resumed = self._transition(
+                connection,
+                session,
+                target,
+                "retry",
+                request,
+                retry_target=None,
+            )
+            stored = {
+                "claim": _session_payload(resumed),
+                "error_code": None,
+                "request": request,
+                "result": None,
+                "retry_target": target.value,
+            }
+            connection.execute(
+                "INSERT INTO research_decisions VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    idempotency_key,
+                    session_id,
+                    expected_revision,
+                    "retry",
+                    _canonical_json(stored),
+                    self._timestamp(),
+                ),
+            )
+            return RetryReservation(resumed, target, True, attempt, None)
+
+        return self._write(operation)
+
+    def complete_retry(
+        self,
+        idempotency_key: str,
+        *,
+        result: ResearchSession,
+        error_code: str | None,
+    ) -> ResearchSession:
+        if error_code is not None and not _is_error_code(error_code):
+            raise ValueError("error code must be 1 to 100 printable ASCII characters")
+
+        def operation(connection: sqlite3.Connection) -> ResearchSession:
+            row = connection.execute(
+                "SELECT * FROM research_decisions WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if row is None or row["action"] != "retry":
+                raise ValueError("retry reservation does not exist")
+            stored = json.loads(row["payload_json"])
+            if not isinstance(stored, dict) or "claim" not in stored:
+                raise ValueError("retry reservation is invalid")
+            claim_payload = stored.get("claim")
+            if not isinstance(claim_payload, dict):
+                raise ValueError("retry reservation is invalid")
+            claim = _session_from_payload(claim_payload)
+            if (
+                result.session_id != row["session_id"]
+                or result.session_id != claim.session_id
+                or result.revision < claim.revision
+            ):
+                raise ValueError("retry result does not match its reservation")
+            result_payload = _session_payload(result)
+            existing_result = stored.get("result")
+            if existing_result is not None:
+                if existing_result != result_payload or stored.get("error_code") != error_code:
+                    raise ValueError("retry result differs from stored result")
+                return _session_from_payload(existing_result)
+            stored["result"] = result_payload
+            stored["error_code"] = error_code
+            connection.execute(
+                "UPDATE research_decisions SET payload_json = ? WHERE idempotency_key = ?",
+                (_canonical_json(stored), idempotency_key),
+            )
+            return result
+
         return self._write(operation)
 
     def cancel(self, session_id: str, *, expected_revision: int, idempotency_key: str) -> ResearchSession:
@@ -567,9 +813,188 @@ class ResearchStore:
             raise ValueError("session has no candidates")
         return row[0]
 
+    def _active_attempt(
+        self,
+        connection: sqlite3.Connection,
+        session_id: str,
+        expected_revision: int,
+        attempt_id: str,
+    ) -> tuple[ResearchSession, AcquisitionAttempt]:
+        session = self._expected(
+            connection,
+            session_id,
+            expected_revision,
+            {ResearchState.ACQUIRING},
+        )
+        row = connection.execute(
+            "SELECT * FROM research_acquisition_attempts WHERE attempt_id = ?",
+            (attempt_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("acquisition attempt does not exist")
+        attempt = self._attempt_from_row(row)
+        if (
+            attempt.session_id != session_id
+            or attempt.status != "running"
+        ):
+            raise ValueError("acquisition attempt is not active for this session")
+        return session, attempt
+
+    def _record_acquisition_progress(
+        self,
+        connection: sqlite3.Connection,
+        session: ResearchSession,
+        attempt: AcquisitionAttempt,
+        outcomes: tuple[ResearchAcquisitionOutcome, ...],
+    ) -> None:
+        if (
+            len({outcome.video_id for outcome in outcomes}) != len(outcomes)
+            or any(outcome.attempt_id != attempt.attempt_id for outcome in outcomes)
+        ):
+            raise ValueError("outcomes must be unique and belong to the attempt")
+        outcome_ids = {outcome.video_id for outcome in outcomes}
+        if not outcome_ids.issubset(set(attempt.video_ids)):
+            raise ValueError("outcomes must belong to the reserved videos")
+        existing_statuses = {
+            row[0]: CandidateStatus(row[1])
+            for row in connection.execute(
+                "SELECT video_id, status FROM research_acquisition_outcomes WHERE attempt_id = ?",
+                (attempt.attempt_id,),
+            )
+        }
+        if any(
+            existing_statuses[video_id] is not CandidateStatus.FAILED_RETRYABLE
+            for video_id in outcome_ids.intersection(existing_statuses)
+        ):
+            raise ValueError("acquisition outcome is already recorded")
+
+        revision = self._candidate_revision(connection, session.session_id)
+        candidates = {
+            row[0]: _candidate_from_json(row[1])
+            for row in connection.execute(
+                """SELECT video_id, payload_json FROM research_candidates
+                WHERE session_id = ? AND snapshot_revision = ?""",
+                (session.session_id, revision),
+            )
+        }
+        now = self._timestamp()
+        for outcome in outcomes:
+            candidate = candidates.get(outcome.video_id)
+            if candidate is None:
+                raise ValueError("outcome video is not a candidate")
+            if outcome.video_id in existing_statuses:
+                connection.execute(
+                    """UPDATE research_acquisition_outcomes
+                    SET status = ?, error_code = ?, source_sha256 = ?
+                    WHERE attempt_id = ? AND video_id = ?""",
+                    (
+                        outcome.status.value,
+                        outcome.error_code,
+                        outcome.source_sha256,
+                        attempt.attempt_id,
+                        outcome.video_id,
+                    ),
+                )
+            else:
+                connection.execute(
+                    "INSERT INTO research_acquisition_outcomes VALUES (?, ?, ?, ?, ?)",
+                    (
+                        attempt.attempt_id,
+                        outcome.video_id,
+                        outcome.status.value,
+                        outcome.error_code,
+                        outcome.source_sha256,
+                    ),
+                )
+            updated = replace(candidate, status=outcome.status)
+            connection.execute(
+                """UPDATE research_candidates
+                SET payload_json = ?, status = ?, updated_at = ?
+                WHERE session_id = ? AND snapshot_revision = ? AND video_id = ?""",
+                (
+                    _canonical_json(updated),
+                    outcome.status.value,
+                    now,
+                    session.session_id,
+                    revision,
+                    outcome.video_id,
+                ),
+            )
+
+    def _complete_acquisition_attempt(
+        self,
+        connection: sqlite3.Connection,
+        session: ResearchSession,
+        attempt: AcquisitionAttempt,
+    ) -> ResearchSession:
+        outcome_ids = {
+            row[0]
+            for row in connection.execute(
+                "SELECT video_id FROM research_acquisition_outcomes WHERE attempt_id = ?",
+                (attempt.attempt_id,),
+            )
+        }
+        if outcome_ids != set(attempt.video_ids):
+            raise ValueError("outcomes must cover exactly the reserved videos")
+        now = self._timestamp()
+        connection.execute(
+            "UPDATE research_acquisition_attempts SET status = 'completed', updated_at = ? WHERE attempt_id = ?",
+            (now, attempt.attempt_id),
+        )
+        return self._transition(
+            connection,
+            session,
+            ResearchState.REINDEXING,
+            "acquisition_batch_recorded",
+            {"attempt_id": attempt.attempt_id},
+        )
+
+    def _retry_reservation_from_row(
+        self,
+        row: sqlite3.Row,
+        *,
+        session_id: str,
+        expected_revision: int,
+        request: dict[str, int],
+    ) -> RetryReservation:
+        if (
+            row["session_id"] != session_id
+            or row["expected_revision"] != expected_revision
+            or row["action"] != "retry"
+        ):
+            raise ValueError("idempotency key payload differs")
+        stored = json.loads(row["payload_json"])
+        if not isinstance(stored, dict) or stored.get("request") != request:
+            raise ValueError("idempotency key payload differs")
+        target_value = stored.get("retry_target")
+        snapshot = stored.get("result") or stored.get("claim")
+        if not isinstance(target_value, str) or not isinstance(snapshot, dict):
+            raise ValueError("stored retry result is invalid")
+        error_code = stored.get("error_code")
+        if error_code is not None and not _is_error_code(error_code):
+            raise ValueError("stored retry result is invalid")
+        return RetryReservation(
+            _session_from_payload(snapshot),
+            ResearchState(target_value),
+            False,
+            None,
+            error_code,
+        )
+
     def _attempt_from_row(self, row: sqlite3.Row) -> AcquisitionAttempt:
         payload = json.loads(row["payload_json"])
-        return AcquisitionAttempt(row["attempt_id"], row["idempotency_key"], row["session_id"], row["expected_revision"], row["status"], tuple(payload["video_ids"]), _datetime(row["created_at"]), _datetime(row["updated_at"]))
+        return AcquisitionAttempt(
+            row["attempt_id"],
+            row["idempotency_key"],
+            row["session_id"],
+            row["expected_revision"],
+            row["status"],
+            tuple(payload["video_ids"]),
+            payload.get("language", "fr"),
+            payload.get("browser_identifier", payload.get("cookies_from_browser")),
+            _datetime(row["created_at"]),
+            _datetime(row["updated_at"]),
+        )
 
     def _timestamp(self) -> str:
         return _iso(self._now())

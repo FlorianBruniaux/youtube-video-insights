@@ -8,6 +8,7 @@ import pytest
 
 from yt_insights.research.models import (
     AcquisitionAttempt,
+    AcquisitionReservation,
     CandidateStatus,
     CoverageMetrics,
     DatabaseSnapshot,
@@ -23,6 +24,7 @@ from yt_insights.research.models import (
     ResearchCandidate,
     ResearchSession,
     ResearchState,
+    RetryReservation,
     SessionHistory,
     VideoEvidence,
     discovery_fingerprint,
@@ -313,12 +315,33 @@ def test_all_shared_records_can_be_constructed_with_immutable_values() -> None:
         CandidateStatus.CANDIDATE,
     )
     decision = DecisionRecord("key", "refresh", "{}", NOW)
-    attempt = AcquisitionAttempt("attempt", "key", "session", 1, "running", (VIDEO_ID,), NOW, NOW)
+    attempt = AcquisitionAttempt(
+        "attempt",
+        "key",
+        "session",
+        1,
+        "running",
+        (VIDEO_ID,),
+        "fr",
+        "firefox",
+        NOW,
+        NOW,
+    )
+    acquisition_reservation = AcquisitionReservation(attempt, True)
+    retry_reservation = RetryReservation(
+        _query_session(),
+        ResearchState.ACQUIRING,
+        True,
+        attempt,
+        None,
+    )
     outcome = ResearchAcquisitionOutcome("attempt", VIDEO_ID, CandidateStatus.ACQUIRED, None, "a" * 64)
     event = EventRecord(1, ResearchState.ASSESSING, ResearchState.DISCOVERING, "refresh", "{}", NOW)
     history = SessionHistory((assessment,), (decision,), (attempt,), (outcome,), (event,))
 
     assert candidate.matched_queries == ("Local AI",)
+    assert acquisition_reservation.claimed is True
+    assert retry_reservation.acquisition_attempt == attempt
     assert history.events == (event,)
 
 

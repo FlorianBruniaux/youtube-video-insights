@@ -279,6 +279,52 @@ def test_research_candidate_commands_keep_discovery_separate_and_render_metadata
     assert "description" not in candidates.output.casefold()
 
 
+def test_research_discover_cli_bounds_unexpected_provider_exception(
+    tmp_path, monkeypatch
+) -> None:
+    provider = _configure_discovery_workflow(
+        tmp_path,
+        monkeypatch,
+        (_candidate("zyx987WVUT0"),),
+    )
+
+    def fail_discovery(*_args: object, **_kwargs: object) -> DiscoveryResult:
+        raise LookupError("private provider lookup failure")
+
+    monkeypatch.setattr(provider, "discover", fail_discovery)
+    runner = CliRunner()
+    started = runner.invoke(cli, ["research", "start", "Local evidence", "--json"])
+    session_id = json.loads(started.output)["session"]["session_id"]
+    runner.invoke(
+        cli,
+        [
+            "research",
+            "decide",
+            session_id,
+            "refresh",
+            "--revision",
+            "1",
+            "--idempotency-key",
+            "refresh-key",
+            "--json",
+        ],
+    )
+
+    result = runner.invoke(
+        cli,
+        ["research", "discover", session_id, "--revision", "2", "--json"],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {
+        "error": {"code": "discovery_unavailable"},
+        "schema_version": 1,
+    }
+    status = runner.invoke(cli, ["research", "status", session_id, "--json"])
+    assert json.loads(status.output)["session"]["state"] == "failed_retryable"
+    assert "private provider lookup failure" not in result.output
+
+
 @pytest.mark.parametrize(
     "video_ids",
     [
@@ -738,6 +784,127 @@ def test_research_retry_cli_reindexes_without_reacquiring(tmp_path, monkeypatch)
     assert json.loads(retried.output)["session"]["state"] == "awaiting_sufficiency_confirmation"
     assert len(acquisition.calls) == 1
     assert refresh_count == 2
+
+
+def test_research_retry_cli_reacquires_failed_attempt_in_same_command_and_replays(
+    tmp_path, monkeypatch
+) -> None:
+    video_id = "zyx987WVUT0"
+    candidate = _candidate(video_id)
+
+    class FailingOnceAcquisition:
+        def __init__(self) -> None:
+            self.calls: list[tuple[tuple[str, ...], str, str | None]] = []
+
+        def acquire_approved(
+            self,
+            candidates: tuple[ResearchCandidate, ...],
+            *,
+            data_paths: DataPaths,
+            language: str,
+            cookies_from_browser: str | None = None,
+        ) -> tuple[CandidateAcquisitionOutcome, ...]:
+            video_ids = tuple(candidate.video_id for candidate in candidates)
+            self.calls.append((video_ids, language, cookies_from_browser))
+            if len(self.calls) == 1:
+                raise LookupError("private first attempt failure")
+            return (
+                CandidateAcquisitionOutcome(
+                    video_id,
+                    CandidateStatus.ACQUIRED,
+                    None,
+                    "b" * 64,
+                ),
+            )
+
+    acquisition = FailingOnceAcquisition()
+    refresh_calls: list[DataPaths] = []
+    _configure_discovery_workflow(
+        tmp_path,
+        monkeypatch,
+        (candidate,),
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: refresh_calls.append(paths),
+    )
+    runner = CliRunner()
+    session_id = _discover_candidates(runner)
+    runner.invoke(
+        cli,
+        [
+            "research",
+            "approve",
+            session_id,
+            video_id,
+            "--revision",
+            "3",
+            "--idempotency-key",
+            "approve-key",
+            "--json",
+        ],
+    )
+    failed = runner.invoke(
+        cli,
+        [
+            "research",
+            "acquire",
+            session_id,
+            "--revision",
+            "4",
+            "--idempotency-key",
+            "acquire-key",
+            "--lang",
+            "en",
+            "--cookies-from-browser",
+            "firefox:research",
+            "--json",
+        ],
+    )
+    assert failed.exit_code == 1
+    status = runner.invoke(cli, ["research", "status", session_id, "--json"])
+    failed_revision = json.loads(status.output)["session"]["revision"]
+
+    retry_args = [
+        "research",
+        "retry",
+        session_id,
+        "--revision",
+        str(failed_revision),
+        "--idempotency-key",
+        "retry-key",
+        "--json",
+    ]
+    retried = runner.invoke(cli, retry_args)
+    replayed = runner.invoke(cli, retry_args)
+    changed_payload = runner.invoke(
+        cli,
+        [
+            "research",
+            "retry",
+            session_id,
+            "--revision",
+            str(failed_revision + 1),
+            "--idempotency-key",
+            "retry-key",
+            "--json",
+        ],
+    )
+
+    assert retried.exit_code == 0, retried.output
+    assert replayed.exit_code == 0, replayed.output
+    assert json.loads(replayed.output) == json.loads(retried.output)
+    assert json.loads(retried.output)["session"]["state"] == (
+        "awaiting_sufficiency_confirmation"
+    )
+    assert acquisition.calls == [
+        ((video_id,), "en", "firefox:research"),
+        ((video_id,), "en", "firefox:research"),
+    ]
+    assert len(refresh_calls) == 1
+    assert changed_payload.exit_code == 1
+    assert json.loads(changed_payload.output) == {
+        "error": {"code": "research_retry_unavailable"},
+        "schema_version": 1,
+    }
 
 
 def test_research_acquisition_gate_warnings_are_bounded_and_do_not_block() -> None:

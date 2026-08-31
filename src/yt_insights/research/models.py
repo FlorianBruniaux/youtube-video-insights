@@ -253,6 +253,8 @@ class AcquisitionAttempt:
     revision: int
     status: str
     video_ids: tuple[str, ...]
+    language: str
+    cookies_from_browser: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -260,6 +262,41 @@ class AcquisitionAttempt:
         _require_tuple(self.video_ids, label="video_ids")
         for video_id in self.video_ids:
             _validate_video_id(video_id)
+        _validate_research_text(self.language, label="language")
+        if self.cookies_from_browser is not None:
+            _validate_research_text(
+                self.cookies_from_browser,
+                label="cookies browser identifier",
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class AcquisitionReservation:
+    attempt: AcquisitionAttempt
+    claimed: bool
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.attempt, AcquisitionAttempt):
+            raise TypeError("attempt must be an AcquisitionAttempt")
+        if not isinstance(self.claimed, bool):
+            raise TypeError("claimed must be a boolean")
+
+
+@dataclass(frozen=True, slots=True)
+class RetryReservation:
+    session: ResearchSession
+    retry_target: ResearchState
+    claimed: bool
+    acquisition_attempt: AcquisitionAttempt | None
+    error_code: str | None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.session, ResearchSession):
+            raise TypeError("session must be a ResearchSession")
+        if not isinstance(self.retry_target, ResearchState):
+            raise TypeError("retry target must be a ResearchState")
+        if not isinstance(self.claimed, bool):
+            raise TypeError("claimed must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)

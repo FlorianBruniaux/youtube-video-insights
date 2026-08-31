@@ -16,6 +16,7 @@ from .acquisition import ResearchAcquisitionService
 from .assessment import AssessmentRetryableError, EvidenceReader, assess_local
 from .discovery import DiscoveryProvider, DiscoveryResult
 from .models import (
+    AcquisitionAttempt,
     CandidateStatus,
     FreshnessProfile,
     QuerySpec,
@@ -191,7 +192,7 @@ class ResearchWorkflow:
             return self._record_discovery_failure(session_id, expected_revision)
         try:
             result = provider.discover(session.queries, limit=10)
-        except (OSError, RuntimeError, TypeError, ValueError):
+        except Exception:
             return self._record_discovery_failure(session_id, expected_revision)
         if not _valid_discovery_result(result):
             return self._record_discovery_failure(session_id, expected_revision)
@@ -303,8 +304,12 @@ class ResearchWorkflow:
                 )
             ):
                 raise ValueError("idempotency key payload differs")
-            if prior_attempt.status == "completed":
-                return self.status(session_id)
+            if prior_attempt.status in {
+                "running",
+                "failed_retryable",
+                "completed",
+            }:
+                return self._acquisition_replay(prior_attempt)
 
         if session.revision != expected_revision:
             raise ValueError("session revision is stale")
@@ -332,60 +337,21 @@ class ResearchWorkflow:
                 cookies_from_browser=cookies_from_browser,
             )
         )
-        attempt = self._store.start_acquisition_attempt(
+        reservation = self._store.start_acquisition_attempt(
             session_id,
             expected_revision=expected_revision,
             video_ids=video_ids,
             idempotency_key=idempotency_key,
             attempt_id=attempt_id,
+            language=language,
+            cookies_from_browser=cookies_from_browser,
         )
-        if attempt.status == "completed":
-            return self.status(session_id)
-
-        try:
-            acquired = self._acquisition_service.acquire_approved(
-                approved,
-                data_paths=self._data_paths,
-                language=language,
-                cookies_from_browser=cookies_from_browser,
-            )
-            if tuple(outcome.video_id for outcome in acquired) != video_ids:
-                raise ValueError("acquisition outcomes do not match the approved batch")
-            outcomes = tuple(
-                ResearchAcquisitionOutcome(
-                    attempt.attempt_id,
-                    outcome.video_id,
-                    outcome.status,
-                    outcome.error_code,
-                    outcome.source_sha256,
-                )
-                for outcome in acquired
-            )
-            reindexing = self._store.record_acquisition_batch(
-                session_id,
-                expected_revision=expected_revision,
-                attempt_id=attempt.attempt_id,
-                outcomes=outcomes,
-            )
-        except (OSError, RuntimeError, TypeError, ValueError):
-            failed = self._store.record_failure(
-                session_id,
-                expected_revision=expected_revision,
-                retry_target=ResearchState.ACQUIRING,
-                error_code="acquisition_unavailable",
-            )
-            return ResearchResponse(
-                failed,
-                self._store.get_latest_assessment(session_id),
-                self._store.list_candidates(session_id) or None,
-                "acquisition_unavailable",
-            )
-
-        should_refresh = any(
-            outcome.status in {CandidateStatus.ACQUIRED, CandidateStatus.ALREADY_PRESENT}
-            for outcome in outcomes
+        if not reservation.claimed:
+            return self._acquisition_replay(reservation.attempt)
+        return self._continue_acquisition(
+            reservation.attempt,
+            session=self._store.get_session(session_id),
         )
-        return self._finish_reindexing(reindexing, refresh=should_refresh)
 
     def retry(
         self,
@@ -397,31 +363,174 @@ class ResearchWorkflow:
         """Resume only the retry target recorded on the failed session."""
         if not isinstance(idempotency_key, str) or not idempotency_key:
             raise ValueError("idempotency key is required")
-        session = self._store.get_session(session_id)
-        history = self._store.get_session_history(session_id)
-        if any(
-            decision.idempotency_key == idempotency_key
-            and decision.action == "retry"
-            for decision in history.decisions
-        ):
-            return self.status(session_id)
-        if session.revision != expected_revision:
-            raise ValueError("session revision is stale")
-        if session.state is not ResearchState.FAILED_RETRYABLE:
-            raise ValueError("session is not retryable")
-        target = session.retry_target
-        resumed = self._store.retry(
+        reservation = self._store.claim_retry(
             session_id,
             expected_revision=expected_revision,
             idempotency_key=idempotency_key,
         )
+        if not reservation.claimed:
+            return ResearchResponse(
+                reservation.session,
+                self._store.get_latest_assessment(session_id),
+                self._store.list_candidates(session_id) or None,
+                reservation.error_code,
+            )
+
+        target = reservation.retry_target
         if target is ResearchState.REINDEXING:
-            return self._finish_reindexing(resumed, refresh=True)
-        if target is ResearchState.ASSESSING:
-            return self._assess_session(resumed)
-        if target is ResearchState.DISCOVERING:
-            return self.discover(session_id, expected_revision=resumed.revision)
-        return self.status(session_id)
+            response = self._finish_reindexing(reservation.session, refresh=True)
+        elif target is ResearchState.ASSESSING:
+            response = self._assess_session(reservation.session)
+        elif target is ResearchState.DISCOVERING:
+            response = self.discover(
+                session_id,
+                expected_revision=reservation.session.revision,
+            )
+        elif target is ResearchState.ACQUIRING:
+            attempt = reservation.acquisition_attempt
+            if attempt is None:
+                raise ValueError("retry has no acquisition attempt")
+            response = self._continue_acquisition(
+                attempt,
+                session=reservation.session,
+            )
+        else:
+            raise ValueError("retry target is invalid")
+
+        self._store.complete_retry(
+            idempotency_key,
+            result=response.session,
+            error_code=response.error_code,
+        )
+        return response
+
+    def _acquisition_replay(
+        self,
+        attempt: AcquisitionAttempt,
+    ) -> ResearchResponse:
+        session = self._store.get_session(attempt.session_id)
+        error_code = (
+            "acquisition_unavailable"
+            if attempt.status == "failed_retryable"
+            and session.state is ResearchState.FAILED_RETRYABLE
+            and session.retry_target is ResearchState.ACQUIRING
+            else None
+        )
+        return ResearchResponse(
+            session,
+            self._store.get_latest_assessment(attempt.session_id),
+            self._store.list_candidates(attempt.session_id) or None,
+            error_code,
+        )
+
+    def _continue_acquisition(
+        self,
+        attempt: AcquisitionAttempt,
+        *,
+        session: ResearchSession,
+    ) -> ResearchResponse:
+        """Finish one exclusively claimed attempt without repeating saved outcomes."""
+        if self._acquisition_service is None or self._data_paths is None:
+            raise RuntimeError("research acquisition is not configured")
+        if session.session_id != attempt.session_id:
+            raise ValueError("acquisition attempt belongs to another session")
+
+        history = self._store.get_session_history(session.session_id)
+        completed_ids = {
+            outcome.video_id
+            for outcome in history.acquisition_outcomes
+            if outcome.attempt_id == attempt.attempt_id
+            and outcome.status is not CandidateStatus.FAILED_RETRYABLE
+        }
+        candidates = {
+            candidate.video_id: candidate
+            for candidate in self._store.list_candidates(session.session_id)
+        }
+
+        for video_id in attempt.video_ids:
+            if video_id in completed_ids:
+                continue
+            candidate = candidates.get(video_id)
+            if candidate is None:
+                return self._fail_acquisition(session, attempt)
+            if candidate.status is not CandidateStatus.APPROVED:
+                candidate = ResearchCandidate(
+                    video_id=candidate.video_id,
+                    title=candidate.title,
+                    channel_id=candidate.channel_id,
+                    channel_title=candidate.channel_title,
+                    published_at=candidate.published_at,
+                    watch_url=candidate.watch_url,
+                    matched_queries=candidate.matched_queries,
+                    original_rank=candidate.original_rank,
+                    status=CandidateStatus.APPROVED,
+                )
+            try:
+                acquired = self._acquisition_service.acquire_approved(
+                    (candidate,),
+                    data_paths=self._data_paths,
+                    language=attempt.language,
+                    cookies_from_browser=attempt.cookies_from_browser,
+                )
+                if len(acquired) != 1 or acquired[0].video_id != video_id:
+                    raise ValueError(
+                        "acquisition outcome does not match the approved video"
+                    )
+                raw_outcome = acquired[0]
+                outcome = ResearchAcquisitionOutcome(
+                    attempt.attempt_id,
+                    raw_outcome.video_id,
+                    raw_outcome.status,
+                    raw_outcome.error_code,
+                    raw_outcome.source_sha256,
+                )
+                self._store.record_acquisition_progress(
+                    session.session_id,
+                    expected_revision=session.revision,
+                    attempt_id=attempt.attempt_id,
+                    outcomes=(outcome,),
+                )
+            except Exception:
+                return self._fail_acquisition(session, attempt)
+            if outcome.status is CandidateStatus.FAILED_RETRYABLE:
+                return self._fail_acquisition(session, attempt)
+
+        reindexing = self._store.complete_acquisition_attempt(
+            session.session_id,
+            expected_revision=session.revision,
+            attempt_id=attempt.attempt_id,
+        )
+        outcomes = tuple(
+            outcome
+            for outcome in self._store.get_session_history(
+                session.session_id
+            ).acquisition_outcomes
+            if outcome.attempt_id == attempt.attempt_id
+        )
+        should_refresh = any(
+            outcome.status
+            in {CandidateStatus.ACQUIRED, CandidateStatus.ALREADY_PRESENT}
+            for outcome in outcomes
+        )
+        return self._finish_reindexing(reindexing, refresh=should_refresh)
+
+    def _fail_acquisition(
+        self,
+        session: ResearchSession,
+        attempt: AcquisitionAttempt,
+    ) -> ResearchResponse:
+        failed = self._store.record_acquisition_failure(
+            session.session_id,
+            expected_revision=session.revision,
+            attempt_id=attempt.attempt_id,
+            error_code="acquisition_unavailable",
+        )
+        return ResearchResponse(
+            failed,
+            self._store.get_latest_assessment(session.session_id),
+            self._store.list_candidates(session.session_id) or None,
+            "acquisition_unavailable",
+        )
 
     def _finish_reindexing(
         self,
