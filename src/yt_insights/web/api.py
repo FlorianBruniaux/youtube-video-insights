@@ -6,6 +6,8 @@ import hashlib
 import hmac
 import json
 import re
+import threading
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -28,8 +30,10 @@ from yt_insights.web.jobs import JobSnapshot
 _MAX_STRING = 500
 _MAX_PAGE_SIZE = 100
 _MAX_SEARCH_LIMIT = 20
+_MAX_SQLITE_INTEGER = 2**63 - 1
 _MAX_STRUCTURED_BYTES = 24 * 1024
 _MAX_SAFE_PLAN_BYTES = 20 * 1024
+_MAX_PREPARED_PLANS = 100
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _JOB_ID = re.compile(r"[A-Za-z0-9_-]{1,200}")
 _VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
@@ -60,6 +64,7 @@ class StartSessionRequest:
     queries: tuple[str, ...]
     languages: tuple[str, ...]
     freshness_profile: FreshnessProfile
+    idempotency_key: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,8 +115,8 @@ class SourcePreviewRequest:
 
 @dataclass(frozen=True, slots=True)
 class SourceAcquisitionRequest:
-    preview: SourcePreviewRequest
     fingerprint: str
+    idempotency_key: str
 
 
 def parse_search(query: Mapping[str, tuple[str, ...]]) -> SearchQuery:
@@ -139,7 +144,16 @@ def parse_pagination(query: Mapping[str, tuple[str, ...]]) -> Pagination:
 
 
 def parse_start_session(body: bytes) -> StartSessionRequest:
-    payload = _json_object(body, {"topic", "queries", "languages", "freshness_profile"})
+    payload = _json_object(
+        body,
+        {
+            "topic",
+            "queries",
+            "languages",
+            "freshness_profile",
+            "idempotency_key",
+        },
+    )
     topic = _string(payload.get("topic"))
     queries = _string_list(payload.get("queries"), minimum=1, maximum=8)
     languages = _string_list(payload.get("languages"), minimum=0, maximum=20)
@@ -148,7 +162,13 @@ def parse_start_session(body: bytes) -> StartSessionRequest:
         profile = FreshnessProfile(profile_text)
     except ValueError as exc:
         raise RequestValidationError() from exc
-    return StartSessionRequest(topic, queries, languages, profile)
+    return StartSessionRequest(
+        topic,
+        queries,
+        languages,
+        profile,
+        _idempotency_key(payload.get("idempotency_key")),
+    )
 
 
 def parse_decision(body: bytes) -> DecisionRequest:
@@ -232,16 +252,15 @@ def parse_source_preview(body: bytes) -> SourcePreviewRequest:
 def parse_source_acquisition(body: bytes) -> SourceAcquisitionRequest:
     payload = _json_object(
         body,
-        {"source", "slug", "years", "language", "analyze", "fingerprint"},
-        required={"source", "fingerprint"},
+        {"fingerprint", "idempotency_key"},
     )
     fingerprint = _string(payload.get("fingerprint"))
     if _SHA256.fullmatch(fingerprint) is None:
         raise RequestValidationError()
-    preview_payload = {
-        key: value for key, value in payload.items() if key != "fingerprint"
-    }
-    return SourceAcquisitionRequest(_source_preview(preview_payload), fingerprint)
+    return SourceAcquisitionRequest(
+        fingerprint,
+        _idempotency_key(payload.get("idempotency_key")),
+    )
 
 
 def validate_session_id(value: str) -> str:
@@ -316,27 +335,49 @@ class SourceAcquisitionFacade:
         fetch: Callable[..., VideoListResult] = fetch_video_list,
         build: Callable[..., AcquisitionPlan] = build_acquisition_plan,
         execute: Callable[..., AcquisitionReport] = execute_acquisition,
+        max_prepared_plans: int = _MAX_PREPARED_PLANS,
     ) -> None:
+        if (
+            isinstance(max_prepared_plans, bool)
+            or not isinstance(max_prepared_plans, int)
+            or max_prepared_plans < 1
+        ):
+            raise ValueError("prepared plan capacity must be a positive integer")
         self._data_paths = data_paths
         self._classify = classify
         self._fetch = fetch
         self._build = build
         self._execute = execute
+        self._max_prepared_plans = max_prepared_plans
+        self._plan_lock = threading.Lock()
+        self._prepared_plans: OrderedDict[str, AcquisitionPlan] = OrderedDict()
 
     def preview(self, request: SourcePreviewRequest) -> Mapping[str, object]:
         """Build a fresh preview and return no source or directory fields."""
-        return _safe_plan(self._plan(request))
+        plan = self._plan(request)
+        fingerprint = _plan_fingerprint(plan)
+        with self._plan_lock:
+            self._prepared_plans.pop(fingerprint, None)
+            self._prepared_plans[fingerprint] = plan
+            while len(self._prepared_plans) > self._max_prepared_plans:
+                self._prepared_plans.popitem(last=False)
+        return _safe_plan(plan, fingerprint=fingerprint)
 
     def prepare_acquisition(
-        self, request: SourceAcquisitionRequest
+        self, fingerprint: str
     ) -> Callable[[], Mapping[str, object]]:
-        """Bind execution to the exact current plan or fail before queueing."""
-        plan = self._plan(request.preview)
-        current = _plan_fingerprint(plan)
-        if not hmac.compare_digest(current, request.fingerprint):
+        """Retrieve an exact cached preview without invoking its provider again."""
+        if _SHA256.fullmatch(fingerprint) is None:
+            raise PlanChanged()
+        with self._plan_lock:
+            plan = self._prepared_plans.get(fingerprint)
+        if plan is None:
             raise PlanChanged()
 
         def operation() -> Mapping[str, object]:
+            current = _plan_fingerprint(plan)
+            if not hmac.compare_digest(current, fingerprint):
+                return {"schema_version": 1, "error": {"code": "plan_changed"}}
             return _safe_acquisition_report(self._execute(plan))
 
         return operation
@@ -400,7 +441,8 @@ def _query_integer(
     if re.fullmatch(r"0|[1-9][0-9]*", raw) is None:
         raise RequestValidationError()
     value = int(raw)
-    if value < minimum or (maximum is not None and value > maximum):
+    upper_bound = _MAX_SQLITE_INTEGER if maximum is None else maximum
+    if value < minimum or value > upper_bound:
         raise RequestValidationError()
     return value
 
@@ -455,7 +497,11 @@ def _string_list(value: object, *, minimum: int, maximum: int) -> tuple[str, ...
 
 
 def _revision(value: object) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, int)
+        or not 0 <= value <= _MAX_SQLITE_INTEGER
+    ):
         raise RequestValidationError()
     return value
 
@@ -528,6 +574,17 @@ def _plan_identity(plan: AcquisitionPlan) -> dict[str, object]:
         "output_root": str(plan.output_root),
         "transcripts_dir": str(plan.transcripts_dir),
         "insights_dir": str(plan.insights_dir),
+        "data_paths": {
+            "root": str(plan.data_paths.root),
+            "transcripts": str(plan.data_paths.transcripts),
+            "insights": str(plan.data_paths.insights),
+            "shorts": str(plan.data_paths.shorts),
+            "clips": str(plan.data_paths.clips),
+            "exports": str(plan.data_paths.exports),
+            "catalog_database": str(plan.data_paths.catalog_database),
+            "search_database": str(plan.data_paths.search_database),
+            "research_database": str(plan.data_paths.research_database),
+        },
         "selected_videos": [
             {
                 "video_id": video.video_id,
@@ -539,6 +596,7 @@ def _plan_identity(plan: AcquisitionPlan) -> dict[str, object]:
             for video in plan.selected_videos
         ],
         "selected_urls": list(plan.selected_urls),
+        "selected_count": plan.selected_count,
         "language": plan.language,
         "analyze": plan.analyze,
         "requires_confirmation": plan.requires_confirmation,
@@ -557,7 +615,9 @@ def _plan_fingerprint(plan: AcquisitionPlan) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
-def _safe_plan(plan: AcquisitionPlan) -> dict[str, object]:
+def _safe_plan(
+    plan: AcquisitionPlan, *, fingerprint: str | None = None
+) -> dict[str, object]:
     videos = [
         {
             "video_id": video.video_id,
@@ -568,7 +628,7 @@ def _safe_plan(plan: AcquisitionPlan) -> dict[str, object]:
         for video in plan.selected_videos
     ]
     payload: dict[str, object] = {
-        "fingerprint": _plan_fingerprint(plan),
+        "fingerprint": fingerprint or _plan_fingerprint(plan),
         "source_kind": plan.source_kind.value,
         "selected_count": plan.selected_count,
         "videos": videos,

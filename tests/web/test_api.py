@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,6 @@ from yt_insights.web.api import (
     PlanChanged,
     RequestValidationError,
     SourceAcquisitionFacade,
-    SourceAcquisitionRequest,
     parse_acquisition,
     parse_approval,
     parse_decision,
@@ -103,6 +103,21 @@ def test_parse_pagination_is_closed_world(
         parse_pagination(query)
 
 
+def test_public_integers_are_bounded_to_sqlite_signed_64_bit() -> None:
+    with pytest.raises(RequestValidationError):
+        parse_pagination({"offset": (str(2**63),)})
+    with pytest.raises(RequestValidationError):
+        parse_decision(
+            _json_body(
+                {
+                    "expected_revision": 2**63,
+                    "decision": "refresh",
+                    "idempotency_key": "decision-1",
+                }
+            )
+        )
+
+
 def test_parse_start_session_rejects_unknown_fields_and_boolean_integers() -> None:
     with pytest.raises(RequestValidationError):
         parse_start_session(
@@ -112,7 +127,22 @@ def test_parse_start_session_rejects_unknown_fields_and_boolean_integers() -> No
                     "queries": ["local agents"],
                     "languages": ["fr"],
                     "freshness_profile": "standard",
+                    "idempotency_key": "start-1",
                     "revision": True,
+                }
+            )
+        )
+
+
+def test_session_creation_requires_an_idempotency_key() -> None:
+    with pytest.raises(RequestValidationError):
+        parse_start_session(
+            _json_body(
+                {
+                    "topic": "local agents",
+                    "queries": ["local agents"],
+                    "languages": ["fr"],
+                    "freshness_profile": "standard",
                 }
             )
         )
@@ -122,7 +152,8 @@ def test_parse_start_session_rejects_duplicate_json_keys() -> None:
     with pytest.raises(RequestValidationError):
         parse_start_session(
             b'{"topic":"first","topic":"second","queries":["q"],'
-            b'"languages":[],"freshness_profile":"standard"}'
+            b'"languages":[],"freshness_profile":"standard",'
+            b'"idempotency_key":"start-1"}'
         )
 
 
@@ -134,6 +165,7 @@ def test_parse_start_session_returns_stripped_typed_values() -> None:
                 "queries": [" evidence "],
                 "languages": [" fr "],
                 "freshness_profile": "standard",
+                "idempotency_key": " start-1 ",
             }
         )
     )
@@ -142,6 +174,7 @@ def test_parse_start_session_returns_stripped_typed_values() -> None:
     assert parsed.queries == ("evidence",)
     assert parsed.languages == ("fr",)
     assert parsed.freshness_profile is FreshnessProfile.STANDARD
+    assert parsed.idempotency_key == "start-1"
 
 
 def test_parse_decision_rejects_boolean_revision() -> None:
@@ -246,17 +279,24 @@ def test_source_request_parsers_are_closed_world_and_bind_the_fingerprint() -> N
     confirmed = parse_source_acquisition(
         _json_body(
             {
-                "source": "https://www.youtube.com/@example",
-                "slug": "example",
-                "years": [2025, 2026],
-                "language": "fr",
-                "analyze": False,
                 "fingerprint": "a" * 64,
+                "idempotency_key": "source-acquisition-1",
             }
         )
     )
-    assert confirmed.preview.source == "https://www.youtube.com/@example"
     assert confirmed.fingerprint == "a" * 64
+    assert confirmed.idempotency_key == "source-acquisition-1"
+
+    with pytest.raises(RequestValidationError):
+        parse_source_acquisition(
+            _json_body(
+                {
+                    "source": "https://www.youtube.com/@example",
+                    "fingerprint": "a" * 64,
+                    "idempotency_key": "source-acquisition-1",
+                }
+            )
+        )
 
     with pytest.raises(RequestValidationError):
         parse_source_preview(
@@ -402,14 +442,13 @@ def test_source_facade_executes_only_the_plan_matching_the_preview_fingerprint(
 ) -> None:
     paths = DataPaths.from_root(tmp_path / "data")
     stable_plan = _source_plan(paths)
-    plans = [stable_plan, stable_plan]
     executed: list[AcquisitionPlan] = []
 
     facade = SourceAcquisitionFacade(
         paths,
         classify=lambda source: SourceKind.CHANNEL,
         fetch=lambda source: VideoListResult(videos=list(stable_plan.selected_videos)),
-        build=lambda **kwargs: plans.pop(0),
+        build=lambda **kwargs: stable_plan,
         execute=lambda plan: (
             executed.append(plan)
             or AcquisitionReport(
@@ -432,9 +471,7 @@ def test_source_facade_executes_only_the_plan_matching_the_preview_fingerprint(
     )
     fingerprint = str(facade.preview(request)["fingerprint"])
 
-    operation = facade.prepare_acquisition(
-        SourceAcquisitionRequest(request, fingerprint)
-    )
+    operation = facade.prepare_acquisition(fingerprint)
     assert executed == []
     result = operation()
 
@@ -450,25 +487,89 @@ def test_source_facade_executes_only_the_plan_matching_the_preview_fingerprint(
     ]
 
 
-def test_source_facade_rejects_a_changed_plan_before_execution(tmp_path: Path) -> None:
+def test_source_confirmation_performs_no_provider_or_plan_work(tmp_path: Path) -> None:
     paths = DataPaths.from_root(tmp_path / "data")
-    first = _source_plan(paths)
-    changed = _source_plan(paths, video_id="zyx987WVUT0")
-    plans = [first, changed]
+    plan = _source_plan(paths)
+    calls: list[str] = []
+    facade = SourceAcquisitionFacade(
+        paths,
+        classify=lambda source: calls.append("classify") or SourceKind.CHANNEL,
+        fetch=lambda source: calls.append("fetch") or VideoListResult(),
+        build=lambda **kwargs: calls.append("build") or plan,
+        execute=lambda value: calls.append("execute") or AcquisitionReport(0, 0, 0, ()),
+    )
+    request = parse_source_preview(
+        _json_body({"source": plan.source, "language": "fr", "analyze": False})
+    )
+    fingerprint = str(facade.preview(request)["fingerprint"])
+    assert calls == ["classify", "fetch", "build"]
+
+    operation = facade.prepare_acquisition(fingerprint)
+
+    assert calls == ["classify", "fetch", "build"]
+    operation()
+    assert calls == ["classify", "fetch", "build", "execute"]
+
+
+def test_source_confirmation_requires_a_cached_preview(tmp_path: Path) -> None:
+    facade = SourceAcquisitionFacade(DataPaths.from_root(tmp_path / "data"))
+
+    with pytest.raises(PlanChanged):
+        facade.prepare_acquisition("a" * 64)
+
+
+def test_source_plan_fingerprint_covers_selected_count_and_every_data_path(
+    tmp_path: Path,
+) -> None:
+    paths = DataPaths.from_root(tmp_path / "data")
+    base = _source_plan(paths)
+    changed_count = replace(base, selected_count=2)
+    changed_paths = replace(
+        base,
+        data_paths=replace(paths, clips=paths.root / "other-clips"),
+    )
+
+    fingerprints = []
+    for plan in (base, changed_count, changed_paths):
+        facade = SourceAcquisitionFacade(
+            paths,
+            classify=lambda source: SourceKind.CHANNEL,
+            fetch=lambda source: VideoListResult(),
+            build=lambda plan=plan, **kwargs: plan,
+            execute=lambda value: AcquisitionReport(0, 0, 0, ()),
+        )
+        fingerprints.append(
+            facade.preview(
+                parse_source_preview(
+                    _json_body(
+                        {"source": base.source, "language": "fr", "analyze": False}
+                    )
+                )
+            )["fingerprint"]
+        )
+
+    assert len(set(fingerprints)) == 3
+
+
+def test_source_plan_mutation_after_admission_never_executes(tmp_path: Path) -> None:
+    paths = DataPaths.from_root(tmp_path / "data")
+    plan = _source_plan(paths)
     executed: list[AcquisitionPlan] = []
     facade = SourceAcquisitionFacade(
         paths,
         classify=lambda source: SourceKind.CHANNEL,
         fetch=lambda source: VideoListResult(),
-        build=lambda **kwargs: plans.pop(0),
-        execute=lambda plan: executed.append(plan) or AcquisitionReport(0, 0, 0, ()),
+        build=lambda **kwargs: plan,
+        execute=lambda value: executed.append(value) or AcquisitionReport(0, 0, 0, ()),
     )
     request = parse_source_preview(
-        _json_body({"source": first.source, "language": "fr", "analyze": False})
+        _json_body({"source": plan.source, "language": "fr", "analyze": False})
     )
     fingerprint = str(facade.preview(request)["fingerprint"])
+    operation = facade.prepare_acquisition(fingerprint)
+    plan.selected_videos[0].title = "mutated after admission"
 
-    with pytest.raises(PlanChanged):
-        facade.prepare_acquisition(SourceAcquisitionRequest(request, fingerprint))
+    result = operation()
 
+    assert result == {"schema_version": 1, "error": {"code": "plan_changed"}}
     assert executed == []

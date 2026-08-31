@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,8 +17,9 @@ from yt_insights.research.models import (
     ResearchState,
 )
 from yt_insights.research.store import ResearchRevisionConflict
+from yt_insights.search.models import SearchQuery
 from yt_insights.search.sqlite_fts import SearchIndexNotFound
-from yt_insights.web.api import PlanChanged
+from yt_insights.web.api import PlanChanged, SourcePreviewRequest
 from yt_insights.web.application import WebApplication
 from yt_insights.web.jobs import JobQueueFull, JobSnapshot
 from yt_insights.web.models import WebRequest
@@ -44,10 +46,10 @@ class FakeResponse:
 
 class FakeSearch:
     def __init__(self) -> None:
-        self.queries: list[object] = []
+        self.queries: list[SearchQuery] = []
         self.error: Exception | None = None
 
-    def search(self, query: object) -> tuple[object, ...]:
+    def search(self, query: SearchQuery) -> tuple[object, ...]:
         self.queries.append(query)
         if self.error is not None:
             raise self.error
@@ -89,29 +91,49 @@ class FakeCatalog:
         }
 
 
+def _session(
+    *,
+    state: ResearchState = ResearchState.AWAITING_SUFFICIENCY,
+    revision: int = 5,
+    retry_target: ResearchState | None = None,
+) -> ResearchSession:
+    now = datetime(2026, 8, 31, 12, tzinfo=UTC)
+    return ResearchSession(
+        SESSION_ID,
+        "Local agents",
+        (QuerySpec("local agents"),),
+        ("fr",),
+        FreshnessProfile.STANDARD,
+        "f" * 64,
+        state,
+        (
+            RequiredUserAction.CONFIRM_SUFFICIENCY_OR_REFRESH
+            if state is ResearchState.AWAITING_SUFFICIENCY
+            else None
+        ),
+        revision,
+        retry_target,
+        now,
+        now,
+    )
+
+
 class FakeStore:
     def __init__(self) -> None:
         self.calls: list[tuple[int, int]] = []
+        self.get_calls: list[str] = []
+        self.session = _session()
+        self.missing = False
 
     def list_sessions(self, *, limit: int, offset: int) -> tuple[ResearchSession, ...]:
         self.calls.append((limit, offset))
-        now = datetime(2026, 8, 31, 12, tzinfo=UTC)
-        return (
-            ResearchSession(
-                SESSION_ID,
-                "Local agents",
-                (QuerySpec("local agents"),),
-                ("fr",),
-                FreshnessProfile.STANDARD,
-                "f" * 64,
-                ResearchState.AWAITING_SUFFICIENCY,
-                RequiredUserAction.CONFIRM_SUFFICIENCY_OR_REFRESH,
-                5,
-                None,
-                now,
-                now,
-            ),
-        )
+        return (self.session,)
+
+    def get_session(self, session_id: str) -> ResearchSession:
+        self.get_calls.append(session_id)
+        if self.missing or session_id != SESSION_ID:
+            raise ValueError("private missing session detail")
+        return self.session
 
 
 class FakeExports:
@@ -121,38 +143,89 @@ class FakeExports:
 
 class FakeWorkflow:
     def __init__(self) -> None:
-        self.calls: list[tuple[str, object]] = []
         self.error: Exception | None = None
+        self.start_calls: list[
+            tuple[str, tuple[str, ...], tuple[str, ...], FreshnessProfile]
+        ] = []
+        self.status_calls: list[str] = []
+        self.decision_calls: list[tuple[str, int, str, str]] = []
+        self.discovery_calls: list[tuple[str, int]] = []
+        self.approval_calls: list[tuple[str, int, tuple[str, ...], str]] = []
+        self.acquisition_calls: list[tuple[str, int, str, str]] = []
+        self.retry_calls: list[tuple[str, int, str]] = []
+        self.export_calls: list[tuple[object, str]] = []
 
-    def _result(self, name: str, payload: object) -> FakeResponse:
-        self.calls.append((name, payload))
+    def _result(self) -> FakeResponse:
         if self.error is not None:
             raise self.error
         return FakeResponse()
 
-    def start(self, **kwargs: object) -> FakeResponse:
-        return self._result("start", kwargs)
+    def start(
+        self,
+        *,
+        topic: str,
+        queries: tuple[str, ...],
+        languages: tuple[str, ...],
+        freshness_profile: FreshnessProfile,
+    ) -> FakeResponse:
+        self.start_calls.append((topic, queries, languages, freshness_profile))
+        return self._result()
 
     def status(self, session_id: str) -> FakeResponse:
-        return self._result("status", session_id)
+        self.status_calls.append(session_id)
+        return self._result()
 
-    def decide(self, session_id: str, **kwargs: object) -> FakeResponse:
-        return self._result("decide", (session_id, kwargs))
+    def decide(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        decision: str,
+        idempotency_key: str,
+    ) -> FakeResponse:
+        self.decision_calls.append(
+            (session_id, expected_revision, decision, idempotency_key)
+        )
+        return self._result()
 
-    def discover(self, session_id: str, **kwargs: object) -> FakeResponse:
-        return self._result("discover", (session_id, kwargs))
+    def discover(self, session_id: str, *, expected_revision: int) -> FakeResponse:
+        self.discovery_calls.append((session_id, expected_revision))
+        return self._result()
 
-    def approve(self, session_id: str, **kwargs: object) -> FakeResponse:
-        return self._result("approve", (session_id, kwargs))
+    def approve(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        video_ids: tuple[str, ...],
+        idempotency_key: str,
+    ) -> FakeResponse:
+        self.approval_calls.append(
+            (session_id, expected_revision, video_ids, idempotency_key)
+        )
+        return self._result()
 
-    def acquire(self, session_id: str, **kwargs: object) -> FakeResponse:
-        return self._result("acquire", (session_id, kwargs))
+    def acquire(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+        language: str,
+    ) -> FakeResponse:
+        self.acquisition_calls.append(
+            (session_id, expected_revision, idempotency_key, language)
+        )
+        return self._result()
 
-    def retry(self, session_id: str, **kwargs: object) -> FakeResponse:
-        return self._result("retry", (session_id, kwargs))
+    def retry(
+        self, session_id: str, *, expected_revision: int, idempotency_key: str
+    ) -> FakeResponse:
+        self.retry_calls.append((session_id, expected_revision, idempotency_key))
+        return self._result()
 
     def export(self, request: object, *, package_version: str) -> object:
-        self.calls.append(("export", (request, package_version)))
+        self.export_calls.append((request, package_version))
         if self.error is not None:
             raise self.error
         return SimpleNamespace(
@@ -166,6 +239,7 @@ class FakeJobs:
     def __init__(self) -> None:
         self.submissions: list[tuple[str, Callable[[], Mapping[str, object]]]] = []
         self.error: Exception | None = None
+        self.status = "succeeded"
 
     def submit(
         self, kind: str, operation: Callable[[], Mapping[str, object]]
@@ -176,15 +250,18 @@ class FakeJobs:
         return JobSnapshot("job-1", kind, "queued")
 
     def get(self, job_id: str) -> JobSnapshot:
-        return JobSnapshot(job_id, "discovery", "succeeded", {"done": True})
+        return JobSnapshot(job_id, "discovery", self.status, {"done": True})
 
 
 class FakeSources:
     def __init__(self) -> None:
         self.changed = False
         self.acquired = False
+        self.preview_calls: list[SourcePreviewRequest] = []
+        self.prepare_calls: list[str] = []
 
-    def preview(self, request: object) -> Mapping[str, object]:
+    def preview(self, request: SourcePreviewRequest) -> Mapping[str, object]:
+        self.preview_calls.append(request)
         return {
             "fingerprint": "a" * 64,
             "source_kind": "channel",
@@ -193,8 +270,9 @@ class FakeSources:
         }
 
     def prepare_acquisition(
-        self, request: object
+        self, fingerprint: str
     ) -> Callable[[], Mapping[str, object]]:
+        self.prepare_calls.append(fingerprint)
         if self.changed:
             raise PlanChanged()
 
@@ -287,8 +365,11 @@ def test_research_mutations_delegate_to_workflow_and_queue_long_jobs(
         _post(
             "/api/v1/research/sessions",
             '{"topic":"local","queries":["local"],"languages":["fr"],'
-            '"freshness_profile":"standard"}',
+            '"freshness_profile":"standard","idempotency_key":"start-1"}',
         )
+    )
+    services.store.session = _session(
+        state=ResearchState.AWAITING_SUFFICIENCY, revision=4
     )
     decision = services.app.handle(
         _post(
@@ -297,6 +378,9 @@ def test_research_mutations_delegate_to_workflow_and_queue_long_jobs(
             '"idempotency_key":"decision-1"}',
         )
     )
+    services.store.session = _session(
+        state=ResearchState.AWAITING_CANDIDATES, revision=5
+    )
     approval = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/approvals",
@@ -304,17 +388,26 @@ def test_research_mutations_delegate_to_workflow_and_queue_long_jobs(
             '"idempotency_key":"approval-1"}',
         )
     )
+    services.store.session = _session(state=ResearchState.DISCOVERING, revision=5)
     discovery = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/discovery",
             '{"expected_revision":5}',
         )
     )
+    discovery_result = services.jobs.submissions[-1][1]()
+    services.store.session = _session(state=ResearchState.ACQUIRING, revision=6)
     acquisition = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/acquisition",
             '{"expected_revision":6,"idempotency_key":"acquisition-1","language":"fr"}',
         )
+    )
+    acquisition_result = services.jobs.submissions[-1][1]()
+    services.store.session = _session(
+        state=ResearchState.FAILED_RETRYABLE,
+        revision=7,
+        retry_target=ResearchState.ASSESSING,
     )
     retry = services.app.handle(
         _post(
@@ -322,15 +415,246 @@ def test_research_mutations_delegate_to_workflow_and_queue_long_jobs(
             '{"expected_revision":7,"idempotency_key":"retry-1"}',
         )
     )
+    retry_result = services.jobs.submissions[-1][1]()
 
     assert start.status == decision.status == approval.status == 200
     assert discovery.status == acquisition.status == retry.status == 202
+    assert services.workflow.start_calls == [
+        ("local", ("local",), ("fr",), FreshnessProfile.STANDARD)
+    ]
+    assert services.workflow.decision_calls == [
+        (SESSION_ID, 4, "refresh", "decision-1")
+    ]
+    assert services.workflow.approval_calls == [
+        (SESSION_ID, 5, ("abc123DEF45",), "approval-1")
+    ]
     assert [kind for kind, _ in services.jobs.submissions] == [
         "research_discovery",
         "research_acquisition",
         "research_retry",
     ]
-    assert services.jobs.submissions[0][1]()["session"]["revision"] == 5
+    assert discovery_result["session"]["revision"] == 5
+    assert acquisition_result["session"]["revision"] == 5
+    assert retry_result["session"]["revision"] == 5
+    assert services.workflow.discovery_calls == [(SESSION_ID, 5)]
+    assert services.workflow.acquisition_calls == [
+        (SESSION_ID, 6, "acquisition-1", "fr")
+    ]
+    assert services.workflow.retry_calls == [(SESSION_ID, 7, "retry-1")]
+
+
+def test_initial_stale_revision_returns_409_without_queue_submission(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(state=ResearchState.DISCOVERING, revision=6)
+
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/discovery",
+            '{"expected_revision":5}',
+        )
+    )
+
+    assert response.status == 409
+    assert response.json_body == {
+        "schema_version": 1,
+        "error": {"code": "stale_revision"},
+    }
+    assert services.jobs.submissions == []
+    assert services.workflow.discovery_calls == []
+
+
+def test_revision_race_after_admission_is_a_bounded_terminal_job_result(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(state=ResearchState.DISCOVERING, revision=5)
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/discovery",
+            '{"expected_revision":5}',
+        )
+    )
+    services.store.session = _session(
+        state=ResearchState.AWAITING_CANDIDATES, revision=6
+    )
+
+    result = services.jobs.submissions[0][1]()
+
+    assert response.status == 202
+    assert result == {"schema_version": 1, "error": {"code": "stale_revision"}}
+    assert services.workflow.discovery_calls == []
+
+
+def test_domain_revision_conflict_inside_job_is_a_bounded_terminal_result(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(state=ResearchState.DISCOVERING, revision=5)
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/discovery",
+            '{"expected_revision":5}',
+        )
+    )
+    services.workflow.error = ResearchRevisionConflict("private race detail")
+
+    result = services.jobs.submissions[0][1]()
+
+    assert response.status == 202
+    assert result == {"schema_version": 1, "error": {"code": "stale_revision"}}
+
+
+def test_missing_or_incompatible_queued_session_fails_before_submission(
+    services: SimpleNamespace,
+) -> None:
+    services.store.missing = True
+    missing = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/discovery",
+            '{"expected_revision":5}',
+        )
+    )
+    services.store.missing = False
+    services.store.session = _session(
+        state=ResearchState.AWAITING_SUFFICIENCY, revision=5
+    )
+    incompatible = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/discovery",
+            '{"expected_revision":5}',
+        )
+    )
+
+    assert missing.status == 404
+    assert missing.json_body["error"] == {"code": "not_found"}
+    assert incompatible.status == 409
+    assert incompatible.json_body["error"] == {"code": "workflow_conflict"}
+    assert services.jobs.submissions == []
+
+
+def test_missing_or_stale_synchronous_mutation_fails_before_workflow(
+    services: SimpleNamespace,
+) -> None:
+    services.store.missing = True
+    missing = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/decisions",
+            '{"expected_revision":5,"decision":"refresh",'
+            '"idempotency_key":"decision-1"}',
+        )
+    )
+    services.store.missing = False
+    services.store.session = _session(
+        state=ResearchState.AWAITING_SUFFICIENCY, revision=6
+    )
+    stale = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/decisions",
+            '{"expected_revision":5,"decision":"refresh",'
+            '"idempotency_key":"decision-1"}',
+        )
+    )
+
+    assert missing.status == 404
+    assert missing.json_body["error"] == {"code": "not_found"}
+    assert stale.status == 409
+    assert stale.json_body["error"] == {"code": "stale_revision"}
+    assert services.workflow.decision_calls == []
+
+
+def test_session_creation_replays_same_key_and_rejects_changed_payload(
+    services: SimpleNamespace,
+) -> None:
+    first = services.app.handle(
+        _post(
+            "/api/v1/research/sessions",
+            '{"topic":"local","queries":["local"],"languages":["fr"],'
+            '"freshness_profile":"standard","idempotency_key":"start-1"}',
+        )
+    )
+    replayed = services.app.handle(
+        _post(
+            "/api/v1/research/sessions",
+            '{"topic":"local","queries":["local"],"languages":["fr"],'
+            '"freshness_profile":"standard","idempotency_key":"start-1"}',
+        )
+    )
+    changed = services.app.handle(
+        _post(
+            "/api/v1/research/sessions",
+            '{"topic":"changed","queries":["changed"],"languages":["fr"],'
+            '"freshness_profile":"standard","idempotency_key":"start-1"}',
+        )
+    )
+
+    assert replayed == first
+    assert len(services.workflow.start_calls) == 1
+    assert changed.status == 409
+    assert changed.json_body["error"] == {"code": "idempotency_conflict"}
+
+
+def test_replay_registry_is_thread_safe_for_same_session_creation(
+    services: SimpleNamespace,
+) -> None:
+    request = _post(
+        "/api/v1/research/sessions",
+        '{"topic":"local","queries":["local"],"languages":["fr"],'
+        '"freshness_profile":"standard","idempotency_key":"start-1"}',
+    )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        responses = tuple(pool.map(services.app.handle, (request,) * 16))
+
+    assert all(response == responses[0] for response in responses)
+    assert len(services.workflow.start_calls) == 1
+
+
+def test_replay_registry_evicts_only_after_a_job_is_terminal(
+    services: SimpleNamespace,
+) -> None:
+    services.jobs.status = "queued"
+    services.app = WebApplication(
+        search=services.search,
+        catalog=services.catalog,
+        workflow=services.workflow,
+        research_store=services.store,
+        exports=services.exports,
+        jobs=services.jobs,
+        source_acquisition=services.sources,
+        export_request_factory=lambda session_id, force: SimpleNamespace(
+            session_id=session_id, force=force
+        ),
+        package_version="0.2.0",
+        max_replay_records=1,
+    )
+    first = services.app.handle(
+        _post(
+            "/api/v1/sources/acquire",
+            '{"fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+            '"idempotency_key":"source-acquisition-1"}',
+        )
+    )
+    full = services.app.handle(
+        _post(
+            "/api/v1/sources/acquire",
+            '{"fingerprint":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",'
+            '"idempotency_key":"source-acquisition-2"}',
+        )
+    )
+    services.jobs.status = "failed"
+    admitted = services.app.handle(
+        _post(
+            "/api/v1/sources/acquire",
+            '{"fingerprint":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",'
+            '"idempotency_key":"source-acquisition-2"}',
+        )
+    )
+
+    assert first.status == admitted.status == 202
+    assert full.status == 429
+    assert len(services.jobs.submissions) == 2
 
 
 def test_source_preview_is_queued_and_returns_only_a_safe_plan(
@@ -360,9 +684,9 @@ def test_changed_source_plan_is_a_fixed_conflict_and_never_acquires(
     response = services.app.handle(
         _post(
             "/api/v1/sources/acquire",
-            '{"source":"https://www.youtube.com/@example","language":"fr",'
-            '"analyze":false,"fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
+            '{"fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+            '"idempotency_key":"source-acquisition-1"}',
         )
     )
 
@@ -381,9 +705,9 @@ def test_confirmed_source_plan_is_queued_for_direct_domain_execution(
     response = services.app.handle(
         _post(
             "/api/v1/sources/acquire",
-            '{"source":"https://www.youtube.com/@example","language":"fr",'
-            '"analyze":false,"fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}',
+            '{"fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+            '"idempotency_key":"source-acquisition-1"}',
         )
     )
 
@@ -394,6 +718,41 @@ def test_confirmed_source_plan_is_queued_for_direct_domain_execution(
     assert services.sources.acquired is False
     assert operation() == {"selected": 1, "items": []}
     assert services.sources.acquired is True
+
+
+def test_source_acquisition_replays_admission_and_rejects_changed_payload(
+    services: SimpleNamespace,
+) -> None:
+    first = services.app.handle(
+        _post(
+            "/api/v1/sources/acquire",
+            '{"fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+            '"idempotency_key":"source-acquisition-1"}',
+        )
+    )
+    replayed = services.app.handle(
+        _post(
+            "/api/v1/sources/acquire",
+            '{"fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+            '"idempotency_key":"source-acquisition-1"}',
+        )
+    )
+    changed = services.app.handle(
+        _post(
+            "/api/v1/sources/acquire",
+            '{"fingerprint":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+            'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",'
+            '"idempotency_key":"source-acquisition-1"}',
+        )
+    )
+
+    assert replayed == first
+    assert len(services.jobs.submissions) == 1
+    assert services.sources.prepare_calls == ["a" * 64]
+    assert changed.status == 409
+    assert changed.json_body["error"] == {"code": "idempotency_conflict"}
 
 
 def test_stale_revision_is_a_fixed_conflict(services: SimpleNamespace) -> None:
@@ -414,6 +773,9 @@ def test_stale_revision_is_a_fixed_conflict(services: SimpleNamespace) -> None:
 
 
 def test_fixed_errors_never_copy_exception_paths(services: SimpleNamespace) -> None:
+    services.store.session = _session(
+        state=ResearchState.AWAITING_SUFFICIENCY, revision=4
+    )
     services.workflow.error = RuntimeError("failed at /Users/private/secret.sqlite3")
     response = services.app.handle(
         _post(
@@ -434,6 +796,7 @@ def test_fixed_errors_never_copy_exception_paths(services: SimpleNamespace) -> N
 def test_known_capacity_and_index_failures_have_fixed_public_codes(
     services: SimpleNamespace,
 ) -> None:
+    services.store.session = _session(state=ResearchState.DISCOVERING, revision=5)
     services.jobs.error = JobQueueFull("private queue detail")
     queued = services.app.handle(
         _post(

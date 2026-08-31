@@ -5,12 +5,16 @@ from __future__ import annotations
 import logging
 import re
 import sqlite3
+import threading
+from collections import OrderedDict
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 
 from yt_insights.catalog import CatalogError
 from yt_insights.research.dossier import DossierExportRequest, DossierExportResult
+from yt_insights.research.models import ResearchSession, ResearchState
 from yt_insights.research.store import ResearchRevisionConflict, ResearchStore
 from yt_insights.research.workflow import ResearchResponse, ResearchWorkflow
 from yt_insights.search.service import SearchService
@@ -19,8 +23,8 @@ from yt_insights.search.sqlite_fts import SearchIndexError
 from .api import (
     PlanChanged,
     RequestValidationError,
-    SourceAcquisitionRequest,
     SourcePreviewRequest,
+    StartSessionRequest,
     job_payload,
     parse_acquisition,
     parse_approval,
@@ -55,6 +59,34 @@ _SESSION_ACTION_ROUTE = re.compile(
     r"/api/v1/research/sessions/([^/]+)/(decisions|discovery|approvals|acquisition|retry|exports)"
 )
 _JOB_ROUTE = re.compile(r"/api/v1/jobs/([^/]+)")
+_MAX_REPLAY_RECORDS = 100
+_DISCOVERY_STATES = frozenset({ResearchState.DISCOVERING})
+_ACQUISITION_STATES = frozenset({ResearchState.ACQUIRING})
+_RETRY_STATES = frozenset(
+    {
+        ResearchState.FAILED_RETRYABLE,
+        ResearchState.ACQUIRING,
+        ResearchState.REINDEXING,
+        ResearchState.ASSESSING,
+        ResearchState.AWAITING_SUFFICIENCY,
+    }
+)
+
+
+class ResourceNotFound(Exception):
+    """A requested public resource does not exist."""
+
+
+class WorkflowConflict(Exception):
+    """A valid request is incompatible with the current workflow state."""
+
+
+class IdempotencyConflict(Exception):
+    """A route-scoped idempotency key was reused with another payload."""
+
+
+class ReplayRegistryFull(Exception):
+    """No terminal replay record can be evicted safely."""
 
 
 class JobSubmitter(Protocol):
@@ -72,11 +104,69 @@ class SourceAcquisition(Protocol):
     def preview(self, request: SourcePreviewRequest) -> Mapping[str, object]: ...
 
     def prepare_acquisition(
-        self, request: SourceAcquisitionRequest
+        self, fingerprint: str
     ) -> Callable[[], Mapping[str, object]]: ...
 
 
 ExportRequestFactory = Callable[[str, bool], DossierExportRequest]
+
+
+@dataclass(frozen=True, slots=True)
+class _ReplayRecord:
+    payload: object
+    response: WebResponse
+    job_id: str | None
+
+
+class _ReplayRegistry:
+    """Bound route-scoped HTTP replay while evicting only terminal records."""
+
+    def __init__(self, *, maximum: int, jobs: JobReader) -> None:
+        if isinstance(maximum, bool) or not isinstance(maximum, int) or maximum < 1:
+            raise ValueError("replay capacity must be a positive integer")
+        self._maximum = maximum
+        self._jobs = jobs
+        self._lock = threading.Lock()
+        self._records: OrderedDict[tuple[str, str], _ReplayRecord] = OrderedDict()
+
+    def run(
+        self,
+        *,
+        route: str,
+        key: str,
+        payload: object,
+        operation: Callable[[], WebResponse],
+    ) -> WebResponse:
+        identity = (route, key)
+        with self._lock:
+            prior = self._records.get(identity)
+            if prior is not None:
+                if prior.payload != payload:
+                    raise IdempotencyConflict()
+                return prior.response
+            self._reserve_slot()
+            response = operation()
+            job_id = _response_job_id(response)
+            self._records[identity] = _ReplayRecord(payload, response, job_id)
+            return response
+
+    def _reserve_slot(self) -> None:
+        if len(self._records) < self._maximum:
+            return
+        for identity, record in tuple(self._records.items()):
+            if self._terminal(record):
+                del self._records[identity]
+                return
+        raise ReplayRegistryFull()
+
+    def _terminal(self, record: _ReplayRecord) -> bool:
+        if record.job_id is None:
+            return True
+        try:
+            snapshot = self._jobs.get(record.job_id)
+        except JobNotFound:
+            return True
+        return snapshot.status in {"succeeded", "failed"}
 
 
 class WebApplication:
@@ -95,6 +185,7 @@ class WebApplication:
         export_request_factory: ExportRequestFactory | None = None,
         package_version: str,
         job_reader: JobReader | None = None,
+        max_replay_records: int = _MAX_REPLAY_RECORDS,
     ) -> None:
         resolved_reader = job_reader
         if resolved_reader is None:
@@ -111,6 +202,10 @@ class WebApplication:
         self._source_acquisition = source_acquisition
         self._export_request_factory = export_request_factory
         self._package_version = package_version
+        self._replays = _ReplayRegistry(
+            maximum=max_replay_records,
+            jobs=resolved_reader,
+        )
 
     def handle(self, request: WebRequest) -> WebResponse:
         """Return a fixed public response without reflecting exception text."""
@@ -118,13 +213,17 @@ class WebApplication:
             return self._dispatch(request)
         except RequestValidationError:
             return _error(400, "invalid_request")
-        except JobNotFound:
+        except (JobNotFound, ResourceNotFound):
             return _error(404, "not_found")
         except PlanChanged:
             return _error(409, "plan_changed")
         except ResearchRevisionConflict:
             return _error(409, "stale_revision")
-        except JobQueueFull:
+        except WorkflowConflict:
+            return _error(409, "workflow_conflict")
+        except IdempotencyConflict:
+            return _error(409, "idempotency_conflict")
+        except (JobQueueFull, ReplayRegistryFull):
             return _error(429, "job_queue_full")
         except JobExecutorClosed:
             return _error(503, "jobs_unavailable")
@@ -134,8 +233,6 @@ class WebApplication:
             return _error(503, "catalog_unavailable")
         except sqlite3.Error:
             return _error(503, "research_unavailable")
-        except ValueError:
-            return _error(409, "workflow_conflict")
         except Exception as exc:
             _LOGGER.error("web request failed: %s", type(exc).__name__)
             return _error(500, "internal_error")
@@ -197,7 +294,7 @@ class WebApplication:
             try:
                 response = self._workflow.status(session_id)
             except ValueError as exc:
-                raise JobNotFound() from exc
+                raise ResourceNotFound() from exc
             return WebResponse.json(200, response.to_dict())
         job_match = _JOB_ROUTE.fullmatch(request.path)
         if job_match is not None:
@@ -218,19 +315,28 @@ class WebApplication:
             )
         if request.path == "/api/v1/sources/acquire":
             source = self._require_source_acquisition()
-            operation = source.prepare_acquisition(
-                parse_source_acquisition(request.body)
+            parsed_source_acquisition = parse_source_acquisition(request.body)
+            return self._replays.run(
+                route=request.path,
+                key=parsed_source_acquisition.idempotency_key,
+                payload=("fingerprint", parsed_source_acquisition.fingerprint),
+                operation=lambda: self._admit_source_acquisition(
+                    source, parsed_source_acquisition.fingerprint
+                ),
             )
-            return self._queued("source_acquisition", operation)
         if request.path == "/api/v1/research/sessions":
             parsed_start = parse_start_session(request.body)
-            response = self._workflow.start(
-                topic=parsed_start.topic,
-                queries=parsed_start.queries,
-                languages=parsed_start.languages,
-                freshness_profile=parsed_start.freshness_profile,
+            return self._replays.run(
+                route=request.path,
+                key=parsed_start.idempotency_key,
+                payload=(
+                    parsed_start.topic,
+                    parsed_start.queries,
+                    parsed_start.languages,
+                    parsed_start.freshness_profile.value,
+                ),
+                operation=lambda: self._start_session(parsed_start),
             )
-            return WebResponse.json(200, response.to_dict())
         match = _SESSION_ACTION_ROUTE.fullmatch(request.path)
         if match is None:
             return _error(404, "not_found")
@@ -238,34 +344,66 @@ class WebApplication:
         action = match.group(2)
         if action == "decisions":
             parsed_decision = parse_decision(request.body)
-            response = self._workflow.decide(
+            self._require_session_revision(
                 session_id,
                 expected_revision=parsed_decision.expected_revision,
-                decision=parsed_decision.decision,
-                idempotency_key=parsed_decision.idempotency_key,
             )
+            try:
+                response = self._workflow.decide(
+                    session_id,
+                    expected_revision=parsed_decision.expected_revision,
+                    decision=parsed_decision.decision,
+                    idempotency_key=parsed_decision.idempotency_key,
+                )
+            except ResearchRevisionConflict:
+                raise
+            except ValueError as exc:
+                self._require_session_revision(
+                    session_id,
+                    expected_revision=parsed_decision.expected_revision,
+                )
+                raise WorkflowConflict() from exc
             return WebResponse.json(200, response.to_dict())
         if action == "discovery":
             parsed_revision = parse_revision(request.body)
             return self._queue_research(
                 "research_discovery",
+                session_id,
+                parsed_revision.expected_revision,
+                _DISCOVERY_STATES,
                 lambda: self._workflow.discover(
                     session_id, expected_revision=parsed_revision.expected_revision
                 ),
             )
         if action == "approvals":
             parsed_approval = parse_approval(request.body)
-            response = self._workflow.approve(
+            self._require_session_revision(
                 session_id,
                 expected_revision=parsed_approval.expected_revision,
-                video_ids=parsed_approval.video_ids,
-                idempotency_key=parsed_approval.idempotency_key,
             )
+            try:
+                response = self._workflow.approve(
+                    session_id,
+                    expected_revision=parsed_approval.expected_revision,
+                    video_ids=parsed_approval.video_ids,
+                    idempotency_key=parsed_approval.idempotency_key,
+                )
+            except ResearchRevisionConflict:
+                raise
+            except ValueError as exc:
+                self._require_session_revision(
+                    session_id,
+                    expected_revision=parsed_approval.expected_revision,
+                )
+                raise WorkflowConflict() from exc
             return WebResponse.json(200, response.to_dict())
         if action == "acquisition":
             parsed_acquisition = parse_acquisition(request.body)
             return self._queue_research(
                 "research_acquisition",
+                session_id,
+                parsed_acquisition.expected_revision,
+                _ACQUISITION_STATES,
                 lambda: self._workflow.acquire(
                     session_id,
                     expected_revision=parsed_acquisition.expected_revision,
@@ -277,6 +415,9 @@ class WebApplication:
             parsed_retry = parse_retry(request.body)
             return self._queue_research(
                 "research_retry",
+                session_id,
+                parsed_retry.expected_revision,
+                _RETRY_STATES,
                 lambda: self._workflow.retry(
                     session_id,
                     expected_revision=parsed_retry.expected_revision,
@@ -287,10 +428,16 @@ class WebApplication:
         request_factory = self._export_request_factory
         if request_factory is None:
             return _error(503, "exports_unavailable")
-        result = self._workflow.export(
-            request_factory(session_id, parsed_export.force),
-            package_version=self._package_version,
-        )
+        self._require_session(session_id)
+        try:
+            result = self._workflow.export(
+                request_factory(session_id, parsed_export.force),
+                package_version=self._package_version,
+            )
+        except ResearchRevisionConflict:
+            raise
+        except ValueError as exc:
+            raise WorkflowConflict() from exc
         return WebResponse.json(
             200,
             {
@@ -300,9 +447,111 @@ class WebApplication:
         )
 
     def _queue_research(
-        self, kind: str, operation: Callable[[], ResearchResponse]
+        self,
+        kind: str,
+        session_id: str,
+        expected_revision: int,
+        compatible_states: frozenset[ResearchState],
+        operation: Callable[[], ResearchResponse],
     ) -> WebResponse:
-        return self._queued(kind, lambda: operation().to_dict())
+        self._require_session_state(
+            session_id,
+            expected_revision=expected_revision,
+            compatible_states=compatible_states,
+        )
+
+        def guarded_operation() -> Mapping[str, object]:
+            try:
+                self._require_session_state(
+                    session_id,
+                    expected_revision=expected_revision,
+                    compatible_states=compatible_states,
+                )
+                return operation().to_dict()
+            except ResearchRevisionConflict:
+                return _job_error("stale_revision")
+            except ResourceNotFound:
+                return _job_error("not_found")
+            except WorkflowConflict:
+                return _job_error("workflow_conflict")
+            except ValueError:
+                return self._queued_value_error(
+                    session_id,
+                    expected_revision=expected_revision,
+                    compatible_states=compatible_states,
+                )
+
+        return self._queued(kind, guarded_operation)
+
+    def _queued_value_error(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        compatible_states: frozenset[ResearchState],
+    ) -> Mapping[str, object]:
+        try:
+            self._require_session_state(
+                session_id,
+                expected_revision=expected_revision,
+                compatible_states=compatible_states,
+            )
+        except ResearchRevisionConflict:
+            return _job_error("stale_revision")
+        except ResourceNotFound:
+            return _job_error("not_found")
+        except WorkflowConflict:
+            return _job_error("workflow_conflict")
+        return _job_error("workflow_conflict")
+
+    def _require_session_state(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        compatible_states: frozenset[ResearchState],
+    ) -> None:
+        session = self._require_session_revision(
+            session_id,
+            expected_revision=expected_revision,
+        )
+        if session.state not in compatible_states:
+            raise WorkflowConflict()
+
+    def _require_session_revision(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+    ) -> ResearchSession:
+        session = self._require_session(session_id)
+        if session.revision != expected_revision:
+            raise ResearchRevisionConflict()
+        return session
+
+    def _require_session(self, session_id: str) -> ResearchSession:
+        try:
+            return self._research_store.get_session(session_id)
+        except ValueError as exc:
+            raise ResourceNotFound() from exc
+
+    def _start_session(self, request: StartSessionRequest) -> WebResponse:
+        try:
+            response = self._workflow.start(
+                topic=request.topic,
+                queries=request.queries,
+                languages=request.languages,
+                freshness_profile=request.freshness_profile,
+            )
+        except ValueError as exc:
+            raise WorkflowConflict() from exc
+        return WebResponse.json(200, response.to_dict())
+
+    def _admit_source_acquisition(
+        self, source: SourceAcquisition, fingerprint: str
+    ) -> WebResponse:
+        operation = source.prepare_acquisition(fingerprint)
+        return self._queued("source_acquisition", operation)
 
     def _queued(self, kind: str, operation: JobOperation) -> WebResponse:
         snapshot = self._jobs.submit(kind, operation)
@@ -323,6 +572,19 @@ def _export_payload(result: DossierExportResult) -> dict[str, object]:
     return safe_export_payload(
         Path(result.directory), result.manifest_sha256, result.dossier_sha256
     )
+
+
+def _response_job_id(response: WebResponse) -> str | None:
+    if response.status != 202:
+        return None
+    job_id = response.json_body.get("job_id")
+    if not isinstance(job_id, str) or not job_id:
+        raise RuntimeError("queued response has no job identifier")
+    return job_id
+
+
+def _job_error(code: str) -> dict[str, object]:
+    return {"schema_version": 1, "error": {"code": code}}
 
 
 def _error(status: int, code: str) -> WebResponse:
