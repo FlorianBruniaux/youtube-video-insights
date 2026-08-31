@@ -1649,6 +1649,7 @@ def test_public_acquisition_history_is_bounded_and_reports_truncation(tmp_path) 
     assert "SECRET-TRUNCATED-CANARY" not in json.dumps(payload)
     assert "SECRET-TRUNCATED-CANARY" not in repr(response)
     assert "research_acquisition_attempts_history" in query_plan
+    assert "USE TEMP B-TREE FOR ORDER BY" not in query_plan
     with pytest.raises(ValueError, match="revision conflict"):
         store.get_public_snapshot(SESSION_ID, expected_revision=0)
 
