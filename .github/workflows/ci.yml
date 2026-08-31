@@ -30,7 +30,7 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          fetch-depth: 2
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -41,6 +41,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
+          version: 0.11.20
           enable-cache: true
           cache-dependency-glob: uv.lock
 
@@ -48,7 +49,59 @@ jobs:
         run: uv sync --locked --extra dev --extra mcp
 
       - name: Check changed-line whitespace
-        run: git diff --check HEAD^ HEAD
+        env:
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -eu
+
+          zero_sha=0000000000000000000000000000000000000000
+          if ! git cat-file -e "$GITHUB_SHA^{commit}"; then
+            echo "Target SHA is not an available commit: $GITHUB_SHA" >&2
+            exit 1
+          fi
+
+          case "$GITHUB_EVENT_NAME" in
+            pull_request)
+              if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "$zero_sha" ]; then
+                echo "Invalid base SHA for $GITHUB_EVENT_NAME" >&2
+                exit 1
+              fi
+              ;;
+            push)
+              if [ "$BASE_SHA" = "$zero_sha" ]; then
+                default_ref="refs/remotes/origin/$DEFAULT_BRANCH"
+                if [ -z "$DEFAULT_BRANCH" ] || ! git show-ref --verify --quiet "$default_ref"; then
+                  echo "Default branch ref is unavailable for a zero-SHA push" >&2
+                  exit 1
+                fi
+                if ! BASE_SHA=$(git merge-base "$GITHUB_SHA" "$default_ref"); then
+                  echo "No merge base with the default branch for a zero-SHA push" >&2
+                  exit 1
+                fi
+              elif [ -z "$BASE_SHA" ]; then
+                echo "Invalid base SHA for $GITHUB_EVENT_NAME" >&2
+                exit 1
+              fi
+              ;;
+            workflow_dispatch)
+              if ! BASE_SHA=$(git rev-parse --verify HEAD^); then
+                echo "workflow_dispatch requires a parent commit for its explicit HEAD^ fallback" >&2
+                exit 1
+              fi
+              ;;
+            *)
+              echo "Unsupported event: $GITHUB_EVENT_NAME" >&2
+              exit 1
+              ;;
+          esac
+
+          if ! git cat-file -e "$BASE_SHA^{commit}"; then
+            echo "Base SHA is not an available commit: $BASE_SHA" >&2
+            exit 1
+          fi
+
+          git diff --check "$BASE_SHA" "$GITHUB_SHA"
 
       - name: Lint
         run: uv run --no-sync ruff check src tests scripts
@@ -81,6 +134,7 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
+          version: 0.11.20
           enable-cache: true
           cache-dependency-glob: uv.lock
 
