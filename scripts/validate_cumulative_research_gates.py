@@ -70,6 +70,13 @@ def _number(value: object, location: str) -> float:
     return float(value)
 
 
+def _status(value: object, location: str, allowed: set[str]) -> str:
+    status = _string(value, location)
+    if status not in allowed:
+        raise GateValidationError(f"{location} is invalid")
+    return status
+
+
 def _validate_corpus(value: object) -> None:
     corpus = _object(
         value,
@@ -116,8 +123,7 @@ def _validate_relevance(value: object) -> None:
     ):
         if _integer(relevance[key], f"relevance_pilot.{key}") < 0:
             raise GateValidationError(f"relevance_pilot.{key} must not be negative")
-    if relevance["packet_status"] not in RELEVANCE_STATUSES:
-        raise GateValidationError("relevance_pilot.packet_status is invalid")
+    _status(relevance["packet_status"], "relevance_pilot.packet_status", RELEVANCE_STATUSES)
     index = _object(
         relevance["representative_index"],
         "relevance_pilot.representative_index",
@@ -130,7 +136,7 @@ def _validate_relevance(value: object) -> None:
     _sha256(relevance["packet_sha256"], "relevance_pilot.packet_sha256")
 
 
-def _validate_discovery(value: object) -> None:
+def _validate_discovery(value: object) -> dict[str, object]:
     discovery = _object(
         value,
         "discovery_probe",
@@ -160,9 +166,10 @@ def _validate_discovery(value: object) -> None:
             raise GateValidationError("discovery_probe candidate_count must not be negative")
         if type(subject["publication_dates_available"]) is not bool:
             raise GateValidationError("discovery_probe publication_dates_available must be boolean")
+    return discovery
 
 
-def _validate_refresh(value: object) -> None:
+def _validate_refresh(value: object) -> dict[str, object]:
     refresh = _object(
         value,
         "refresh_performance",
@@ -172,8 +179,8 @@ def _validate_refresh(value: object) -> None:
         raise GateValidationError("refresh_performance.sample_count must equal 5")
     if _number(refresh["p95_wall_seconds"], "refresh_performance.p95_wall_seconds") < 0:
         raise GateValidationError("refresh_performance.p95_wall_seconds must not be negative")
-    if _number(refresh["threshold_seconds"], "refresh_performance.threshold_seconds") <= 0:
-        raise GateValidationError("refresh_performance.threshold_seconds must be positive")
+    if _number(refresh["threshold_seconds"], "refresh_performance.threshold_seconds") != 60:
+        raise GateValidationError("refresh_performance.threshold_seconds must equal 60")
     if type(refresh["incremental_refresh_required"]) is not bool:
         raise GateValidationError("refresh_performance.incremental_refresh_required must be boolean")
     samples = refresh["samples"]
@@ -197,6 +204,7 @@ def _validate_refresh(value: object) -> None:
         _sha256(sample["database_sha256"], f"refresh_performance.samples[{position}].database_sha256")
     if actual_runs != expected_runs:
         raise GateValidationError("refresh_performance.samples must contain runs 1 through 5")
+    return refresh
 
 
 def _validate_artifacts(value: object) -> None:
@@ -218,21 +226,31 @@ def validate(payload: object) -> None:
         raise GateValidationError("code_sha must be a lowercase 40-character Git SHA")
     _validate_corpus(evidence["corpus"])
     gates = _object(evidence["gates"], "gates", {"relevance_pilot", "discovery_probe", "refresh_performance", "global_activation_ready"})
-    if gates["relevance_pilot"] not in RELEVANCE_STATUSES:
-        raise GateValidationError("gates.relevance_pilot is invalid")
-    if gates["discovery_probe"] not in DISCOVERY_STATUSES:
-        raise GateValidationError("gates.discovery_probe is invalid")
-    if gates["refresh_performance"] not in REFRESH_STATUSES:
-        raise GateValidationError("gates.refresh_performance is invalid")
+    relevance_status = _status(gates["relevance_pilot"], "gates.relevance_pilot", RELEVANCE_STATUSES)
+    discovery_status = _status(gates["discovery_probe"], "gates.discovery_probe", DISCOVERY_STATUSES)
+    refresh_status = _status(gates["refresh_performance"], "gates.refresh_performance", REFRESH_STATUSES)
     if type(gates["global_activation_ready"]) is not bool:
         raise GateValidationError("gates.global_activation_ready must be boolean")
-    if gates["global_activation_ready"] and not all(
-        gates[key] == "PASS" for key in ("relevance_pilot", "discovery_probe", "refresh_performance")
-    ):
+    if gates["global_activation_ready"] and not all(status == "PASS" for status in (relevance_status, discovery_status, refresh_status)):
         raise GateValidationError("gates.global_activation_ready requires every external gate to PASS")
     _validate_relevance(evidence["relevance_pilot"])
-    _validate_discovery(evidence["discovery_probe"])
-    _validate_refresh(evidence["refresh_performance"])
+    discovery = _validate_discovery(evidence["discovery_probe"])
+    refresh = _validate_refresh(evidence["refresh_performance"])
+    if discovery_status == "PASS":
+        if discovery["local_state_unchanged"] is not True:
+            raise GateValidationError("discovery_probe.local_state_unchanged must be true when discovery passes")
+        for position, subject_value in enumerate(discovery["subjects"], start=1):
+            assert isinstance(subject_value, dict)
+            if subject_value["exit_code"] != 0:
+                raise GateValidationError(f"discovery_probe.subjects[{position}].exit_code must equal 0 when discovery passes")
+            if subject_value["candidate_count"] < 5:
+                raise GateValidationError(f"discovery_probe.subjects[{position}].candidate_count must be at least 5 when discovery passes")
+    p95 = _number(refresh["p95_wall_seconds"], "refresh_performance.p95_wall_seconds")
+    incremental_required = refresh["incremental_refresh_required"]
+    if incremental_required != (p95 > 60):
+        raise GateValidationError("refresh_performance.incremental_refresh_required must match whether p95_wall_seconds exceeds 60")
+    if refresh_status == "PASS" and (p95 > 60 or incremental_required):
+        raise GateValidationError("gates.refresh_performance PASS requires p95_wall_seconds at most 60 and incremental_refresh_required false")
     _validate_artifacts(evidence["artifacts"])
 
 

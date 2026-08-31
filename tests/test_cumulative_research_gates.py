@@ -30,6 +30,19 @@ def _write_mutated_evidence(tmp_path: Path, mutate) -> Path:
     return target
 
 
+def _mark_all_external_gates_pass(payload: dict[str, object]) -> None:
+    gates = payload["gates"]
+    assert isinstance(gates, dict)
+    gates.update(
+        {
+            "relevance_pilot": "PASS",
+            "discovery_probe": "PASS",
+            "refresh_performance": "PASS",
+            "global_activation_ready": True,
+        }
+    )
+
+
 def test_accepts_checked_in_gate_evidence() -> None:
     result = _run(EVIDENCE)
 
@@ -49,6 +62,10 @@ def test_accepts_checked_in_gate_evidence() -> None:
         (
             lambda payload: payload["gates"].update({"relevance_pilot": "BLOCKED"}),
             "gates.relevance_pilot",
+        ),
+        (
+            lambda payload: payload["gates"].update({"relevance_pilot": []}),
+            "gates.relevance_pilot must be a non-empty string",
         ),
         (
             lambda payload: payload["corpus"].update({"fingerprint": "not-a-hash"}),
@@ -74,6 +91,49 @@ def test_accepts_checked_in_gate_evidence() -> None:
 )
 def test_rejects_invalid_gate_evidence(tmp_path: Path, mutate, message: str) -> None:
     result = _run(_write_mutated_evidence(tmp_path, mutate))
+
+    assert result.returncode == 2
+    assert message in result.stderr
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    (
+        (
+            lambda payload: payload["refresh_performance"].update({"threshold_seconds": 61}),
+            "threshold_seconds must equal 60",
+        ),
+        (
+            lambda payload: payload["refresh_performance"].update(
+                {"p95_wall_seconds": 60.000001, "incremental_refresh_required": True}
+            ),
+            "p95_wall_seconds",
+        ),
+        (
+            lambda payload: payload["refresh_performance"].update({"incremental_refresh_required": True}),
+            "incremental_refresh_required",
+        ),
+        (
+            lambda payload: payload["discovery_probe"].update({"local_state_unchanged": False}),
+            "local_state_unchanged",
+        ),
+        (
+            lambda payload: payload["discovery_probe"]["subjects"][0].update({"exit_code": 1}),
+            "exit_code",
+        ),
+        (
+            lambda payload: payload["discovery_probe"]["subjects"][0].update({"candidate_count": 4}),
+            "candidate_count",
+        ),
+    ),
+)
+def test_rejects_contradictory_all_pass_evidence(tmp_path: Path, mutate, message: str) -> None:
+    def make_contradictory(payload: dict[str, object]) -> None:
+        _mark_all_external_gates_pass(payload)
+        mutate(payload)
+
+    result = _run(_write_mutated_evidence(tmp_path, make_contradictory))
 
     assert result.returncode == 2
     assert message in result.stderr
