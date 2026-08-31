@@ -53,7 +53,7 @@ class YtDlpDiscoveryProvider:
     def __init__(
         self,
         *,
-        fetcher: Callable[[str], VideoListResult] = fetch_video_list,
+        fetcher: Callable[[str], object] = fetch_video_list,
         existing_ids: Callable[[tuple[str, ...]], frozenset[str]],
     ) -> None:
         self._fetcher = fetcher

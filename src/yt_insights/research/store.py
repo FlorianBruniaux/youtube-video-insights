@@ -2,19 +2,20 @@
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from dataclasses import asdict, is_dataclass, replace
-from datetime import UTC, date, datetime
 import errno
 import fcntl
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import sqlite3
 import stat
-from typing import Any, Callable, Iterator, TypeVar
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
+from dataclasses import asdict, is_dataclass, replace
+from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Any, TypeVar
 
 from .models import (
     AcquisitionAttempt,
@@ -40,7 +41,6 @@ from .models import (
     VideoEvidence,
     normalize_research_text,
 )
-
 
 _SCHEMA_VERSION = 1
 _ACQUISITION_HISTORY_INDEX = (
@@ -215,10 +215,8 @@ class ResearchStore:
         ):
             raise ValueError("execution lock identity is invalid")
         lock_directory = self._path.parent / ".research-operation-locks"
-        try:
+        with suppress(FileExistsError):
             lock_directory.mkdir(mode=0o700)
-        except FileExistsError:
-            pass
         directory_stat = lock_directory.lstat()
         if not stat.S_ISDIR(directory_stat.st_mode) or stat.S_ISLNK(
             directory_stat.st_mode
@@ -233,7 +231,7 @@ class ResearchStore:
         claimed = False
         try:
             lock_name = hashlib.sha256(
-                f"{namespace}\x00{identity}".encode("utf-8")
+                f"{namespace}\x00{identity}".encode()
             ).hexdigest()
             lock_flags = os.O_RDWR | os.O_CREAT
             lock_flags |= getattr(os, "O_CLOEXEC", 0)
@@ -1143,13 +1141,19 @@ class ResearchStore:
             if table_sql is None or re.sub(r"\s+", " ", table_sql[0]).strip().casefold() != _SCHEMA_SQL[table]:
                 raise ValueError("database schema is unsupported")
             columns = tuple((row[1], row[2], row[3], row[5]) for row in connection.execute(f"PRAGMA table_info({table})"))
-            indexes = set()
+            indexes: set[tuple[str, tuple[str, ...]]] = set()
             for index in connection.execute(f"PRAGMA index_list({table})"):
                 if index[2] != 1 or index[4] != 0:
                     raise ValueError("database schema is unsupported")
-                index_columns = tuple(row[2] for row in connection.execute(f"PRAGMA index_info({index[1]})"))
-                indexes.add((index[3], index_columns))
+                index_columns = tuple(
+                    str(row[2])
+                    for row in connection.execute(
+                        f"PRAGMA index_info({index[1]})"
+                    )
+                )
+                indexes.add((str(index[3]), index_columns))
             expected_indexes = _SCHEMA_INDEXES[table]
+            indexes_are_supported = indexes == expected_indexes
             if (
                 allow_missing_acquisition_history_index
                 and table == "research_acquisition_attempts"
@@ -1163,9 +1167,10 @@ class ResearchStore:
                         "attempt_id",
                     ),
                 )
-                if indexes == expected_indexes - {history_index}:
-                    expected_indexes = indexes
-            if columns != expected_columns or indexes != expected_indexes:
+                indexes_are_supported = indexes_are_supported or (
+                    indexes == expected_indexes - {history_index}
+                )
+            if columns != expected_columns or not indexes_are_supported:
                 raise ValueError("database schema is unsupported")
             foreign_keys = {
                 (row[2], row[3], row[4], row[5], row[6], row[7])
@@ -1714,7 +1719,7 @@ def _is_error_code(value: object) -> bool:
 def _json_default(value: object) -> object:
     if isinstance(value, (datetime, date)):
         return value.isoformat()
-    if is_dataclass(value):
+    if is_dataclass(value) and not isinstance(value, type):
         return asdict(value)
     raise TypeError(f"cannot serialize {type(value).__name__}")
 
@@ -1750,16 +1755,29 @@ def _session_payload(session: ResearchSession) -> dict[str, object]:
 
 
 def _session_from_payload(payload: dict[str, object]) -> ResearchSession:
+    queries = payload["queries"]
+    languages = payload["languages"]
+    revision = payload["revision"]
+    if not isinstance(queries, list) or not all(
+        isinstance(query, str) for query in queries
+    ):
+        raise ValueError("stored session queries are invalid")
+    if not isinstance(languages, list) or not all(
+        isinstance(language, str) for language in languages
+    ):
+        raise ValueError("stored session languages are invalid")
+    if isinstance(revision, bool) or not isinstance(revision, int):
+        raise ValueError("stored session revision is invalid")
     return ResearchSession(
         session_id=str(payload["session_id"]),
         topic=str(payload["topic"]),
-        queries=tuple(QuerySpec(query) for query in payload["queries"]),  # type: ignore[arg-type]
-        languages=tuple(payload["languages"]),  # type: ignore[arg-type]
+        queries=tuple(QuerySpec(query) for query in queries),
+        languages=tuple(languages),
         freshness_profile=FreshnessProfile(str(payload["freshness_profile"])),
         discovery_fingerprint=str(payload["discovery_fingerprint"]),
         state=ResearchState(str(payload["state"])),
         required_user_action=None if payload["required_user_action"] is None else RequiredUserAction(str(payload["required_user_action"])),
-        revision=int(payload["revision"]),
+        revision=revision,
         retry_target=None if payload["retry_target"] is None else ResearchState(str(payload["retry_target"])),
         created_at=_datetime(str(payload["created_at"])),
         updated_at=_datetime(str(payload["updated_at"])),
