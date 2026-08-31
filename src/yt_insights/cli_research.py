@@ -159,6 +159,32 @@ def _emit(
             click.echo(
                 "Matching query: " + ", ".join(candidate["matched_queries"])
             )
+    acquisition_history = payload["acquisition_history"]
+    if isinstance(acquisition_history, list) and acquisition_history:
+        attempt = acquisition_history[-1]
+        assert isinstance(attempt, dict)
+        click.echo(
+            f"Acquisition attempt: {attempt['attempt_id']} ({attempt['status']})"
+        )
+        items = attempt["items"]
+        has_retryable_item = False
+        if isinstance(items, list):
+            for item in items:
+                assert isinstance(item, dict)
+                detail = f"{item['video_id']}: {item['status']}"
+                if item["error_code"] is not None:
+                    detail += f" ({item['error_code']})"
+                if item["source_sha256"] is not None:
+                    detail += f" [source_sha256={item['source_sha256']}]"
+                click.echo(detail)
+                if item["status"] == "failed_retryable":
+                    has_retryable_item = True
+        if has_retryable_item:
+            click.echo(
+                "Retry failed items: yt-insights research retry "
+                f"{session['session_id']} --revision {session['revision']} "
+                "--idempotency-key <KEY>"
+            )
     if payload["required_user_action"] == "confirm_sufficiency_or_refresh":
         click.echo(_QUESTION)
 

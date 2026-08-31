@@ -929,6 +929,98 @@ def test_research_retry_cli_reacquires_failed_attempt_in_same_command_and_replay
     }
 
 
+def test_research_human_partial_acquisition_shows_safe_retry_and_question(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    first = _candidate("zyx987WVUT0")
+    second = _candidate("zyx987WVUT1")
+    secret = "SECRET-PRIVATE-ACQUISITION-ERROR"
+
+    class PartialAcquisition:
+        def acquire_approved(
+            self,
+            candidates: tuple[ResearchCandidate, ...],
+            *,
+            data_paths: DataPaths,
+            language: str,
+            cookies_from_browser: str | None = None,
+        ) -> tuple[CandidateAcquisitionOutcome, ...]:
+            video_id = candidates[0].video_id
+            if video_id == second.video_id:
+                return (
+                    CandidateAcquisitionOutcome(
+                        video_id,
+                        CandidateStatus.FAILED_RETRYABLE,
+                        secret,
+                        None,
+                    ),
+                )
+            return (
+                CandidateAcquisitionOutcome(
+                    video_id,
+                    CandidateStatus.ACQUIRED,
+                    None,
+                    "b" * 64,
+                ),
+            )
+
+    _configure_discovery_workflow(
+        tmp_path,
+        monkeypatch,
+        (first, second),
+        acquisition_service=PartialAcquisition(),
+        index_refresher=lambda paths: None,
+    )
+    runner = CliRunner()
+    session_id = _discover_candidates(runner)
+    approved = runner.invoke(
+        cli,
+        [
+            "research",
+            "approve",
+            session_id,
+            first.video_id,
+            second.video_id,
+            "--revision",
+            "3",
+            "--idempotency-key",
+            "approve-key",
+            "--json",
+        ],
+    )
+    assert approved.exit_code == 0, approved.output
+
+    acquired = runner.invoke(
+        cli,
+        [
+            "research",
+            "acquire",
+            session_id,
+            "--revision",
+            "4",
+            "--idempotency-key",
+            "partial-key",
+            "--cookies-from-browser",
+            "firefox:SECRET-PROFILE",
+        ],
+    )
+
+    assert acquired.exit_code == 0, acquired.output
+    assert "Acquisition attempt:" in acquired.output
+    assert f"{first.video_id}: acquired" in acquired.output
+    assert f"{second.video_id}: failed_retryable (acquisition_failed)" in acquired.output
+    assert (
+        f"Retry failed items: yt-insights research retry {session_id} "
+        "--revision 7 --idempotency-key <KEY>"
+    ) in acquired.output
+    assert acquired.output.endswith(
+        "Is this evidence sufficient, or should I search YouTube for newer sources?\n"
+    )
+    assert secret not in acquired.output
+    assert "SECRET-PROFILE" not in acquired.output
+
+
 def test_research_acquisition_gate_warnings_are_bounded_and_do_not_block() -> None:
     from yt_insights.cli_research import _gate_warnings
 
