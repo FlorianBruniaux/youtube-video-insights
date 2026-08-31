@@ -65,6 +65,29 @@ def test_research_output_root_accepts_cli_and_environment_values(
     assert load_config({}).research_output_root == environment_root
 
 
+@pytest.mark.parametrize("source", ["toml", "environment", "override"])
+def test_research_output_root_rejects_relative_values_from_every_input(
+    tmp_path: Path, monkeypatch, source: str
+) -> None:
+    config_path = tmp_path / "config.toml"
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", config_path)
+    relative_root = Path("tracked/research")
+
+    if source == "toml":
+        config_path.write_text(
+            'research_output_root = "tracked/research"\n', encoding="utf-8"
+        )
+        overrides = {}
+    elif source == "environment":
+        monkeypatch.setenv("YT_INSIGHTS_RESEARCH_OUTPUT_ROOT", str(relative_root))
+        overrides = {}
+    else:
+        overrides = {"research_output_root": relative_root}
+
+    with pytest.raises(ValueError, match="absolute"):
+        load_config(overrides)
+
+
 def test_config_template_documents_research_output_root_without_secrets() -> None:
     assert "research_output_root" in config_module.CONFIG_TOML_TEMPLATE
     assert str(Path.home()) not in config_module.CONFIG_TOML_TEMPLATE

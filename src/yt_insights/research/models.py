@@ -15,6 +15,7 @@ from typing import TypeVar
 
 
 _VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
 _T = TypeVar("_T")
 
 
@@ -128,6 +129,8 @@ class PassageEvidence:
     def __post_init__(self) -> None:
         _validate_video_id(self.video_id)
         _validate_finite_rank(self.rank)
+        _validate_excerpt(self.excerpt)
+        _validate_source_sha256(self.source_sha256)
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +176,10 @@ class FreshnessAssessment:
     last_successful_discovery_at: datetime | None
     stale: bool
     reason: str
+
+    def __post_init__(self) -> None:
+        if self.maximum_age_days != self.profile.maximum_age_days:
+            raise ValueError("maximum age must match the freshness profile")
 
 
 @dataclass(frozen=True, slots=True)
@@ -265,6 +272,8 @@ class ResearchAcquisitionOutcome:
 
     def __post_init__(self) -> None:
         _validate_video_id(self.video_id)
+        if self.source_sha256 is not None:
+            _validate_source_sha256(self.source_sha256)
 
 
 @dataclass(frozen=True, slots=True)
@@ -336,6 +345,16 @@ def _validate_watch_url(video_id: str, watch_url: object) -> None:
 def _validate_finite_rank(rank: object) -> None:
     if isinstance(rank, bool) or not isinstance(rank, Real) or not math.isfinite(rank):
         raise ValueError("rank must be finite")
+
+
+def _validate_excerpt(value: object) -> None:
+    if not isinstance(value, str) or not value.strip() or len(value) > 1_500:
+        raise ValueError("excerpt must be non-empty and at most 1500 code points")
+
+
+def _validate_source_sha256(value: object) -> None:
+    if not isinstance(value, str) or _SHA256.fullmatch(value) is None:
+        raise ValueError("source SHA-256 must be lowercase hexadecimal")
 
 
 def _parse_date(value: date | str | None) -> date | None:

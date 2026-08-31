@@ -210,6 +210,61 @@ def test_evidence_rejects_nonfinite_ranks(rank: float) -> None:
         )
 
 
+@pytest.mark.parametrize("excerpt", ["", " \t ", "x" * 1501])
+def test_passage_evidence_rejects_blank_or_oversize_excerpts(excerpt: str) -> None:
+    with pytest.raises(ValueError, match="excerpt"):
+        PassageEvidence(
+            query="Local AI",
+            passage_id="passage-1",
+            video_id=VIDEO_ID,
+            channel_id="channel-1",
+            rank=1,
+            url=WATCH_URL,
+            excerpt=excerpt,
+            source_sha256="a" * 64,
+        )
+
+
+@pytest.mark.parametrize("source_sha256", ["a" * 63, "A" * 64, "g" * 64])
+def test_passage_evidence_rejects_malformed_source_sha256(source_sha256: str) -> None:
+    with pytest.raises(ValueError, match="source SHA-256"):
+        PassageEvidence(
+            query="Local AI",
+            passage_id="passage-1",
+            video_id=VIDEO_ID,
+            channel_id="channel-1",
+            rank=1,
+            url=WATCH_URL,
+            excerpt="excerpt",
+            source_sha256=source_sha256,
+        )
+
+
+@pytest.mark.parametrize("source_sha256", ["a" * 63, "A" * 64, "g" * 64])
+def test_acquisition_outcome_rejects_malformed_optional_source_sha256(
+    source_sha256: str,
+) -> None:
+    with pytest.raises(ValueError, match="source SHA-256"):
+        ResearchAcquisitionOutcome(
+            "attempt",
+            VIDEO_ID,
+            CandidateStatus.ACQUIRED,
+            None,
+            source_sha256,
+        )
+
+
+@pytest.mark.parametrize(
+    ("profile", "maximum_age_days"),
+    [(FreshnessProfile.FAST, 30), (FreshnessProfile.HISTORICAL, 90)],
+)
+def test_freshness_assessment_rejects_mismatched_profile_maximum_age(
+    profile: FreshnessProfile, maximum_age_days: int,
+) -> None:
+    with pytest.raises(ValueError, match="maximum age"):
+        FreshnessAssessment(profile, maximum_age_days, NOW, True, "stale")
+
+
 def test_tuple_fields_reject_mutable_sequences() -> None:
     with pytest.raises(TypeError, match="tuple"):
         VideoEvidence(

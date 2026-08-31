@@ -102,6 +102,11 @@ class Config:
         if isinstance(self.model, _DefaultModel):
             self._model_was_omitted = True
         self.model = str(self.model)
+        if self.research_output_root is not None:
+            research_output_root = Path(self.research_output_root)
+            if not research_output_root.is_absolute():
+                raise ValueError("research_output_root must be absolute")
+            self.research_output_root = research_output_root
         if self.model_source == "default" and not self._model_was_omitted:
             self.model_source = "direct"
         if self.base_url_source == "default" and self.base_url != DEFAULT_BASE_URL:
