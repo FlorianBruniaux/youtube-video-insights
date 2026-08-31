@@ -138,6 +138,20 @@ def _write_fail_if_called_client(directory: Path, name: str) -> Path:
     return executable
 
 
+def _verify_cumulative_research_skill(home: Path) -> Path:
+    """Require the fourth portable skill after an assets-only install."""
+    skill = (
+        home
+        / ".agents"
+        / "skills"
+        / "youtube-cumulative-research"
+        / "SKILL.md"
+    )
+    if not skill.is_file():
+        raise SmokeFailure("Installed assets omit the cumulative research skill.")
+    return skill
+
+
 def _copy_build_source(workspace: Path) -> Path:
     """Copy only current package inputs into a temporary clean build tree."""
     destination = workspace / "build-source"
@@ -279,11 +293,53 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
         help_result = _run(
             [str(base_cli), "--help"], cwd=workspace, environment=clean_environment
         )
-        commands = ("doctor", "acquire", "export", "index", "search", "setup")
+        commands = (
+            "doctor",
+            "acquire",
+            "export",
+            "index",
+            "research",
+            "search",
+            "setup",
+        )
         for command_name in commands:
             if command_name not in help_result.stdout:
                 raise SmokeFailure(
                     f"Installed CLI help is missing the {command_name!r} command."
+                )
+        research_commands = (
+            "start",
+            "status",
+            "decide",
+            "discover",
+            "candidates",
+            "approve",
+            "cancel",
+            "acquire",
+            "retry",
+            "export",
+        )
+        for command_name in research_commands:
+            command_help = _run(
+                [str(base_cli), "research", command_name, "--help"],
+                cwd=workspace,
+                environment=clean_environment,
+            )
+            argument_marker = "TOPIC" if command_name == "start" else "SESSION_ID"
+            if argument_marker not in command_help.stdout:
+                raise SmokeFailure(
+                    f"Installed research {command_name!r} help omits "
+                    f"{argument_marker}."
+                )
+        research_export_help = _run(
+            [str(base_cli), "research", "export", "--help"],
+            cwd=workspace,
+            environment=clean_environment,
+        )
+        for marker in ("--output", "--force", "--json"):
+            if marker not in research_export_help.stdout:
+                raise SmokeFailure(
+                    f"Installed research export help omits {marker!r}."
                 )
         _run(
             [
@@ -334,19 +390,16 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
                 "assistants",
                 "--client",
                 "both",
-                "--data-root",
-                str(data_root),
-                "--mcp-command",
-                str(base_mcp),
+                "--assets-only",
+                "--apply",
                 "--json",
             ],
             cwd=workspace,
             environment=setup_environment,
         )
-        if json.loads(setup.stdout).get("status") != "planned":
-            raise SmokeFailure("Installed assistant setup did not return a plan.")
-        if setup_home.exists():
-            raise SmokeFailure("Installed assistant setup dry-run wrote to HOME.")
+        if json.loads(setup.stdout).get("status") != "installed":
+            raise SmokeFailure("Installed assistant assets-only setup did not apply.")
+        _verify_cumulative_research_skill(setup_home)
 
         before_acquire = _snapshot_tree(data_root)
         acquisition = _run(
@@ -522,6 +575,8 @@ asyncio.run(check())
             "version": PACKAGE_VERSION,
             "minimal_mcp_exit": 2,
             "commands": list(commands),
+            "research_commands": list(research_commands),
+            "cumulative_research_skill": True,
             "tools": list(MCP_TOOLS),
             "verified_modules": verified_modules,
             "offline": offline,
