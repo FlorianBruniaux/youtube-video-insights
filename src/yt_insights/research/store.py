@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 from dataclasses import asdict, is_dataclass, replace
 from datetime import UTC, date, datetime
+import errno
+import fcntl
+import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import sqlite3
-from typing import Any, Callable, TypeVar
+import stat
+from typing import Any, Callable, Iterator, TypeVar
 
 from .models import (
     AcquisitionAttempt,
@@ -160,6 +166,61 @@ class ResearchStore:
                 self._validate_schema(connection)
         stat = self._path.stat()
         self._identity = (stat.st_dev, stat.st_ino)
+
+    @contextmanager
+    def acquisition_execution_lock(self, attempt_id: str) -> Iterator[bool]:
+        """Claim a process-owned, crash-safe lock for one acquisition attempt."""
+        if (
+            not isinstance(attempt_id, str)
+            or not attempt_id
+            or len(attempt_id.encode("utf-8")) > 1_024
+        ):
+            raise ValueError("attempt ID is invalid")
+        lock_directory = self._path.parent / ".research-acquisition-locks"
+        try:
+            lock_directory.mkdir(mode=0o700)
+        except FileExistsError:
+            pass
+        directory_stat = lock_directory.lstat()
+        if not stat.S_ISDIR(directory_stat.st_mode) or stat.S_ISLNK(
+            directory_stat.st_mode
+        ):
+            raise RuntimeError("acquisition lock directory is unsafe")
+
+        directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        directory_flags |= getattr(os, "O_CLOEXEC", 0)
+        directory_flags |= getattr(os, "O_NOFOLLOW", 0)
+        directory_fd = os.open(lock_directory, directory_flags)
+        lock_fd: int | None = None
+        claimed = False
+        try:
+            lock_name = hashlib.sha256(attempt_id.encode("utf-8")).hexdigest()
+            lock_flags = os.O_RDWR | os.O_CREAT
+            lock_flags |= getattr(os, "O_CLOEXEC", 0)
+            lock_flags |= getattr(os, "O_NOFOLLOW", 0)
+            lock_fd = os.open(
+                f"{lock_name}.lock",
+                lock_flags,
+                0o600,
+                dir_fd=directory_fd,
+            )
+            lock_stat = os.fstat(lock_fd)
+            if not stat.S_ISREG(lock_stat.st_mode):
+                raise RuntimeError("acquisition lock file is unsafe")
+            os.fchmod(lock_fd, 0o600)
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                claimed = True
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                    raise
+            yield claimed
+        finally:
+            if lock_fd is not None:
+                if claimed:
+                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                os.close(lock_fd)
+            os.close(directory_fd)
 
     def create_session(self, *, session_id: str, topic: str, queries: tuple[QuerySpec, ...], languages: tuple[str, ...], freshness_profile: FreshnessProfile, discovery_fingerprint: str) -> ResearchSession:
         def operation(connection: sqlite3.Connection) -> ResearchSession:
@@ -327,6 +388,13 @@ class ResearchStore:
                     raise ValueError("idempotency key payload differs")
                 return AcquisitionReservation(existing, False)
             session = self._expected(connection, session_id, expected_revision, {ResearchState.ACQUIRING})
+            running = connection.execute(
+                """SELECT attempt_id FROM research_acquisition_attempts
+                WHERE session_id = ? AND status = 'running' LIMIT 1""",
+                (session_id,),
+            ).fetchone()
+            if running is not None:
+                raise ValueError("another acquisition attempt is already running")
             now = self._timestamp()
             try:
                 connection.execute(
@@ -503,12 +571,77 @@ class ResearchStore:
             return result
         return self._write(operation)
 
+    def acquisition_attempt_for_retry(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+    ) -> AcquisitionAttempt | None:
+        """Return the attempt whose OS lock must be held before retry claiming."""
+        with self._connection() as connection:
+            decision = connection.execute(
+                "SELECT * FROM research_decisions WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if decision is not None:
+                if (
+                    decision["session_id"] != session_id
+                    or decision["expected_revision"] != expected_revision
+                    or decision["action"] != "retry"
+                ):
+                    raise ValueError("idempotency key payload differs")
+                stored = json.loads(decision["payload_json"])
+                if (
+                    not isinstance(stored, dict)
+                    or stored.get("request")
+                    != {"expected_revision": expected_revision}
+                ):
+                    raise ValueError("idempotency key payload differs")
+                if stored.get("result") is not None:
+                    return None
+                if stored.get("retry_target") != ResearchState.ACQUIRING.value:
+                    return None
+                session = self._session(connection, session_id)
+                if session.state not in {
+                    ResearchState.ACQUIRING,
+                    ResearchState.FAILED_RETRYABLE,
+                }:
+                    raise ValueError("retry reservation is not recoverable")
+            else:
+                session = self._expected(
+                    connection,
+                    session_id,
+                    expected_revision,
+                    {ResearchState.ACQUIRING, ResearchState.FAILED_RETRYABLE},
+                )
+            if (
+                session.state is ResearchState.FAILED_RETRYABLE
+                and session.retry_target is not ResearchState.ACQUIRING
+            ):
+                return None
+            status = (
+                "running"
+                if session.state is ResearchState.ACQUIRING
+                else "failed_retryable"
+            )
+            row = connection.execute(
+                """SELECT * FROM research_acquisition_attempts
+                WHERE session_id = ? AND status = ?
+                ORDER BY created_at DESC, attempt_id DESC LIMIT 1""",
+                (session_id, status),
+            ).fetchone()
+            if row is None:
+                raise ValueError("session has no recoverable acquisition attempt")
+            return self._attempt_from_row(row)
+
     def claim_retry(
         self,
         session_id: str,
         *,
         expected_revision: int,
         idempotency_key: str,
+        acquisition_attempt_id: str | None = None,
     ) -> RetryReservation:
         request = {"expected_revision": expected_revision}
 
@@ -519,43 +652,65 @@ class ResearchStore:
             ).fetchone()
             if row is not None:
                 return self._retry_reservation_from_row(
+                    connection,
                     row,
                     session_id=session_id,
                     expected_revision=expected_revision,
                     request=request,
+                    acquisition_attempt_id=acquisition_attempt_id,
                 )
 
             session = self._expected(
                 connection,
                 session_id,
                 expected_revision,
-                {ResearchState.FAILED_RETRYABLE},
+                (
+                    {ResearchState.FAILED_RETRYABLE, ResearchState.ACQUIRING}
+                    if acquisition_attempt_id is not None
+                    else {ResearchState.FAILED_RETRYABLE}
+                ),
             )
-            target = session.retry_target
+            target = (
+                ResearchState.ACQUIRING
+                if session.state is ResearchState.ACQUIRING
+                else session.retry_target
+            )
             if target not in set(_FAILURE_RETRY_TARGETS.values()):
                 raise ValueError("failed session has no retry target")
 
             attempt: AcquisitionAttempt | None = None
             if target is ResearchState.ACQUIRING:
+                expected_status = (
+                    "running"
+                    if session.state is ResearchState.ACQUIRING
+                    else "failed_retryable"
+                )
                 row = connection.execute(
                     """SELECT * FROM research_acquisition_attempts
-                    WHERE session_id = ? AND status = 'failed_retryable'
+                    WHERE session_id = ? AND status = ?
                     ORDER BY created_at DESC, attempt_id DESC LIMIT 1""",
-                    (session_id,),
+                    (session_id, expected_status),
                 ).fetchone()
                 if row is None:
                     raise ValueError("failed acquisition has no reclaimable attempt")
                 attempt = self._attempt_from_row(row)
-                now = self._timestamp()
-                connection.execute(
-                    "UPDATE research_acquisition_attempts SET status = 'running', updated_at = ? WHERE attempt_id = ?",
-                    (now, attempt.attempt_id),
-                )
-                attempt = replace(
-                    attempt,
-                    status="running",
-                    updated_at=_datetime(now),
-                )
+                if (
+                    acquisition_attempt_id is not None
+                    and attempt.attempt_id != acquisition_attempt_id
+                ):
+                    raise ValueError("retry acquisition attempt differs")
+                if attempt.status == "failed_retryable":
+                    now = self._timestamp()
+                    connection.execute(
+                        """UPDATE research_acquisition_attempts
+                        SET status = 'running', updated_at = ? WHERE attempt_id = ?""",
+                        (now, attempt.attempt_id),
+                    )
+                    attempt = replace(
+                        attempt,
+                        status="running",
+                        updated_at=_datetime(now),
+                    )
 
             resumed = self._transition(
                 connection,
@@ -951,11 +1106,13 @@ class ResearchStore:
 
     def _retry_reservation_from_row(
         self,
+        connection: sqlite3.Connection,
         row: sqlite3.Row,
         *,
         session_id: str,
         expected_revision: int,
         request: dict[str, int],
+        acquisition_attempt_id: str | None,
     ) -> RetryReservation:
         if (
             row["session_id"] != session_id
@@ -967,18 +1124,80 @@ class ResearchStore:
         if not isinstance(stored, dict) or stored.get("request") != request:
             raise ValueError("idempotency key payload differs")
         target_value = stored.get("retry_target")
-        snapshot = stored.get("result") or stored.get("claim")
+        result_payload = stored.get("result")
+        snapshot = result_payload or stored.get("claim")
         if not isinstance(target_value, str) or not isinstance(snapshot, dict):
             raise ValueError("stored retry result is invalid")
         error_code = stored.get("error_code")
         if error_code is not None and not _is_error_code(error_code):
             raise ValueError("stored retry result is invalid")
+        if (
+            result_payload is None
+            and acquisition_attempt_id is not None
+            and target_value == ResearchState.ACQUIRING.value
+        ):
+            attempt_row = connection.execute(
+                """SELECT * FROM research_acquisition_attempts
+                WHERE attempt_id = ? AND session_id = ?
+                AND status IN ('running', 'failed_retryable')""",
+                (acquisition_attempt_id, session_id),
+            ).fetchone()
+            if attempt_row is None:
+                raise ValueError("retry acquisition attempt differs")
+            attempt = self._attempt_from_row(attempt_row)
+            session = self._session(connection, session_id)
+            if attempt.status == "failed_retryable":
+                if (
+                    session.state is not ResearchState.FAILED_RETRYABLE
+                    or session.retry_target is not ResearchState.ACQUIRING
+                ):
+                    raise ValueError("retry reservation is not recoverable")
+                now = self._timestamp()
+                connection.execute(
+                    """UPDATE research_acquisition_attempts
+                    SET status = 'running', updated_at = ? WHERE attempt_id = ?""",
+                    (now, attempt.attempt_id),
+                )
+                attempt = replace(
+                    attempt,
+                    status="running",
+                    updated_at=_datetime(now),
+                )
+                session = self._transition(
+                    connection,
+                    session,
+                    ResearchState.ACQUIRING,
+                    "retry_reclaimed",
+                    request,
+                    retry_target=None,
+                )
+                stored["claim"] = _session_payload(session)
+                stored["error_code"] = None
+                connection.execute(
+                    """UPDATE research_decisions SET payload_json = ?
+                    WHERE idempotency_key = ?""",
+                    (_canonical_json(stored), row["idempotency_key"]),
+                )
+            elif session.state is not ResearchState.ACQUIRING:
+                raise ValueError("retry reservation is not recoverable")
+            return RetryReservation(
+                session,
+                ResearchState.ACQUIRING,
+                True,
+                attempt,
+                None,
+            )
         return RetryReservation(
             _session_from_payload(snapshot),
             ResearchState(target_value),
             False,
             None,
-            error_code,
+            (
+                "acquisition_in_progress"
+                if result_payload is None
+                and target_value == ResearchState.ACQUIRING.value
+                else error_code
+            ),
         )
 
     def _attempt_from_row(self, row: sqlite3.Row) -> AcquisitionAttempt:

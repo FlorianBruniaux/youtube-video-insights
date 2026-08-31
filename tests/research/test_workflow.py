@@ -697,6 +697,7 @@ def test_concurrent_same_key_acquire_replay_never_claims_network_twice(tmp_path)
     assert len(acquisition.calls) == 1
     assert len(replayed) == 1
     assert replayed[0].session.state is ResearchState.ACQUIRING
+    assert replayed[0].error_code == "acquisition_in_progress"
     assert completed.session.state is ResearchState.AWAITING_SUFFICIENCY
 
 
@@ -909,3 +910,94 @@ def test_acquisition_retry_reuses_persisted_inputs_and_preserves_successful_outc
             expected_revision=retried.session.revision,
             idempotency_key="retry-key",
         )
+
+
+def test_released_attempt_lock_recovers_a_crashed_acquisition_without_duplicates(
+    tmp_path,
+) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+
+    class CrashOnceAcquisition:
+        def __init__(self) -> None:
+            self.calls: list[tuple[tuple[str, ...], str, str | None]] = []
+
+        def acquire_approved(
+            self,
+            candidates: tuple[ResearchCandidate, ...],
+            *,
+            data_paths: DataPaths,
+            language: str,
+            cookies_from_browser: str | None = None,
+        ) -> tuple[CandidateAcquisitionOutcome, ...]:
+            video_ids = tuple(candidate.video_id for candidate in candidates)
+            self.calls.append((video_ids, language, cookies_from_browser))
+            if len(self.calls) == 1:
+                raise SystemExit("simulated process crash")
+            return (
+                CandidateAcquisitionOutcome(
+                    video_ids[0],
+                    CandidateStatus.ACQUIRED,
+                    None,
+                    "b" * 64,
+                ),
+            )
+
+    acquisition = CrashOnceAcquisition()
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: None,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+
+    with pytest.raises(SystemExit, match="simulated process crash"):
+        workflow.acquire(
+            SESSION_ID,
+            expected_revision=4,
+            idempotency_key="acquire-key",
+            language="en",
+            cookies_from_browser="firefox:research",
+        )
+
+    history = workflow._store.get_session_history(SESSION_ID)  # type: ignore[attr-defined]
+    attempt = history.acquisition_attempts[0]
+    assert attempt.status == "running"
+    assert history.acquisition_outcomes == ()
+
+    with workflow._store.acquisition_execution_lock(attempt.attempt_id) as claimed:  # type: ignore[attr-defined]
+        assert claimed is True
+        acquire_replay = workflow.acquire(
+            SESSION_ID,
+            expected_revision=4,
+            idempotency_key="acquire-key",
+            language="en",
+            cookies_from_browser="firefox:research",
+        )
+        retry_while_active = workflow.retry(
+            SESSION_ID,
+            expected_revision=4,
+            idempotency_key="retry-key",
+        )
+
+    recovered = workflow.retry(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="retry-key",
+    )
+
+    assert acquire_replay.error_code == "acquisition_in_progress"
+    assert retry_while_active.error_code == "acquisition_in_progress"
+    assert recovered.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert acquisition.calls == [
+        ((candidate.video_id,), "en", "firefox:research"),
+        ((candidate.video_id,), "en", "firefox:research"),
+    ]

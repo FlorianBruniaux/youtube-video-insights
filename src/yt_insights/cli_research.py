@@ -86,6 +86,13 @@ def _emit(
             message="Approved source acquisition failed. Retry from the persisted session state.",
         )
         return
+    if payload["error_code"] == "acquisition_in_progress":
+        _error(
+            as_json=as_json,
+            code="acquisition_in_progress",
+            message="This acquisition is already running. Retry after it finishes or exits.",
+        )
+        return
     if payload["error_code"] == "index_refresh_failed":
         _error(
             as_json=as_json,
@@ -432,7 +439,7 @@ def retry_command(
     idempotency_key: str,
     as_json: bool,
 ) -> None:
-    """Resume only the retry target recorded by the failed session."""
+    """Resume a failed stage or a lock-free orphaned acquisition."""
     try:
         expected_revision = _revision(revision)
         if not idempotency_key:

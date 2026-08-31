@@ -25,6 +25,7 @@ from .models import (
     ResearchCandidate,
     ResearchSession,
     ResearchState,
+    RetryReservation,
     discovery_fingerprint,
     normalize_research_text,
 )
@@ -348,10 +349,15 @@ class ResearchWorkflow:
         )
         if not reservation.claimed:
             return self._acquisition_replay(reservation.attempt)
-        return self._continue_acquisition(
-            reservation.attempt,
-            session=self._store.get_session(session_id),
-        )
+        with self._store.acquisition_execution_lock(
+            reservation.attempt.attempt_id
+        ) as claimed:
+            if not claimed:
+                return self._acquisition_in_progress(reservation.attempt)
+            return self._continue_acquisition(
+                reservation.attempt,
+                session=self._store.get_session(session_id),
+            )
 
     def retry(
         self,
@@ -360,15 +366,39 @@ class ResearchWorkflow:
         expected_revision: int,
         idempotency_key: str,
     ) -> ResearchResponse:
-        """Resume only the retry target recorded on the failed session."""
+        """Resume a failed stage or a lock-free orphaned acquisition."""
         if not isinstance(idempotency_key, str) or not idempotency_key:
             raise ValueError("idempotency key is required")
+        attempt = self._store.acquisition_attempt_for_retry(
+            session_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+        if attempt is not None:
+            with self._store.acquisition_execution_lock(attempt.attempt_id) as claimed:
+                if not claimed:
+                    return self._acquisition_in_progress(attempt)
+                reservation = self._store.claim_retry(
+                    session_id,
+                    expected_revision=expected_revision,
+                    idempotency_key=idempotency_key,
+                    acquisition_attempt_id=attempt.attempt_id,
+                )
+                return self._resume_retry(reservation, idempotency_key)
         reservation = self._store.claim_retry(
             session_id,
             expected_revision=expected_revision,
             idempotency_key=idempotency_key,
         )
+        return self._resume_retry(reservation, idempotency_key)
+
+    def _resume_retry(
+        self,
+        reservation: RetryReservation,
+        idempotency_key: str,
+    ) -> ResearchResponse:
         if not reservation.claimed:
+            session_id = reservation.session.session_id
             return ResearchResponse(
                 reservation.session,
                 self._store.get_latest_assessment(session_id),
@@ -414,13 +444,27 @@ class ResearchWorkflow:
             if attempt.status == "failed_retryable"
             and session.state is ResearchState.FAILED_RETRYABLE
             and session.retry_target is ResearchState.ACQUIRING
-            else None
+            else (
+                "acquisition_in_progress" if attempt.status == "running" else None
+            )
         )
         return ResearchResponse(
             session,
             self._store.get_latest_assessment(attempt.session_id),
             self._store.list_candidates(attempt.session_id) or None,
             error_code,
+        )
+
+    def _acquisition_in_progress(
+        self,
+        attempt: AcquisitionAttempt,
+    ) -> ResearchResponse:
+        session = self._store.get_session(attempt.session_id)
+        return ResearchResponse(
+            session,
+            self._store.get_latest_assessment(attempt.session_id),
+            self._store.list_candidates(attempt.session_id) or None,
+            "acquisition_in_progress",
         )
 
     def _continue_acquisition(

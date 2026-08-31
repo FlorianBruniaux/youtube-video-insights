@@ -423,6 +423,70 @@ def test_failed_acquisition_is_reclaimed_only_by_durable_retry_and_keeps_progres
         )
 
 
+def test_distinct_key_cannot_reserve_a_second_running_attempt(tmp_path: object) -> None:
+    store = _store(tmp_path)
+    _create(store)
+    store.record_assessment(
+        SESSION_ID,
+        expected_revision=0,
+        assessment=_assessment(),
+    )
+    store.decide_sufficiency(
+        SESSION_ID,
+        expected_revision=1,
+        sufficient=False,
+        idempotency_key="refresh",
+    )
+    store.record_candidates(
+        SESSION_ID,
+        expected_revision=2,
+        candidates=(_candidate(),),
+        provider_name="provider",
+        provider_version=1,
+        errors=(),
+    )
+    store.approve_candidates(
+        SESSION_ID,
+        expected_revision=3,
+        video_ids=(VIDEO_ID,),
+        idempotency_key="approve",
+    )
+    store.start_acquisition_attempt(
+        SESSION_ID,
+        expected_revision=4,
+        video_ids=(VIDEO_ID,),
+        idempotency_key="first-key",
+        attempt_id="attempt-1",
+    )
+
+    with pytest.raises(ValueError, match="already running"):
+        store.start_acquisition_attempt(
+            SESSION_ID,
+            expected_revision=4,
+            video_ids=(VIDEO_ID,),
+            idempotency_key="second-key",
+            attempt_id="attempt-2",
+        )
+
+    attempts = store.get_session_history(SESSION_ID).acquisition_attempts
+    assert tuple(attempt.attempt_id for attempt in attempts) == ("attempt-1",)
+
+
+def test_attempt_execution_lock_is_exclusive_and_released_automatically(
+    tmp_path: object,
+) -> None:
+    store = _store(tmp_path)
+    contender = ResearchStore(tmp_path / "research.sqlite3")  # type: ignore[operator]
+
+    with store.acquisition_execution_lock("attempt-1") as first_claimed:
+        with contender.acquisition_execution_lock("attempt-1") as second_claimed:
+            assert first_claimed is True
+            assert second_claimed is False
+
+    with contender.acquisition_execution_lock("attempt-1") as recovered:
+        assert recovered is True
+
+
 def test_approve_candidates_rejects_more_than_five_ids(tmp_path: object) -> None:
     """Approving six discoveries must fail before acquisition can start."""
     store = _store(tmp_path)
