@@ -283,6 +283,78 @@ class ResearchStore:
             return self._transition(connection, session, ResearchState.AWAITING_SUFFICIENCY, "assessment_recorded", {}, required_action=RequiredUserAction.CONFIRM_SUFFICIENCY_OR_REFRESH)
         return self._write(operation)
 
+    def record_partial_acquisition_assessment(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        attempt_id: str,
+        assessment: ResearchAssessment,
+    ) -> ResearchSession:
+        """Persist reassessment and make only the failed items retryable atomically."""
+
+        def operation(connection: sqlite3.Connection) -> ResearchSession:
+            session = self._expected(
+                connection,
+                session_id,
+                expected_revision,
+                {ResearchState.ASSESSING},
+            )
+            attempt_row = connection.execute(
+                "SELECT * FROM research_acquisition_attempts WHERE attempt_id = ?",
+                (attempt_id,),
+            ).fetchone()
+            if attempt_row is None:
+                raise ValueError("acquisition attempt does not exist")
+            attempt = self._attempt_from_row(attempt_row)
+            if attempt.session_id != session_id or attempt.status != "completed":
+                raise ValueError("acquisition attempt is not ready for partial retry")
+            statuses = {
+                row[0]: CandidateStatus(row[1])
+                for row in connection.execute(
+                    "SELECT video_id, status FROM research_acquisition_outcomes WHERE attempt_id = ?",
+                    (attempt_id,),
+                )
+            }
+            if set(statuses) != set(attempt.video_ids):
+                raise ValueError("acquisition outcomes are incomplete")
+            if not any(
+                status is CandidateStatus.FAILED_RETRYABLE
+                for status in statuses.values()
+            ) or not any(
+                status in {CandidateStatus.ACQUIRED, CandidateStatus.ALREADY_PRESENT}
+                for status in statuses.values()
+            ):
+                raise ValueError("acquisition attempt is not partially retryable")
+            next_revision = session.revision + 1
+            connection.execute(
+                "INSERT INTO research_assessments(session_id, session_revision, payload_json, created_at) VALUES (?, ?, ?, ?)",
+                (
+                    session_id,
+                    next_revision,
+                    _canonical_json(assessment),
+                    _iso(assessment.created_at),
+                ),
+            )
+            connection.execute(
+                "UPDATE research_acquisition_attempts SET status = 'failed_retryable', updated_at = ? WHERE attempt_id = ?",
+                (self._timestamp(), attempt_id),
+            )
+            return self._transition(
+                connection,
+                session,
+                ResearchState.FAILED_RETRYABLE,
+                "partial_acquisition_failed",
+                {
+                    "attempt_id": attempt_id,
+                    "error_code": "partial_acquisition_failed",
+                    "retry_target": ResearchState.ACQUIRING.value,
+                },
+                retry_target=ResearchState.ACQUIRING,
+            )
+
+        return self._write(operation)
+
     def get_latest_assessment(self, session_id: str) -> ResearchAssessment | None:
         with self._connection() as connection:
             self._session(connection, session_id)
@@ -1251,6 +1323,53 @@ class ResearchStore:
                     True,
                     None,
                     None,
+                    finalize_only=True,
+                )
+            if (
+                target is ResearchState.ACQUIRING
+                and session.state is ResearchState.FAILED_RETRYABLE
+                and session.retry_target is ResearchState.ACQUIRING
+                and acquisition_attempt_id is not None
+            ):
+                attempt_row = connection.execute(
+                    """SELECT * FROM research_acquisition_attempts
+                    WHERE attempt_id = ? AND session_id = ?
+                    AND status = 'failed_retryable'""",
+                    (acquisition_attempt_id, session_id),
+                ).fetchone()
+                if attempt_row is None:
+                    raise ValueError("retry acquisition attempt differs")
+                attempt = self._attempt_from_row(attempt_row)
+                statuses = tuple(
+                    CandidateStatus(item[0])
+                    for item in connection.execute(
+                        "SELECT status FROM research_acquisition_outcomes WHERE attempt_id = ?",
+                        (attempt.attempt_id,),
+                    )
+                )
+                if not statuses or not any(
+                    status is CandidateStatus.FAILED_RETRYABLE
+                    for status in statuses
+                ):
+                    raise ValueError("retry acquisition result is incomplete")
+                error_code = (
+                    "partial_acquisition_failed"
+                    if any(
+                        status
+                        in {
+                            CandidateStatus.ACQUIRED,
+                            CandidateStatus.ALREADY_PRESENT,
+                        }
+                        for status in statuses
+                    )
+                    else "acquisition_unavailable"
+                )
+                return RetryReservation(
+                    session,
+                    target,
+                    True,
+                    attempt,
+                    error_code,
                     finalize_only=True,
                 )
         if (

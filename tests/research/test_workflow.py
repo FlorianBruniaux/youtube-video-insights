@@ -24,7 +24,11 @@ from yt_insights.research.models import (
     VideoEvidence,
 )
 from yt_insights.research.store import ResearchStore
-from yt_insights.research.workflow import ResearchResponse, ResearchWorkflow
+from yt_insights.research.workflow import (
+    PublicAcquisitionAttempt,
+    ResearchResponse,
+    ResearchWorkflow,
+)
 
 NOW = datetime(2026, 8, 31, 12, tzinfo=UTC)
 SESSION_ID = "01K4RESEARCH0000000000000000"
@@ -989,7 +993,7 @@ def test_acquisition_retry_reuses_persisted_inputs_when_batch_has_no_progress(
         )
 
 
-def test_mixed_acquisition_persists_every_outcome_and_reindexes_once(tmp_path) -> None:
+def test_mixed_acquisition_persists_every_outcome_and_remains_retryable(tmp_path) -> None:
     first = _candidate(video_id="zyx987WVUT0")
     second = _candidate(video_id="zyx987WVUT1")
     third = _candidate(video_id="zyx987WVUT2")
@@ -1051,16 +1055,276 @@ def test_mixed_acquisition_persists_every_outcome_and_reindexes_once(tmp_path) -
 
     assert acquisition.calls == [first.video_id, second.video_id, third.video_id]
     assert len(refresh_calls) == 1
-    assert response.session.state is ResearchState.AWAITING_SUFFICIENCY
-    assert response.required_user_action == "confirm_sufficiency_or_refresh"
-    assert response.error_code is None
+    assert response.session.state is ResearchState.FAILED_RETRYABLE
+    assert response.session.retry_target is ResearchState.ACQUIRING
+    assert response.required_user_action is None
+    assert response.error_code == "partial_acquisition_failed"
     history = workflow._store.get_session_history(SESSION_ID)  # type: ignore[attr-defined]
-    assert history.acquisition_attempts[0].status == "completed"
+    assert history.acquisition_attempts[0].status == "failed_retryable"
     assert [outcome.status for outcome in history.acquisition_outcomes] == [
         CandidateStatus.ACQUIRED,
         CandidateStatus.FAILED_RETRYABLE,
         CandidateStatus.ALREADY_PRESENT,
     ]
+
+
+def test_partial_acquisition_retries_only_failed_videos_after_reassessment(tmp_path) -> None:
+    first = _candidate(video_id="zyx987WVUT0")
+    second = _candidate(video_id="zyx987WVUT1")
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (first, second), (), True)
+    )
+
+    class PartialThenSuccessfulAcquisition:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+            self.second_failed = False
+
+        def acquire_approved(
+            self,
+            candidates: tuple[ResearchCandidate, ...],
+            *,
+            data_paths: DataPaths,
+            language: str,
+            cookies_from_browser: str | None = None,
+        ) -> tuple[CandidateAcquisitionOutcome, ...]:
+            video_id = candidates[0].video_id
+            self.calls.append(video_id)
+            if video_id == second.video_id and not self.second_failed:
+                self.second_failed = True
+                raise LookupError("private transient failure")
+            return (
+                CandidateAcquisitionOutcome(
+                    video_id,
+                    CandidateStatus.ACQUIRED,
+                    None,
+                    ("b" if video_id == first.video_id else "c") * 64,
+                ),
+            )
+
+    acquisition = PartialThenSuccessfulAcquisition()
+    refresh_calls: list[DataPaths] = []
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: refresh_calls.append(paths),
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(first.video_id, second.video_id),
+    )
+
+    partial = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="partial-acquire-key",
+        language="en",
+    )
+
+    assert partial.session.state is ResearchState.FAILED_RETRYABLE
+    assert partial.session.retry_target is ResearchState.ACQUIRING
+    assert partial.error_code == "partial_acquisition_failed"
+    assert acquisition.calls == [first.video_id, second.video_id]
+    assert len(refresh_calls) == 1
+    assert len(workflow._store.get_session_history(SESSION_ID).assessments) == 2  # type: ignore[attr-defined]
+
+    retried = workflow.retry(
+        SESSION_ID,
+        expected_revision=partial.session.revision,
+        idempotency_key="partial-retry-key",
+    )
+
+    assert retried.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert retried.required_user_action == "confirm_sufficiency_or_refresh"
+    assert acquisition.calls == [first.video_id, second.video_id, second.video_id]
+    assert len(refresh_calls) == 2
+    history = workflow._store.get_session_history(SESSION_ID)  # type: ignore[attr-defined]
+    assert [(item.video_id, item.status, item.source_sha256) for item in history.acquisition_outcomes] == [
+        (first.video_id, CandidateStatus.ACQUIRED, "b" * 64),
+        (second.video_id, CandidateStatus.ACQUIRED, "c" * 64),
+    ]
+
+    replayed = workflow.retry(
+        SESSION_ID,
+        expected_revision=partial.session.revision,
+        idempotency_key="partial-retry-key",
+    )
+    assert replayed.to_dict() == retried.to_dict()
+    assert acquisition.calls == [first.video_id, second.video_id, second.video_id]
+    assert len(refresh_calls) == 2
+
+
+def test_partial_retry_finalizes_after_failure_without_reacquiring(tmp_path) -> None:
+    first = _candidate(video_id="zyx987WVUT0")
+    second = _candidate(video_id="zyx987WVUT1")
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (first, second), (), True)
+    )
+
+    class AlwaysPartialAcquisition:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def acquire_approved(
+            self,
+            candidates: tuple[ResearchCandidate, ...],
+            *,
+            data_paths: DataPaths,
+            language: str,
+            cookies_from_browser: str | None = None,
+        ) -> tuple[CandidateAcquisitionOutcome, ...]:
+            video_id = candidates[0].video_id
+            self.calls.append(video_id)
+            if video_id == second.video_id:
+                raise LookupError("private persistent failure")
+            return (
+                CandidateAcquisitionOutcome(
+                    video_id,
+                    CandidateStatus.ACQUIRED,
+                    None,
+                    "b" * 64,
+                ),
+            )
+
+    acquisition = AlwaysPartialAcquisition()
+    refresh_calls: list[DataPaths] = []
+    store = CrashBeforeCompleteRetryStore(
+        tmp_path / "research.sqlite3",
+        now=lambda: NOW,
+    )
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        store=store,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: refresh_calls.append(paths),
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(first.video_id, second.video_id),
+    )
+    partial = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="partial-acquire-key",
+        language="en",
+    )
+    store.crash_before_complete_retry = True
+
+    with pytest.raises(SystemExit, match="before retry finalization"):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=partial.session.revision,
+            idempotency_key="partial-retry-key",
+        )
+    calls_before_replay = tuple(acquisition.calls)
+    refreshes_before_replay = len(refresh_calls)
+    terminal = workflow.status(SESSION_ID)
+    replayed = workflow.retry(
+        SESSION_ID,
+        expected_revision=partial.session.revision,
+        idempotency_key="partial-retry-key",
+    )
+
+    assert terminal.session.state is ResearchState.FAILED_RETRYABLE
+    assert terminal.session.retry_target is ResearchState.ACQUIRING
+    assert replayed.session == terminal.session
+    assert replayed.error_code == "partial_acquisition_failed"
+    assert tuple(acquisition.calls) == calls_before_replay
+    assert len(refresh_calls) == refreshes_before_replay
+
+
+def test_status_exposes_safe_acquisition_history_grouped_by_attempt(tmp_path) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                candidate.video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: None,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+    workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="SECRET-IDEMPOTENCY-CANARY",
+        language="en",
+        cookies_from_browser="firefox:SECRET-PROFILE-CANARY",
+    )
+
+    response = workflow.status(SESSION_ID)
+    payload = response.to_dict()
+
+    attempts = payload["acquisition_history"]
+    assert isinstance(attempts, list) and len(attempts) == 1
+    assert attempts[0]["attempt_id"].startswith("acq-")
+    assert attempts[0]["status"] == "completed"
+    assert attempts[0]["items"] == [
+        {
+            "video_id": candidate.video_id,
+            "status": "acquired",
+            "error_code": None,
+            "source_sha256": "b" * 64,
+        }
+    ]
+    serialized = json.dumps(payload, sort_keys=True)
+    assert "SECRET-IDEMPOTENCY-CANARY" not in serialized
+    assert "SECRET-PROFILE-CANARY" not in serialized
+    assert "SECRET-IDEMPOTENCY-CANARY" not in repr(response)
+    assert "SECRET-PROFILE-CANARY" not in repr(response)
+
+
+def test_public_acquisition_history_is_bounded_and_reports_truncation(tmp_path) -> None:
+    workflow = _workflow(tmp_path, FakeEvidenceReader())
+    started = workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    attempts = tuple(
+        PublicAcquisitionAttempt(
+            f"attempt-{index:03d}",
+            "completed",
+            (),
+        )
+        for index in range(101)
+    )
+    response = ResearchResponse(
+        started.session,
+        started.assessment,
+        None,
+        acquisition_history=attempts,
+    )
+
+    payload = response.to_dict()
+
+    assert len(payload["acquisition_history"]) == 100
+    assert payload["acquisition_history"][0]["attempt_id"] == "attempt-001"
+    assert payload["acquisition_history"][-1]["attempt_id"] == "attempt-100"
+    assert payload["acquisition_history_truncated"] is True
 
 
 def test_unexpected_index_database_error_is_bounded_and_retryable(tmp_path) -> None:

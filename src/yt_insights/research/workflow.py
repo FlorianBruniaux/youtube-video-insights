@@ -27,6 +27,7 @@ from .models import (
     ResearchSession,
     ResearchState,
     RetryReservation,
+    SessionHistory,
     discovery_fingerprint,
     normalize_research_text,
 )
@@ -35,6 +36,26 @@ from .store import ResearchStore
 _SCHEMA_VERSION = 1
 _DISCOVERY_PROVIDER_NAME = "yt-dlp"
 _DISCOVERY_PROVIDER_VERSION = 1
+_MAX_PUBLIC_ACQUISITION_ATTEMPTS = 100
+
+
+@dataclass(frozen=True, slots=True)
+class PublicAcquisitionItem:
+    """Secret-free projection of one stored acquisition outcome."""
+
+    video_id: str
+    status: CandidateStatus
+    error_code: str | None
+    source_sha256: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class PublicAcquisitionAttempt:
+    """Secret-free projection of one stored acquisition attempt."""
+
+    attempt_id: str
+    status: str
+    items: tuple[PublicAcquisitionItem, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,6 +66,19 @@ class ResearchResponse:
     assessment: ResearchAssessment | None
     candidates: tuple[ResearchCandidate, ...] | None
     error_code: str | None = None
+    acquisition_history: tuple[PublicAcquisitionAttempt, ...] = ()
+    acquisition_history_truncated: bool = False
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.acquisition_history, tuple):
+            raise TypeError("acquisition history must be a tuple")
+        if len(self.acquisition_history) > _MAX_PUBLIC_ACQUISITION_ATTEMPTS:
+            object.__setattr__(
+                self,
+                "acquisition_history",
+                self.acquisition_history[-_MAX_PUBLIC_ACQUISITION_ATTEMPTS:],
+            )
+            object.__setattr__(self, "acquisition_history_truncated", True)
 
     @property
     def required_user_action(self) -> str | None:
@@ -64,6 +98,10 @@ class ResearchResponse:
             else [_candidate_payload(candidate) for candidate in self.candidates],
             "required_user_action": self.required_user_action,
             "error_code": self.error_code,
+            "acquisition_history": _acquisition_history_payload(
+                self.acquisition_history
+            ),
+            "acquisition_history_truncated": self.acquisition_history_truncated,
         }
 
 
@@ -90,6 +128,22 @@ class ResearchWorkflow:
         self._index_refresher = index_refresher
         self._now = now
         self._session_id_factory = session_id_factory
+
+    def _response(
+        self,
+        session: ResearchSession,
+        assessment: ResearchAssessment | None,
+        candidates: tuple[ResearchCandidate, ...] | None,
+        error_code: str | None = None,
+    ) -> ResearchResponse:
+        history = self._store.get_session_history(session.session_id)
+        return ResearchResponse(
+            session,
+            assessment,
+            candidates,
+            error_code,
+            _public_acquisition_history(history),
+        )
 
     def start(
         self,
@@ -139,21 +193,21 @@ class ResearchWorkflow:
                 retry_target=ResearchState.ASSESSING,
                 error_code="local_index_unavailable",
             )
-            return ResearchResponse(failed, None, None, "local_index_unavailable")
+            return self._response(failed, None, None, "local_index_unavailable")
 
         stored = self._store.record_assessment(
             session.session_id,
             expected_revision=session.revision,
             assessment=assessment,
         )
-        return ResearchResponse(stored, assessment, None)
+        return self._response(stored, assessment, None)
 
     def status(self, session_id: str) -> ResearchResponse:
         """Load a durable session and its latest bounded evidence snapshots."""
         session = self._store.get_session(session_id)
         assessment = self._store.get_latest_assessment(session_id)
         candidates = self._store.list_candidates(session_id)
-        return ResearchResponse(session, assessment, candidates or None)
+        return self._response(session, assessment, candidates or None)
 
     def export(
         self,
@@ -187,7 +241,7 @@ class ResearchWorkflow:
         )
         assessment = self._store.get_latest_assessment(session_id)
         candidates = self._store.list_candidates(session_id)
-        return ResearchResponse(
+        return self._response(
             session,
             assessment,
             candidates or None,
@@ -221,7 +275,7 @@ class ResearchWorkflow:
             provider_version=result.provider_version,
             errors=result.errors,
         )
-        return ResearchResponse(
+        return self._response(
             stored,
             self._store.get_latest_assessment(session_id),
             self._store.list_candidates(session_id),
@@ -246,7 +300,7 @@ class ResearchWorkflow:
             video_ids=video_ids,
             idempotency_key=idempotency_key,
         )
-        return ResearchResponse(
+        return self._response(
             session,
             self._store.get_latest_assessment(session_id),
             self._store.list_candidates(session_id) or None,
@@ -271,7 +325,7 @@ class ResearchWorkflow:
             expected_revision=expected_revision,
             idempotency_key=idempotency_key,
         )
-        return ResearchResponse(
+        return self._response(
             session,
             self._store.get_latest_assessment(session_id),
             self._store.list_candidates(session_id) or None,
@@ -423,7 +477,7 @@ class ResearchWorkflow:
     ) -> ResearchResponse:
         session_id = reservation.session.session_id
         if not reservation.claimed:
-            return ResearchResponse(
+            return self._response(
                 reservation.session,
                 self._store.get_latest_assessment(session_id),
                 self._store.list_candidates(session_id) or None,
@@ -431,17 +485,28 @@ class ResearchWorkflow:
             )
 
         if reservation.finalize_only:
-            response = ResearchResponse(
+            response = self._response(
                 reservation.session,
                 self._store.get_latest_assessment(session_id),
                 self._store.list_candidates(session_id) or None,
+                reservation.error_code,
             )
         else:
             target = reservation.retry_target
+            partial_attempt_id = self._partial_attempt_id(
+                reservation.acquisition_attempt
+            )
             if target is ResearchState.REINDEXING:
-                response = self._finish_reindexing(reservation.session, refresh=True)
+                response = self._finish_reindexing(
+                    reservation.session,
+                    refresh=True,
+                    partial_attempt_id=partial_attempt_id,
+                )
             elif target is ResearchState.ASSESSING:
-                response = self._assess_session(reservation.session)
+                response = self._assess_session(
+                    reservation.session,
+                    partial_attempt_id=partial_attempt_id,
+                )
             elif target is ResearchState.DISCOVERING:
                 response = self.discover(
                     session_id,
@@ -470,8 +535,13 @@ class ResearchWorkflow:
         attempt: AcquisitionAttempt,
     ) -> ResearchResponse:
         session = self._store.get_session(attempt.session_id)
+        partial_failure = self._partial_attempt_id(attempt) is not None
         error_code = (
-            "acquisition_unavailable"
+            (
+                "partial_acquisition_failed"
+                if partial_failure
+                else "acquisition_unavailable"
+            )
             if attempt.status == "failed_retryable"
             and session.state is ResearchState.FAILED_RETRYABLE
             and session.retry_target is ResearchState.ACQUIRING
@@ -479,7 +549,7 @@ class ResearchWorkflow:
                 "acquisition_in_progress" if attempt.status == "running" else None
             )
         )
-        return ResearchResponse(
+        return self._response(
             session,
             self._store.get_latest_assessment(attempt.session_id),
             self._store.list_candidates(attempt.session_id) or None,
@@ -491,7 +561,7 @@ class ResearchWorkflow:
         attempt: AcquisitionAttempt,
     ) -> ResearchResponse:
         session = self._store.get_session(attempt.session_id)
-        return ResearchResponse(
+        return self._response(
             session,
             self._store.get_latest_assessment(attempt.session_id),
             self._store.list_candidates(attempt.session_id) or None,
@@ -500,7 +570,7 @@ class ResearchWorkflow:
 
     def _retry_in_progress(self, session_id: str) -> ResearchResponse:
         session = self._store.get_session(session_id)
-        return ResearchResponse(
+        return self._response(
             session,
             self._store.get_latest_assessment(session_id),
             self._store.list_candidates(session_id) or None,
@@ -595,12 +665,13 @@ class ResearchWorkflow:
             in {CandidateStatus.ACQUIRED, CandidateStatus.ALREADY_PRESENT}
             for outcome in outcomes
         )
+        has_retryable_failure = any(
+            outcome.status is CandidateStatus.FAILED_RETRYABLE
+            for outcome in outcomes
+        )
         if (
             not should_refresh
-            and any(
-                outcome.status is CandidateStatus.FAILED_RETRYABLE
-                for outcome in outcomes
-            )
+            and has_retryable_failure
         ):
             return self._fail_acquisition(session, attempt)
 
@@ -609,7 +680,13 @@ class ResearchWorkflow:
             expected_revision=session.revision,
             attempt_id=attempt.attempt_id,
         )
-        return self._finish_reindexing(reindexing, refresh=should_refresh)
+        return self._finish_reindexing(
+            reindexing,
+            refresh=should_refresh,
+            partial_attempt_id=(
+                attempt.attempt_id if has_retryable_failure else None
+            ),
+        )
 
     def _fail_acquisition(
         self,
@@ -622,7 +699,7 @@ class ResearchWorkflow:
             attempt_id=attempt.attempt_id,
             error_code="acquisition_unavailable",
         )
-        return ResearchResponse(
+        return self._response(
             failed,
             self._store.get_latest_assessment(session.session_id),
             self._store.list_candidates(session.session_id) or None,
@@ -634,6 +711,7 @@ class ResearchWorkflow:
         session: ResearchSession,
         *,
         refresh: bool,
+        partial_attempt_id: str | None = None,
     ) -> ResearchResponse:
         if self._data_paths is None:
             raise RuntimeError("research acquisition is not configured")
@@ -647,7 +725,7 @@ class ResearchWorkflow:
                     retry_target=ResearchState.REINDEXING,
                     error_code="index_refresh_failed",
                 )
-                return ResearchResponse(
+                return self._response(
                     failed,
                     self._store.get_latest_assessment(session.session_id),
                     self._store.list_candidates(session.session_id) or None,
@@ -657,9 +735,17 @@ class ResearchWorkflow:
             session.session_id,
             expected_revision=session.revision,
         )
-        return self._assess_session(assessing)
+        return self._assess_session(
+            assessing,
+            partial_attempt_id=partial_attempt_id,
+        )
 
-    def _assess_session(self, session: ResearchSession) -> ResearchResponse:
+    def _assess_session(
+        self,
+        session: ResearchSession,
+        *,
+        partial_attempt_id: str | None = None,
+    ) -> ResearchResponse:
         try:
             assessment = assess_local(
                 queries=session.queries,
@@ -678,22 +764,57 @@ class ResearchWorkflow:
                 retry_target=ResearchState.ASSESSING,
                 error_code="local_index_unavailable",
             )
-            return ResearchResponse(
+            return self._response(
                 failed,
                 self._store.get_latest_assessment(session.session_id),
                 self._store.list_candidates(session.session_id) or None,
                 "local_index_unavailable",
             )
-        stored = self._store.record_assessment(
-            session.session_id,
-            expected_revision=session.revision,
-            assessment=assessment,
-        )
-        return ResearchResponse(
+        if partial_attempt_id is None:
+            stored = self._store.record_assessment(
+                session.session_id,
+                expected_revision=session.revision,
+                assessment=assessment,
+            )
+            error_code = None
+        else:
+            stored = self._store.record_partial_acquisition_assessment(
+                session.session_id,
+                expected_revision=session.revision,
+                attempt_id=partial_attempt_id,
+                assessment=assessment,
+            )
+            error_code = "partial_acquisition_failed"
+        return self._response(
             stored,
             assessment,
             self._store.list_candidates(session.session_id) or None,
+            error_code,
         )
+
+    def _partial_attempt_id(
+        self,
+        attempt: AcquisitionAttempt | None,
+    ) -> str | None:
+        if attempt is None:
+            return None
+        outcomes = tuple(
+            outcome
+            for outcome in self._store.get_session_history(
+                attempt.session_id
+            ).acquisition_outcomes
+            if outcome.attempt_id == attempt.attempt_id
+        )
+        has_failure = any(
+            outcome.status is CandidateStatus.FAILED_RETRYABLE
+            for outcome in outcomes
+        )
+        has_ready_source = any(
+            outcome.status
+            in {CandidateStatus.ACQUIRED, CandidateStatus.ALREADY_PRESENT}
+            for outcome in outcomes
+        )
+        return attempt.attempt_id if has_failure and has_ready_source else None
 
     def _record_discovery_failure(
         self, session_id: str, expected_revision: int
@@ -704,7 +825,7 @@ class ResearchWorkflow:
             retry_target=ResearchState.DISCOVERING,
             error_code="discovery_unavailable",
         )
-        return ResearchResponse(
+        return self._response(
             failed,
             self._store.get_latest_assessment(session_id),
             None,
@@ -873,6 +994,58 @@ def _candidate_payload(candidate: ResearchCandidate) -> dict[str, object]:
         "original_rank": candidate.original_rank,
         "status": candidate.status.value,
     }
+
+
+def _public_acquisition_history(
+    history: SessionHistory,
+) -> tuple[PublicAcquisitionAttempt, ...]:
+    outcomes_by_attempt = {
+        attempt.attempt_id: {
+            outcome.video_id: outcome
+            for outcome in history.acquisition_outcomes
+            if outcome.attempt_id == attempt.attempt_id
+        }
+        for attempt in history.acquisition_attempts
+    }
+    return tuple(
+        PublicAcquisitionAttempt(
+            attempt.attempt_id,
+            attempt.status,
+            tuple(
+                PublicAcquisitionItem(
+                    outcome.video_id,
+                    outcome.status,
+                    outcome.error_code,
+                    outcome.source_sha256,
+                )
+                for video_id in attempt.video_ids
+                if (outcome := outcomes_by_attempt[attempt.attempt_id].get(video_id))
+                is not None
+            ),
+        )
+        for attempt in history.acquisition_attempts
+    )
+
+
+def _acquisition_history_payload(
+    attempts: tuple[PublicAcquisitionAttempt, ...],
+) -> list[dict[str, object]]:
+    return [
+        {
+            "attempt_id": attempt.attempt_id,
+            "status": attempt.status,
+            "items": [
+                {
+                    "video_id": item.video_id,
+                    "status": item.status.value,
+                    "error_code": item.error_code,
+                    "source_sha256": item.source_sha256,
+                }
+                for item in attempt.items
+            ],
+        }
+        for attempt in attempts
+    ]
 
 
 def _timestamp(value: datetime | None) -> str | None:

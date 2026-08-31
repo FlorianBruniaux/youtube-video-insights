@@ -643,8 +643,29 @@ def test_research_acquire_cli_uses_exact_approved_batch_and_returns_question(
     payload = json.loads(acquired.output)
     assert payload["session"]["state"] == "awaiting_sufficiency_confirmation"
     assert payload["required_user_action"] == "confirm_sufficiency_or_refresh"
+    assert len(payload["acquisition_history"]) == 1
+    attempt = payload["acquisition_history"][0]
+    assert attempt["attempt_id"].startswith("acq-")
+    assert attempt["status"] == "completed"
+    assert attempt["items"] == [
+        {
+            "error_code": None,
+            "source_sha256": "b" * 64,
+            "status": "acquired",
+            "video_id": video_id,
+        }
+    ]
     assert acquisition.calls == [((video_id,), "en", "firefox")]
     assert len(refresh_calls) == 1
+
+    status = runner.invoke(
+        cli,
+        ["research", "status", session_id, "--json"],
+    )
+    assert status.exit_code == 0, status.output
+    assert json.loads(status.output)["acquisition_history"] == payload["acquisition_history"]
+    assert "acquire-key" not in acquired.output
+    assert '"firefox"' not in acquired.output
 
 
 def test_research_acquire_cli_rejects_stale_revision_without_network(
