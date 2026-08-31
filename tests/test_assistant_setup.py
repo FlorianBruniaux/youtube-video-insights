@@ -69,6 +69,9 @@ if args[:2] == ["mcp", "add"]:
     raise SystemExit(0)
 
 if args[:2] == ["mcp", "remove"]:
+    if os.environ.get("FAKE_FAIL_REMOVE") == client:
+        print("synthetic remove failure", file=sys.stderr)
+        raise SystemExit(8)
     state.unlink(missing_ok=True)
     raise SystemExit(0)
 
@@ -312,6 +315,87 @@ def test_failed_second_registration_rolls_back_new_state(tmp_path: Path) -> None
         ("codex", ["mcp", "remove"]),
         ("claude", ["mcp", "remove"]),
     ]
+
+
+def test_missing_client_during_unregister_does_not_abort_asset_rollback(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, state, corpus = _environment(tmp_path)
+    env["FAKE_FAIL_CLIENT"] = "codex"
+    env["FAKE_FAIL_REMOVE"] = "claude"
+    original_run = assistant_setup.subprocess.run
+    original_remove = assistant_setup._remove_expected_entry
+    observed_fds: list[int] = []
+
+    def remove_failed_client_after_add(*args: object, **kwargs: object):
+        command = args[0]
+        result = original_run(*args, **kwargs)
+        if (
+            isinstance(command, list)
+            and Path(command[0]).name == "codex"
+            and command[1:3] == ["mcp", "add"]
+            and result.returncode != 0
+        ):
+            Path(command[0]).unlink()
+        return result
+
+    def observe_rollback_fd(
+        parent_fd: int,
+        parent: Path,
+        name: str,
+        expected: assistant_setup.FileSnapshot,
+        *,
+        purpose: str,
+    ) -> list[str]:
+        observed_fds.append(parent_fd)
+        return original_remove(
+            parent_fd,
+            parent,
+            name,
+            expected,
+            purpose=purpose,
+        )
+
+    monkeypatch.setattr(assistant_setup.subprocess, "run", remove_failed_client_after_add)
+    monkeypatch.setattr(
+        assistant_setup,
+        "_remove_expected_entry",
+        observe_rollback_fd,
+    )
+
+    result = CliRunner().invoke(
+        cli,
+        _arguments(corpus, tmp_path / "bin" / "yt-insights-mcp", "--apply"),
+        env=env,
+        catch_exceptions=False,
+    )
+
+    payload = json.loads(result.output)
+    assert result.exit_code != 0
+    assert payload["status"] == "rolled_back"
+    assert payload["failed_client_cleanup"] == [
+        {"client": "claude", "error": "RuntimeError"},
+        {"client": "codex", "error": "FileNotFoundError"}
+    ]
+    assert _visible_files(home) == {}
+    assert set(payload["recovery_paths"]) == _recovery_files(home)
+    assert all((home / path).is_file() for path in payload["recovery_paths"])
+    operations = [
+        json.loads(line)
+        for line in (state / "operations.jsonl").read_text().splitlines()
+    ]
+    assert [(item["client"], item["args"][:2]) for item in operations] == [
+        ("claude", ["mcp", "get"]),
+        ("codex", ["mcp", "get"]),
+        ("claude", ["mcp", "add"]),
+        ("codex", ["mcp", "add"]),
+        ("claude", ["mcp", "remove"]),
+    ]
+    assert (state / "claude.json").is_file()
+    assert observed_fds
+    for descriptor in set(observed_fds):
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
 
 
 def test_rollback_preserves_a_concurrently_replaced_file(

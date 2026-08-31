@@ -336,7 +336,11 @@ def _remove_registration(client: Client, executable: Path) -> None:
     command = [str(executable), "mcp", "remove", MCP_NAME]
     if client == "claude":
         command.extend(["--scope", "user"])
-    subprocess.run(command, check=False, capture_output=True, text=True)
+    result = subprocess.run(command, check=False, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"{client} MCP cleanup failed with exit code {result.returncode}"
+        )
 
 
 def _snapshot_at(parent_fd: int, name: str) -> tuple[FileSnapshot, bytes]:
@@ -1296,17 +1300,19 @@ def _close_bound_root(root: BoundRoot, *, rollback: bool) -> None:
 def _rollback_asset_transaction(transaction: AssetTransaction) -> list[str]:
     recovery_paths: list[str] = list(transaction.root.recovery_paths)
     try:
-        recovery_paths.extend(_rollback_replaced_files(transaction.replaced))
-    except OSError:
-        recovery_paths.append(str(transaction.root.home))
-    try:
-        recovery_paths.extend(_remove_created_files(transaction.created))
-    except OSError:
-        recovery_paths.append(str(transaction.root.home))
-    try:
-        _close_bound_root(transaction.root, rollback=True)
-    except OSError:
-        recovery_paths.append(str(transaction.root.home))
+        try:
+            recovery_paths.extend(_rollback_replaced_files(transaction.replaced))
+        except Exception:
+            recovery_paths.append(str(transaction.root.home))
+        try:
+            recovery_paths.extend(_remove_created_files(transaction.created))
+        except Exception:
+            recovery_paths.append(str(transaction.root.home))
+    finally:
+        try:
+            _close_bound_root(transaction.root, rollback=True)
+        except OSError:
+            recovery_paths.append(str(transaction.root.home))
     return sorted(set(recovery_paths))
 
 
@@ -1786,15 +1792,22 @@ def run_assistant_setup(
                 )
             registered.append(name)
     except Exception as error:
-        for name in reversed(attempted):
-            _remove_registration(name, executables[name])
-        if transaction is not None:
-            recovery_paths = _home_relative_paths(
-                target_home,
-                _rollback_asset_transaction(transaction),
-            )
-        else:
-            recovery_paths = []
+        failed_client_cleanup: list[dict[str, str]] = []
+        recovery_paths: list[str] = []
+        try:
+            for name in reversed(attempted):
+                try:
+                    _remove_registration(name, executables[name])
+                except Exception as cleanup_error:
+                    failed_client_cleanup.append(
+                        {
+                            "client": name,
+                            "error": type(cleanup_error).__name__,
+                        }
+                    )
+        finally:
+            if transaction is not None:
+                recovery_paths.extend(_rollback_asset_transaction(transaction))
         if isinstance(error, PublicationConflict):
             recovery_paths.extend(error.recovery_paths)
         recovery_paths = _home_relative_paths(target_home, recovery_paths)
@@ -1802,6 +1815,10 @@ def run_assistant_setup(
             status="rolled_back",
             error=str(error),
             recovery_paths=sorted(set(recovery_paths)),
+            failed_client_cleanup=sorted(
+                failed_client_cleanup,
+                key=lambda item: (item["client"], item["error"]),
+            ),
         )
         return base, 1
 
