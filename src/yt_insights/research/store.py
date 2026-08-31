@@ -740,6 +740,12 @@ class ResearchStore:
                 return self._completed_attempt_for_pipeline(connection, session_id)
             if (
                 session.state is ResearchState.FAILED_RETRYABLE
+                and session.retry_target
+                in {ResearchState.REINDEXING, ResearchState.ASSESSING}
+            ):
+                return self._completed_attempt_for_pipeline(connection, session_id)
+            if (
+                session.state is ResearchState.FAILED_RETRYABLE
                 and session.retry_target is not ResearchState.ACQUIRING
             ):
                 return None

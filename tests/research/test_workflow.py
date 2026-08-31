@@ -1226,6 +1226,92 @@ def test_partial_acquisition_can_be_accepted_without_retrying_failed_videos(
     assert history.acquisition_attempts[-1].status == "failed_retryable"
 
 
+@pytest.mark.parametrize("failed_stage", ["reindexing", "assessing"])
+def test_partial_attempt_lineage_survives_pipeline_failure_and_retry(
+    tmp_path,
+    failed_stage: str,
+) -> None:
+    first = _candidate(video_id="zyx987WVUT0")
+    second = _candidate(video_id="zyx987WVUT1")
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (first, second), (), True)
+    )
+
+    class PartialAcquisition:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def acquire_approved(
+            self,
+            candidates: tuple[ResearchCandidate, ...],
+            *,
+            data_paths: DataPaths,
+            language: str,
+            cookies_from_browser: str | None = None,
+        ) -> tuple[CandidateAcquisitionOutcome, ...]:
+            video_id = candidates[0].video_id
+            self.calls.append(video_id)
+            if video_id == second.video_id:
+                raise LookupError("private transient failure")
+            return (
+                CandidateAcquisitionOutcome(
+                    video_id,
+                    CandidateStatus.ACQUIRED,
+                    None,
+                    "b" * 64,
+                ),
+            )
+
+    acquisition = PartialAcquisition()
+    reader = FakeEvidenceReader()
+    refresh_calls = 0
+
+    def refresh(paths: DataPaths) -> None:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        if failed_stage == "reindexing" and refresh_calls == 1:
+            raise RuntimeError("private refresh failure")
+
+    workflow = _workflow(
+        tmp_path,
+        reader,
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=refresh,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(first.video_id, second.video_id),
+    )
+    if failed_stage == "assessing":
+        reader.fails = True
+
+    failed = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="partial-acquire-key",
+        language="en",
+    )
+    attempt_id = failed.acquisition_history[-1].attempt_id
+    reader.fails = False
+
+    recovered = workflow.retry(
+        SESSION_ID,
+        expected_revision=failed.session.revision,
+        idempotency_key=f"retry-{failed_stage}-key",
+    )
+
+    assert failed.session.state is ResearchState.FAILED_RETRYABLE
+    assert failed.session.retry_target is ResearchState(failed_stage)
+    assert recovered.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert recovered.required_user_action == "confirm_sufficiency_or_refresh"
+    assert recovered.error_code == "partial_acquisition_failed"
+    assert recovered.acquisition_history[-1].attempt_id == attempt_id
+    assert recovered.acquisition_history[-1].status == "failed_retryable"
+    assert acquisition.calls == [first.video_id, second.video_id]
+
+
 def test_partial_retry_finalizes_after_failure_without_reacquiring(tmp_path) -> None:
     first = _candidate(video_id="zyx987WVUT0")
     second = _candidate(video_id="zyx987WVUT1")
