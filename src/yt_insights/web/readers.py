@@ -16,6 +16,10 @@ from yt_insights.catalog import Catalog, CatalogError, ReadOnlyCatalog
 _MAX_PAGE_SIZE: Final = 100
 _MAX_METADATA_VALUES: Final = 20
 _MAX_MANIFEST_BYTES: Final = 64 * 1024
+# Export roots are user-managed directories. These caps bound descriptor work
+# and retained names even if the caller asks for a one-record page.
+_MAX_EXPORT_TOPICS: Final = 32
+_MAX_DOSSIERS_PER_TOPIC: Final = 32
 _DIRECTORY_FLAGS: Final = (
     os.O_RDONLY
     | getattr(os, "O_DIRECTORY", 0)
@@ -158,54 +162,100 @@ class ExportReader:
             raise ValueError("exports path must be absolute")
 
     def list_exports(self, *, limit: int) -> dict[str, object]:
-        """Return at most one safe public record for each export directory."""
+        """Return safe dossiers from the configured topic/dossier hierarchy."""
         _require_page(limit, 0)
         try:
             root_details = self._exports.lstat()
         except FileNotFoundError:
-            return {"items": [], "limit": limit}
+            return {"items": [], "limit": limit, "truncated": False}
         if stat.S_ISLNK(root_details.st_mode) or not stat.S_ISDIR(root_details.st_mode):
-            return {"items": [], "limit": limit}
+            return {"items": [], "limit": limit, "truncated": False}
         try:
             root_fd = os.open(self._exports, _DIRECTORY_FLAGS)
         except OSError:
-            return {"items": [], "limit": limit}
+            return {"items": [], "limit": limit, "truncated": False}
         try:
             opened_root = os.fstat(root_fd)
             if (opened_root.st_dev, opened_root.st_ino) != (
                 root_details.st_dev,
                 root_details.st_ino,
             ):
-                return {"items": [], "limit": limit}
+                return {"items": [], "limit": limit, "truncated": False}
             items: list[dict[str, object]] = []
-            for name in sorted(os.listdir(root_fd)):
-                if len(items) >= limit:
-                    break
-                item = self._export_item(root_fd, name)
-                if item is not None:
-                    items.append(item)
-            return {"items": items, "limit": limit}
+            topic_names, truncated = self._bounded_names(
+                root_fd, maximum=_MAX_EXPORT_TOPICS
+            )
+            for topic_index, topic_name in enumerate(topic_names):
+                topic_fd = self._open_directory(root_fd, topic_name)
+                if topic_fd is None:
+                    continue
+                try:
+                    dossier_names, dossiers_truncated = self._bounded_names(
+                        topic_fd, maximum=_MAX_DOSSIERS_PER_TOPIC
+                    )
+                    truncated = truncated or dossiers_truncated
+                    for dossier_index, dossier_name in enumerate(dossier_names):
+                        item = self._export_item(topic_fd, dossier_name)
+                        if item is None:
+                            continue
+                        items.append(item)
+                        has_unread_names = (
+                            dossier_index < len(dossier_names) - 1
+                            or topic_index < len(topic_names) - 1
+                            or truncated
+                        )
+                        if len(items) >= limit and has_unread_names:
+                            return {
+                                "items": items,
+                                "limit": limit,
+                                "truncated": True,
+                            }
+                finally:
+                    os.close(topic_fd)
+            return {"items": items, "limit": limit, "truncated": truncated}
         finally:
             os.close(root_fd)
 
     @staticmethod
-    def _export_item(root_fd: int, name: str) -> dict[str, object] | None:
+    def _bounded_names(directory_fd: int, *, maximum: int) -> tuple[list[str], bool]:
+        """Retain no more than one fixed inventory page of direct children."""
+        names: list[str] = []
+        try:
+            with os.scandir(directory_fd) as entries:
+                for entry in entries:
+                    if len(names) >= maximum:
+                        return (sorted(names), True)
+                    names.append(entry.name)
+        except OSError:
+            return ([], True)
+        return (sorted(names), False)
+
+    @staticmethod
+    def _open_directory(parent_fd: int, name: str) -> int | None:
         if Path(name).name != name or name in {"", ".", ".."} or "\x00" in name:
             return None
         try:
-            details = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+            details = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         except OSError:
             return None
         if stat.S_ISLNK(details.st_mode) or not stat.S_ISDIR(details.st_mode):
             return None
         try:
-            directory_fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=root_fd)
+            directory_fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
         except OSError:
             return None
+        opened = os.fstat(directory_fd)
+        if (opened.st_dev, opened.st_ino) != (details.st_dev, details.st_ino):
+            os.close(directory_fd)
+            return None
+        return directory_fd
+
+    @staticmethod
+    def _export_item(parent_fd: int, name: str) -> dict[str, object] | None:
+        directory_fd = ExportReader._open_directory(parent_fd, name)
+        if directory_fd is None:
+            return None
         try:
-            opened = os.fstat(directory_fd)
-            if (opened.st_dev, opened.st_ino) != (details.st_dev, details.st_ino):
-                return None
             session_id, created_at = ExportReader._manifest_summary(directory_fd)
         finally:
             os.close(directory_fd)

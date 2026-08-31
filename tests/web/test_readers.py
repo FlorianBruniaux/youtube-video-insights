@@ -4,6 +4,8 @@ import json
 import os
 from pathlib import Path
 
+import pytest
+
 from yt_insights.catalog import Catalog
 from yt_insights.downloader import VideoInfo, VideoListResult
 from yt_insights.web.readers import CatalogWebReader, ExportReader
@@ -92,44 +94,50 @@ def test_catalog_reader_projects_only_bounded_public_source_fields(tmp_path: Pat
     }
 
 
-def test_export_reader_ignores_symlinks_and_hides_malformed_manifest_paths(
+def test_export_reader_reads_nested_dossiers_and_hides_unsafe_entries(
     tmp_path: Path,
 ) -> None:
-    """Following an export link or returning manifest paths crosses the local boundary."""
+    """Flattening real dossiers, following links, or returning paths crosses the boundary."""
     exports = tmp_path / "exports"
-    valid = exports / "valid"
-    malformed = exports / "malformed"
+    valid = exports / "local-ai" / ("2026-08-31-" + "s" * 32)
+    malformed = exports / "unsafe" / ("2026-08-31-" + "x" * 32)
     outside = tmp_path / "outside"
-    for directory in (valid, malformed, outside):
+    for directory in (valid, malformed, outside / "2026-08-31-outside"):
         directory.mkdir(parents=True)
     (valid / "manifest.json").write_text(json.dumps(_manifest()), encoding="utf-8")
-    (outside / "manifest.json").write_text(json.dumps(_manifest()), encoding="utf-8")
+    (outside / "2026-08-31-outside" / "manifest.json").write_text(
+        json.dumps(_manifest()),
+        encoding="utf-8",
+    )
     (malformed / "manifest.json").write_text(
         json.dumps(_manifest(session_id="/private/secret-session")),
         encoding="utf-8",
     )
-    os.symlink(outside, exports / "linked")
+    os.symlink(outside, exports / "linked-topic")
+    os.symlink(outside, exports / "local-ai" / "linked-dossier")
 
     payload = ExportReader(exports).list_exports(limit=10)
 
     assert payload == {
         "items": [
             {
-                "name": "malformed",
-                "session_id": None,
-                "created_at": None,
-                "manifest_valid": False,
-            },
-            {
-                "name": "valid",
+                "name": "2026-08-31-" + "s" * 32,
                 "session_id": "s" * 32,
                 "created_at": "2026-08-31T10:00:00+00:00",
                 "manifest_valid": True,
             },
+            {
+                "name": "2026-08-31-" + "x" * 32,
+                "session_id": None,
+                "created_at": None,
+                "manifest_valid": False,
+            },
         ],
         "limit": 10,
+        "truncated": False,
     }
-    assert "linked" not in repr(payload)
+    assert "linked-topic" not in repr(payload)
+    assert "linked-dossier" not in repr(payload)
     assert "/private/secret-session" not in repr(payload)
     items = payload["items"]
     assert isinstance(items, list)
@@ -138,3 +146,23 @@ def test_export_reader_ignores_symlinks_and_hides_malformed_manifest_paths(
         and set(item) == {"name", "session_id", "created_at", "manifest_valid"}
         for item in items
     )
+
+
+def test_export_reader_caps_descriptor_inventory_without_listdir_materialization(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scanning every hostile export child must not happen after a small page fills."""
+    exports = tmp_path / "exports"
+    for index in range(33):
+        (exports / f"topic-{index:02d}").mkdir(parents=True)
+
+    def fail_listdir(_descriptor: int) -> list[str]:
+        raise AssertionError("export reader must not materialize directory entries")
+
+    monkeypatch.setattr(os, "listdir", fail_listdir)
+
+    assert ExportReader(exports).list_exports(limit=1) == {
+        "items": [],
+        "limit": 1,
+        "truncated": True,
+    }
