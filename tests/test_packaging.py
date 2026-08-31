@@ -179,6 +179,15 @@ def test_wheel_smoke_copies_only_current_build_inputs(tmp_path: Path) -> None:
         / "youtube-research"
         / "SKILL.md"
     ).is_file()
+    assert (
+        copied_source
+        / "src"
+        / "yt_insights"
+        / "assistant_assets"
+        / "skills"
+        / "youtube-cumulative-research"
+        / "SKILL.md"
+    ).is_file()
     assert not (copied_source / "build").exists()
     assert not tuple((copied_source / "src").glob("*.egg-info"))
     assert not tuple((copied_source / "src").rglob("__pycache__"))

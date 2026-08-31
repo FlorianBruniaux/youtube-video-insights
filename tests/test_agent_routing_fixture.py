@@ -15,6 +15,7 @@ ALLOWED_EXPECTED = {
     "youtube-acquire",
     "youtube-research",
     "youtube-export",
+    "youtube-cumulative-research",
     "none",
 }
 
@@ -42,6 +43,7 @@ def valid_rows() -> list[dict[str, str]]:
         ("youtube-acquire", 10),
         ("youtube-research", 10),
         ("youtube-export", 10),
+        ("youtube-cumulative-research", 10),
         ("none", 15),
     ):
         rows.extend(
@@ -63,17 +65,18 @@ def test_repository_routing_fixture_is_valid_and_balanced() -> None:
         "counts": {
             "none": 15,
             "youtube-acquire": 10,
+            "youtube-cumulative-research": 10,
             "youtube-export": 10,
             "youtube-research": 10,
         },
         "status": "ok",
-        "total": 45,
+        "total": 55,
     }
 
     rows = json.loads(FIXTURE.read_text(encoding="utf-8"))
-    assert len(rows) == 45
+    assert len(rows) == 55
     assert {row["expected"] for row in rows} == ALLOWED_EXPECTED
-    assert len({row["prompt"] for row in rows}) == 45
+    assert len({row["prompt"] for row in rows}) == 55
 
 
 def test_checker_output_is_deterministic() -> None:
@@ -164,6 +167,7 @@ def test_checker_rejects_unknown_labels(tmp_path: Path) -> None:
         ("youtube-acquire", 1),
         ("youtube-research", 1),
         ("youtube-export", 1),
+        ("youtube-cumulative-research", 1),
         ("none", 1),
     ),
 )

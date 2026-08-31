@@ -25,8 +25,10 @@ def setup_group() -> None:
 @click.option(
     "--data-root",
     type=click.Path(path_type=Path),
-    required=True,
-    help="Absolute corpus root exposed to the read-only MCP server.",
+    help=(
+        "Absolute corpus root exposed to the read-only MCP server. "
+        "Required unless --assets-only is used."
+    ),
 )
 @click.option(
     "--mcp-command",
@@ -41,14 +43,20 @@ def setup_group() -> None:
     is_flag=True,
     help="Verify files and client registrations without writes.",
 )
+@click.option(
+    "--assets-only",
+    is_flag=True,
+    help="Install or verify skills and agents without inspecting MCP registrations.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Emit deterministic JSON.")
 def assistants_command(
     client: str,
-    data_root: Path,
+    data_root: Path | None,
     mcp_command: str,
     dry_run: bool,
     apply: bool,
     verify: bool,
+    assets_only: bool,
     as_json: bool,
 ) -> None:
     """Set up portable skills, native researchers, and the read-only MCP."""
@@ -62,6 +70,7 @@ def assistants_command(
             data_root=data_root,
             mcp_command=mcp_command,
             mode=mode,
+            assets_only=assets_only,
         )
     except ValueError as error:
         if as_json:

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Cumulative YouTube Research"
+  short_description: "Grow a source-backed YouTube research corpus"
+  default_prompt: "Use $youtube-cumulative-research to assess my local evidence, ask before adding sources, and build a versioned research dossier."

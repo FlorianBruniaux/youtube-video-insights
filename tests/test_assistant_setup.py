@@ -22,6 +22,12 @@ ASSET_PAIRS = {
     ),
     ".agents/skills/youtube-export/SKILL.md": "skills/youtube-export/SKILL.md",
     ".agents/skills/youtube-export/agents/openai.yaml": "skills/youtube-export/agents/openai.yaml",
+    ".agents/skills/youtube-cumulative-research/SKILL.md": (
+        "skills/youtube-cumulative-research/SKILL.md"
+    ),
+    ".agents/skills/youtube-cumulative-research/agents/openai.yaml": (
+        "skills/youtube-cumulative-research/agents/openai.yaml"
+    ),
     ".claude/agents/youtube-corpus-researcher.md": "claude/youtube-corpus-researcher.md",
     ".codex/agents/youtube-corpus-researcher.toml": "codex/youtube-corpus-researcher.toml",
 }
@@ -107,6 +113,10 @@ def _arguments(corpus: Path, server: Path, mode: str | None) -> list[str]:
     return arguments
 
 
+def _assets_only_arguments(mode: str) -> list[str]:
+    return ["setup", "assistants", "--client", "both", "--assets-only", mode, "--json"]
+
+
 def test_root_cli_registers_setup_command() -> None:
     assert "setup" in cli.commands
 
@@ -135,7 +145,7 @@ def test_dry_run_is_default_and_performs_no_writes(tmp_path: Path) -> None:
     payload = json.loads(result.output)
     assert payload["mode"] == "dry-run"
     assert payload["status"] == "planned"
-    assert len(payload["operations"]) == 10
+    assert len(payload["operations"]) == 12
     assert not home.exists()
     assert not state.exists()
 
@@ -199,6 +209,9 @@ def test_apply_installs_assets_and_registers_both_clients(tmp_path: Path) -> Non
     payload = json.loads(result.output)
     assert payload["status"] == "installed"
     assert (home / ".agents" / "skills" / "youtube-research" / "SKILL.md").is_file()
+    assert (
+        home / ".agents" / "skills" / "youtube-cumulative-research" / "SKILL.md"
+    ).is_file()
     assert (home / ".claude" / "agents" / "youtube-corpus-researcher.md").is_file()
     assert (home / ".codex" / "agents" / "youtube-corpus-researcher.toml").is_file()
     assert (state / "claude.json").is_file()
@@ -347,3 +360,154 @@ def test_json_output_never_echoes_provider_secrets(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "should-not-appear" not in result.output
     assert "also-secret" not in result.output
+
+
+def test_assets_only_apply_needs_no_data_root_or_executable_and_ignores_mcp_state(
+    tmp_path: Path,
+) -> None:
+    env, home, state, _corpus = _environment(tmp_path)
+    state.mkdir()
+    claude_state = state / "claude.json"
+    claude_state.write_text('{"custom": true}\n', encoding="utf-8")
+    before = claude_state.read_bytes()
+
+    result = CliRunner().invoke(
+        cli,
+        _assets_only_arguments("--apply"),
+        env=env,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "installed"
+    assert payload["assets_only"] is True
+    assert len(payload["operations"]) == 10
+    assert {operation["kind"] for operation in payload["operations"]} == {"copy"}
+    assert "data_root" not in payload
+    assert "mcp_command" not in payload
+    assert "registered_clients" not in payload
+    assert claude_state.read_bytes() == before
+    assert not (state / "operations.jsonl").exists()
+    assert (
+        home / ".agents" / "skills" / "youtube-cumulative-research" / "SKILL.md"
+    ).is_file()
+
+
+def test_assets_only_never_resolves_or_invokes_mcp_tools(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, _home, _state, _corpus = _environment(tmp_path)
+
+    def unexpected(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("assets-only mode accessed an MCP dependency")
+
+    monkeypatch.setattr(assistant_setup, "_resolve_executable", unexpected)
+    monkeypatch.setattr(assistant_setup, "_client_executables", unexpected)
+    monkeypatch.setattr(assistant_setup, "_get_registration", unexpected)
+    monkeypatch.setattr(assistant_setup, "_remove_registration", unexpected)
+    monkeypatch.setattr(assistant_setup.subprocess, "run", unexpected)
+
+    result = CliRunner().invoke(
+        cli,
+        _assets_only_arguments("--apply"),
+        env=env,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["status"] == "installed"
+
+
+def test_assets_only_verify_checks_assets_without_reading_mcp_state(tmp_path: Path) -> None:
+    env, _home, state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    applied = runner.invoke(
+        cli,
+        _assets_only_arguments("--apply"),
+        env=env,
+        catch_exceptions=False,
+    )
+    assert applied.exit_code == 0, applied.output
+
+    verified = runner.invoke(
+        cli,
+        _assets_only_arguments("--verify"),
+        env=env,
+        catch_exceptions=False,
+    )
+
+    assert verified.exit_code == 0, verified.output
+    assert json.loads(verified.output)["status"] == "verified"
+    assert not (state / "operations.jsonl").exists()
+
+
+def test_assets_only_conflict_preserves_customized_asset(tmp_path: Path) -> None:
+    env, home, state, _corpus = _environment(tmp_path)
+    conflict = (
+        home / ".agents" / "skills" / "youtube-cumulative-research" / "SKILL.md"
+    )
+    conflict.parent.mkdir(parents=True)
+    conflict.write_text("custom workflow\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        cli,
+        _assets_only_arguments("--apply"),
+        env=env,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "blocked"
+    assert payload["conflicts"] == [str(conflict)]
+    assert conflict.read_text(encoding="utf-8") == "custom workflow\n"
+    assert not state.exists()
+
+
+def test_assets_only_write_failure_rolls_back_only_files_it_created(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, state, _corpus = _environment(tmp_path)
+    original_write = assistant_setup._write_asset
+    calls = 0
+
+    def fail_second_write(asset: assistant_setup.Asset) -> assistant_setup.CreatedFile:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise OSError("synthetic asset failure")
+        return original_write(asset)
+
+    monkeypatch.setattr(assistant_setup, "_write_asset", fail_second_write)
+
+    result = CliRunner().invoke(
+        cli,
+        _assets_only_arguments("--apply"),
+        env=env,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code != 0
+    assert json.loads(result.output)["status"] == "rolled_back"
+    assert not (home / ".agents").exists()
+    assert not (home / ".claude").exists()
+    assert not (home / ".codex").exists()
+    assert not state.exists()
+
+
+def test_default_setup_still_requires_data_root(tmp_path: Path) -> None:
+    env, home, state, _corpus = _environment(tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        ["setup", "assistants", "--client", "both", "--apply", "--json"],
+        env=env,
+    )
+
+    assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "invalid"
+    assert "data root" in payload["error"].lower()
+    assert not home.exists()
+    assert not state.exists()

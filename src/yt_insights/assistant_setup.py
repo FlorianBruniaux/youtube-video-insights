@@ -36,7 +36,12 @@ def _asset_root() -> Path:
 def _assets(home: Path, clients: tuple[Client, ...]) -> tuple[Asset, ...]:
     root = _asset_root()
     assets: list[Asset] = []
-    for skill in ("youtube-acquire", "youtube-research", "youtube-export"):
+    for skill in (
+        "youtube-acquire",
+        "youtube-research",
+        "youtube-export",
+        "youtube-cumulative-research",
+    ):
         for relative in (Path("SKILL.md"), Path("agents/openai.yaml")):
             assets.append(
                 Asset(
@@ -192,25 +197,84 @@ def _remove_created_files(created: list[CreatedFile], home: Path) -> None:
 
 
 def _operation_payload(
-    assets: tuple[Asset, ...], clients: tuple[Client, ...], states: dict[Path, str]
+    assets: tuple[Asset, ...],
+    clients: tuple[Client, ...],
+    states: dict[Path, str],
+    *,
+    include_mcp: bool,
 ) -> list[dict[str, str]]:
     operations = [
         {"kind": "copy", "target": str(asset.target), "status": states[asset.target]}
         for asset in assets
     ]
-    operations.extend(
-        {"kind": "mcp", "client": client, "name": MCP_NAME, "status": "planned"}
-        for client in clients
-    )
+    if include_mcp:
+        operations.extend(
+            {"kind": "mcp", "client": client, "name": MCP_NAME, "status": "planned"}
+            for client in clients
+        )
     return operations
+
+
+def _run_assets_only(
+    *,
+    clients: tuple[Client, ...],
+    mode: Mode,
+    home: Path,
+) -> tuple[dict[str, object], int]:
+    assets = _assets(home, clients)
+    states = {asset.target: _file_state(asset, home) for asset in assets}
+    operations = _operation_payload(
+        assets,
+        clients,
+        states,
+        include_mcp=False,
+    )
+    base: dict[str, object] = {
+        "mode": mode,
+        "clients": list(clients),
+        "assets_only": True,
+        "operations": operations,
+    }
+    conflicts = [str(path) for path, state in states.items() if state == "conflict"]
+
+    if mode == "dry-run":
+        base.update(status="blocked" if conflicts else "planned", conflicts=conflicts)
+        return base, 1 if conflicts else 0
+
+    if mode == "verify":
+        invalid_assets = [str(path) for path, state in states.items() if state != "identical"]
+        valid = not invalid_assets
+        base.update(
+            status="verified" if valid else "invalid",
+            invalid_assets=invalid_assets,
+        )
+        return base, 0 if valid else 1
+
+    if conflicts:
+        base.update(status="blocked", conflicts=conflicts)
+        return base, 1
+
+    created: list[CreatedFile] = []
+    try:
+        for asset in assets:
+            if states[asset.target] == "missing":
+                created.append(_write_asset(asset))
+    except Exception as error:
+        _remove_created_files(created, home)
+        base.update(status="rolled_back", error=str(error))
+        return base, 1
+
+    base.update(status="installed", created_files=len(created))
+    return base, 0
 
 
 def run_assistant_setup(
     *,
     client: str,
-    data_root: Path,
+    data_root: Path | None,
     mcp_command: str,
     mode: Mode,
+    assets_only: bool = False,
     home: Path | None = None,
 ) -> tuple[dict[str, object], int]:
     """Plan, apply, or verify the assistant integration.
@@ -218,18 +282,24 @@ def run_assistant_setup(
     The returned integer is a process-style status code. Errors are deliberately
     bounded and never include client stderr or environment values.
     """
-    if not data_root.is_absolute():
-        raise ValueError("data root must be an absolute path")
     clients = resolve_clients(client)
     target_home = (home or Path.home()).resolve()
+    if assets_only:
+        return _run_assets_only(clients=clients, mode=mode, home=target_home)
+
+    if data_root is None:
+        raise ValueError("data root is required unless --assets-only is used")
+    if not data_root.is_absolute():
+        raise ValueError("data root must be an absolute path")
     server = _resolve_executable(mcp_command, label="MCP server")
     executables = _client_executables(clients)
     assets = _assets(target_home, clients)
     states = {asset.target: _file_state(asset, target_home) for asset in assets}
-    operations = _operation_payload(assets, clients, states)
+    operations = _operation_payload(assets, clients, states, include_mcp=True)
     base: dict[str, object] = {
         "mode": mode,
         "clients": list(clients),
+        "assets_only": False,
         "data_root": str(data_root),
         "mcp_command": str(server),
         "operations": operations,

@@ -8,7 +8,12 @@ import pytest
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-SKILLS = ("youtube-acquire", "youtube-research", "youtube-export")
+SKILLS = (
+    "youtube-acquire",
+    "youtube-research",
+    "youtube-export",
+    "youtube-cumulative-research",
+)
 LEGACY_CLAUDE_SKILLS = {
     "yt-add-channel.md": "youtube-acquire",
     "yt-get-transcript.md": "youtube-acquire",
@@ -169,6 +174,53 @@ def test_export_metadata_declares_the_local_mcp_dependency() -> None:
 
     assert 'type: "mcp"' in metadata
     assert 'value: "yt-insights"' in metadata
+
+
+def test_cumulative_research_skill_preserves_human_approval_boundaries() -> None:
+    body = parse_frontmatter(
+        REPOSITORY_ROOT
+        / ".agents"
+        / "skills"
+        / "youtube-cumulative-research"
+        / "SKILL.md"
+    )[1]
+
+    for command in (
+        "yt-insights research start",
+        "yt-insights research status",
+        "yt-insights research decide",
+        "yt-insights research discover",
+        "yt-insights research approve",
+        "yt-insights research acquire",
+        "yt-insights research retry",
+        "yt-insights research export",
+    ):
+        assert command in body
+    for action in (
+        "confirm_sufficiency_or_refresh",
+        "approve_candidates_or_cancel",
+    ):
+        assert action in body
+    assert "Never approve candidates on the user's behalf" in body
+    assert "exact approved video IDs" in body
+    assert "dossier, an article draft, a corpus export, both, or nothing else" in body
+    assert "relevance gate" in body
+    assert "global activation" in body
+    assert "read-only MCP" in body
+
+
+def test_cumulative_research_metadata_does_not_require_the_read_only_mcp() -> None:
+    metadata = (
+        REPOSITORY_ROOT
+        / ".agents"
+        / "skills"
+        / "youtube-cumulative-research"
+        / "agents"
+        / "openai.yaml"
+    ).read_text(encoding="utf-8")
+
+    assert "$youtube-cumulative-research" in metadata
+    assert "dependencies:" not in metadata
 
 
 def test_codex_researcher_is_read_only_and_inherits_the_model() -> None:

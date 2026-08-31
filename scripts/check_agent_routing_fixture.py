@@ -15,6 +15,7 @@ EXPECTED_MINIMUMS = {
     "youtube-acquire": 10,
     "youtube-research": 10,
     "youtube-export": 10,
+    "youtube-cumulative-research": 10,
     "none": 15,
 }
 

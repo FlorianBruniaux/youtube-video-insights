@@ -120,6 +120,46 @@
     "expected": "youtube-export"
   },
   {
+    "prompt": "Research the state of the art of AI use in product and engineering teams, checking my local corpus first and offering newer YouTube sources if coverage is stale",
+    "expected": "youtube-cumulative-research"
+  },
+  {
+    "prompt": "Build an evolving research dossier about cost-efficient local inference with MLX and Ollama",
+    "expected": "youtube-cumulative-research"
+  },
+  {
+    "prompt": "Investigate how teams use AI to maximize code quality, then ask before adding any discovered videos",
+    "expected": "youtube-cumulative-research"
+  },
+  {
+    "prompt": "Continue yt-insights research session 019abc and show whether its evidence is fresh enough",
+    "expected": "youtube-cumulative-research"
+  },
+  {
+    "prompt": "Check my indexed evidence about agentic engineering and let me decide whether YouTube discovery is needed",
+    "expected": "youtube-cumulative-research"
+  },
+  {
+    "prompt": "Refresh my research on local LLM inference, but do not approve or download candidates until I choose exact videos",
+    "expected": "youtube-cumulative-research"
+  },
+  {
+    "prompt": "Create a source-backed dossier that can grow as I approve new YouTube research sources",
+    "expected": "youtube-cumulative-research"
+  },
+  {
+    "prompt": "Assess whether my YouTube corpus has current evidence on AI product discovery and offer a bounded refresh",
+    "expected": "youtube-cumulative-research"
+  },
+  {
+    "prompt": "Resume my cumulative YouTube research, acquire only the candidate IDs I select, and reassess coverage",
+    "expected": "youtube-cumulative-research"
+  },
+  {
+    "prompt": "Research recent coding agent evaluation practices and export a versioned evidence dossier after I confirm sufficiency",
+    "expected": "youtube-cumulative-research"
+  },
+  {
     "prompt": "Corrige le composant React de mon lecteur YouTube",
     "expected": "none"
   },
