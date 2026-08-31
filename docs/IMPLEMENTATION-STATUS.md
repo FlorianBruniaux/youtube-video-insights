@@ -6,12 +6,14 @@
 
 **Activation globale :** `false`
 
-**GitHub CI hébergée :** `UNKNOWN` avant push
+**GitHub CI hébergée :** `PASS` sur `906786e`
 
 Le SHA assemblé a passé localement `844` tests et `10` subtests, Ruff sur
 `src tests scripts`, Mypy sur les 44 fichiers source, et `git diff --check`.
-Le workflow GitHub Actions est ajouté localement, mais aucune exécution hébergée
-n'a encore été observée. Mypy n'a pas été exécuté avec `--strict`.
+Le [run GitHub Actions 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735)
+a ensuite passé sur `906786e`, avec les jobs Python 3.11, Python 3.12 et
+packaging/runtime au vert. Cette preuve hébergée est liée à `906786e` et ne
+valide pas les commits ultérieurs. Mypy n'a pas été exécuté avec `--strict`.
 
 ## Vue d'ensemble
 
@@ -102,10 +104,11 @@ les candidats à acquérir.
 | Codex frais | `UNKNOWN` | Chargement statique seulement |
 | Activation globale | `false` | Pas de promotion du quatrième skill ou du runtime |
 | Qualité locale | `PASS` | 844 tests + 10 subtests, Ruff complet, Mypy sur 44 fichiers et diff-check |
-| GitHub CI hébergée | `UNKNOWN` | Workflow ajouté localement; aucun run observé avant push |
+| GitHub CI hébergée | `PASS` sur `906786e` | [Run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735), Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
-Les statuts `UNKNOWN` bloquent les affirmations de qualité et l'activation
-globale. Ils ne bloquent pas une acquisition locale explicitement approuvée.
+Les gates externes encore `UNKNOWN` bloquent les affirmations correspondantes
+et l'activation globale. Elles ne bloquent pas une acquisition locale
+explicitement approuvée.
 
 ## Comment tester
 

@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Status:** Implemented locally; hosted and external gates remain tracked separately
+**Status:** Implemented and released; remaining external gates are tracked separately
 
 **Goal:** Add a persistent, catalogue-first research workflow that always asks whether local evidence is sufficient, previews fresh YouTube candidates when requested, acquires only approved videos, reassesses the enriched corpus, and exports a versioned evidence dossier.
 
@@ -1451,12 +1451,18 @@ the complete gates, then commit only the reconciled files:
 git commit -m "docs: release cumulative research workflow"
 ```
 
-- [ ] **Step 7: Merge and push only after all local gates**
+- [x] **Step 7: Merge and push only after all local gates**
 
 Verify the primary checkout has not changed since worktree creation. Merge the
 isolated branch without staging the primary checkout's unrelated files. Push
 `main`, report the final commit, remote, branch, test counts, and every remaining
 `UNKNOWN` external gate.
+
+Completed at `906786e`: `main` was fast-forwarded and pushed, and all five
+user-dirty zones were rechecked and preserved. Hosted GitHub Actions
+[run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735)
+passed the Python 3.11, Python 3.12, and packaging/runtime jobs on that SHA.
+This evidence does not cover later commits.
 
 ---
 
@@ -1474,4 +1480,5 @@ isolated branch without staging the primary checkout's unrelated files. Push
 - [x] Repository-local Claude Code and Codex skill assets pass static validation.
 - [x] Fresh-client runtime status is recorded as `PASS`, `FAIL`, or `UNKNOWN`.
 - [x] Full tests, Ruff, mypy, packaging, and diff checks pass at the final SHA.
-- [ ] Main is merged and pushed only after unrelated primary-checkout changes are rechecked and preserved. Pending the release step.
+- [x] Main was fast-forwarded and pushed at `906786e` after all five
+  user-dirty zones were rechecked and preserved.

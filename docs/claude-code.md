@@ -130,5 +130,7 @@ Observed external gates at this checkpoint:
 
 Local validation passed `844` tests plus `10` subtests, full Ruff, Mypy on the
 44 source files, and `git diff --check`. This is not a `mypy --strict` claim.
-The GitHub Actions workflow is present in the local integration candidate, but
-its hosted execution remains `UNKNOWN` before push.
+Hosted GitHub Actions
+[run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735)
+passed on `906786e`, including Python 3.11, Python 3.12, and packaging/runtime.
+This hosted result validates that SHA only, not later commits.

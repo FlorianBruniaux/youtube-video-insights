@@ -133,11 +133,11 @@ cumulatif n'ajoute aucun hook global et aucun agent writable.
 | Codex frais | `UNKNOWN` | Pas de claim d'activation |
 | Activation globale | `false` | Quatrième skill et runtime non promus |
 | Qualité locale | `PASS` | 844 tests + 10 subtests, Ruff complet, Mypy sur 44 fichiers, diff-check |
-| GitHub CI hébergée | `UNKNOWN` | Workflow ajouté localement, aucun run observé avant push |
+| GitHub CI hébergée | `PASS` sur `906786e` | [Run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735), Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 La validation Mypy porte sur `mypy src`; aucun passage de `mypy --strict`
-n'est revendiqué. Les gates locales ne prouvent ni YouTube live ni le
-chargement par des clients frais.
+n'est revendiqué. Le run hébergé valide uniquement `906786e`. Les gates locales
+et hébergées ne prouvent ni YouTube live ni le chargement par des clients frais.
 
 ## Ce qui reste hors périmètre
 

@@ -26,8 +26,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   terminal outcomes.
 - Final local quality validation: `844` tests plus `10` subtests, full Ruff,
   Mypy on all 44 source files, and `git diff --check` passed. Mypy was not run
-  with `--strict`. The GitHub Actions workflow exists in the local integration
-  candidate, but its first hosted execution remains `UNKNOWN` before push.
+  with `--strict`. Hosted GitHub Actions
+  [run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735)
+  passed on `906786e`, including Python 3.11, Python 3.12, and
+  packaging/runtime. This hosted evidence applies only to that SHA.
 - Deterministic research dossiers with `dossier.md` and `manifest.json`, safe
   absolute destinations, source hashes, timestamped evidence, coverage limits,
   and no generated-dossier ingestion into source indexes.

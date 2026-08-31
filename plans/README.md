@@ -41,7 +41,7 @@
 | Codex frais | `UNKNOWN` | Non exécuté |
 | Activation globale | `false` | Aucune promotion du quatrième skill |
 | Qualité locale | `PASS` | 844 tests + 10 subtests, Ruff complet, `mypy src` sur 44 fichiers et `git diff --check` |
-| GitHub CI hébergée | `UNKNOWN` | Workflow ajouté localement; aucune exécution GitHub observée avant push |
+| GitHub CI hébergée | `PASS` sur `906786e` | [Run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735), Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 [Artefacts JSON et Markdown](evidence/2026-08-31-cumulative-research-gates.md)
 
@@ -72,5 +72,5 @@ Web UI, extension, API hébergée, MCP writable, vectoriel, graphe et acquisitio
 automatique restent conditionnels. Aucun de ces éléments n'est implémenté ou
 autorisé par les plans actuels.
 
-Le workflow GitHub CI a été ajouté localement. Son exécution hébergée reste
-`UNKNOWN` avant push; les autres preuves mentionnées ici sont locales.
+Le run GitHub CI `33413953735` a passé sur `906786e`. Cette preuve ne couvre pas
+les commits ultérieurs; les autres preuves mentionnées ici restent locales.

@@ -88,7 +88,7 @@ Task 10 E2E, quality and docs
 | Codex frais | `UNKNOWN` |
 | Activation globale | `false` |
 | Qualité locale | `PASS`, 844 tests + 10 subtests, Ruff, Mypy 44 fichiers, diff-check |
-| GitHub CI hébergée | `UNKNOWN`, workflow ajouté localement mais pas exécuté avant push |
+| GitHub CI hébergée | `PASS` sur `906786e`, [run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735), trois jobs `PASS` |
 
 La pertinence `UNKNOWN` n'empêche pas une acquisition locale explicitement
 approuvée. Elle interdit un claim de qualité validée et toute activation
@@ -98,12 +98,14 @@ globale.
 
 Ordre strict :
 
-1. pousser le SHA et observer la première exécution CI hébergée;
-2. réaliser les 20 jugements humains de pertinence;
-3. lancer le canari YouTube live et les canaris frais Claude Code et Codex;
-4. seulement ensuite préparer un candidat global inerte et son digest;
-5. conserver web, extension, writable MCP, vectoriel et graphe hors du chemin
+1. réaliser les 20 jugements humains de pertinence;
+2. lancer le canari YouTube live et les canaris frais Claude Code et Codex;
+3. seulement ensuite préparer un candidat global inerte et son digest;
+4. conserver web, extension, writable MCP, vectoriel et graphe hors du chemin
    critique tant que leurs déclencheurs ne sont pas observés.
+
+Le run hébergé `33413953735` valide uniquement `906786e`; chaque SHA ultérieur
+requiert sa propre exécution CI.
 
 ## Handoff obligatoire
 

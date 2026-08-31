@@ -54,7 +54,7 @@ des quatre couches et du corpus source.
 | Codex frais | `UNKNOWN` | Asset statique validé, pas de session fraîche probante |
 | Activation globale | `false` | Aucune installation globale du quatrième skill ou du runtime |
 | Qualité locale | `PASS` | 844 tests + 10 subtests, Ruff complet, Mypy sur 44 fichiers source et diff-check |
-| GitHub CI hébergée | `UNKNOWN` | Workflow ajouté localement; aucune exécution GitHub observée avant push |
+| GitHub CI hébergée | `PASS` sur `906786e` | [Run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735) : Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 Un `UNKNOWN` ne bloque pas une acquisition locale de 1 à 5 IDs explicitement
 approuvés. Il bloque toute affirmation de qualité validée ou d'activation
@@ -64,17 +64,17 @@ globale.
 
 | Priorité | Action | Critère de sortie |
 |---:|---|---|
-| 1 | Observer la CI GitHub hébergée après push | Tous les jobs du workflow terminent sur le SHA publié |
-| 2 | Faire la revue humaine de pertinence | Exactement 20 résultats jugés, seuil de passage 16/20 |
-| 3 | Exécuter le canari YouTube live | Acquisition réelle bornée, résultat et erreurs consignés |
-| 4 | Exécuter les canaris clients frais | Claude Code et Codex découvrent le quatrième skill et respectent les deux confirmations |
-| 5 | Préparer un candidat global inerte | Préimages, diff expurgé, digest, rollback et approbation exacte |
-| 6 | Tester des sessions de recherche réelles | Dossiers utiles, limites de couverture et frictions consignées |
+| 1 | Faire la revue humaine de pertinence | Exactement 20 résultats jugés, seuil de passage 16/20 |
+| 2 | Exécuter le canari YouTube live | Acquisition réelle bornée, résultat et erreurs consignés |
+| 3 | Exécuter les canaris clients frais | Claude Code et Codex découvrent le quatrième skill et respectent les deux confirmations |
+| 4 | Préparer un candidat global inerte | Préimages, diff expurgé, digest, rollback et approbation exacte |
+| 5 | Tester des sessions de recherche réelles | Dossiers utiles, limites de couverture et frictions consignées |
 
 La validation locale assemblée a passé `844` tests et `10` subtests, Ruff sur
 `src tests scripts`, Mypy sur les 44 fichiers de `src`, et `git diff --check`.
 Ce résultat ne signifie pas que `mypy --strict` passe. Le workflow GitHub CI a
-été ajouté localement, mais son exécution hébergée reste `UNKNOWN` avant push.
+passé sur le SHA publié `906786e` via le run `33413953735`. Ce résultat est lié
+à ce SHA et ne valide aucun commit ultérieur.
 
 ## Évolutions conditionnelles
 

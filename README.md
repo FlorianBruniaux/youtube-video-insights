@@ -843,10 +843,12 @@ YouTube research and fresh Claude Code and Codex workflow canaries remain
 
 The assembled local validation passed `844` tests plus `10` subtests, full
 Ruff, Mypy on the 44 source files, and `git diff --check`. This is not a
-`mypy --strict` claim. A GitHub Actions workflow has been added locally, but no
-hosted run has been observed before push. Human relevance, live YouTube, and
-fresh Claude Code/Codex canaries therefore remain `UNKNOWN`, and global
-activation remains `false`.
+`mypy --strict` claim. Hosted GitHub Actions
+[run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735)
+passed on `906786e`: Python 3.11, Python 3.12, and packaging/runtime all passed.
+That evidence is bound to `906786e` and does not validate later commits. Human
+relevance, live YouTube, and fresh Claude Code/Codex canaries remain `UNKNOWN`,
+and global activation remains `false`.
 
 | Document | Purpose |
 |---|---|
