@@ -22,6 +22,7 @@ EXPECTED_COMMANDS = {
     "interactive",
     "list",
     "report",
+    "research",
     "run",
     "search",
     "setup",

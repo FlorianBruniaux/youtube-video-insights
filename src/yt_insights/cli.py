@@ -823,6 +823,7 @@ def config_show(
 from .cli_acquire import acquire
 from .cli_doctor import doctor_command
 from .cli_export import export_group
+from .cli_research import research_group
 from .cli_search import index_command, search_command
 from .cli_setup import setup_group
 
@@ -831,5 +832,6 @@ cli.add_command(acquire)
 cli.add_command(doctor_command)
 cli.add_command(export_group)
 cli.add_command(index_command)
+cli.add_command(research_group)
 cli.add_command(search_command)
 cli.add_command(setup_group)
