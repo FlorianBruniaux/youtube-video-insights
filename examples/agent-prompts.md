@@ -55,9 +55,10 @@ required_user_action literally and ask me before any mutation.
 Use youtube-cumulative-research for SESSION_ID. First run:
 `yt-insights research status SESSION_ID --json`
 Show the source timestamps and explicit coverage limits. If I confirm that I
-want newer evidence, run these exact commands with the latest returned revision:
-`yt-insights research decide SESSION_ID refresh --revision REVISION --idempotency-key KEY --json`
-`yt-insights research discover SESSION_ID --revision REVISION --json`
+want newer evidence, record that decision with the current revision:
+`yt-insights research decide SESSION_ID refresh --revision CURRENT_REVISION --idempotency-key KEY --json`
+Use DECISION_REVISION returned by that decide response for discovery:
+`yt-insights research discover SESSION_ID --revision DECISION_REVISION --json`
 `yt-insights research candidates SESSION_ID --json`
 Present at most ten candidates with their exact IDs, dates, channels, matched
 queries, and URLs. Do not approve or acquire any candidate until I choose the

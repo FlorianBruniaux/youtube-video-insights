@@ -55,3 +55,22 @@ def test_cumulative_examples_cover_the_stable_mutation_and_export_contract() -> 
     assert "SESSION_ID" in cumulative_prompts
     assert "VIDEO_ID_A VIDEO_ID_B" in cumulative_prompts
     assert "$PWD" in cumulative_prompts
+
+
+def test_refresh_prompt_uses_the_revision_returned_by_the_decision() -> None:
+    document = PROMPTS.read_text(encoding="utf-8")
+    prompt = " ".join(
+        _prompt_after_heading(
+            document, "Refresh stale evidence and review candidates"
+        ).split()
+    )
+
+    assert (
+        "research decide SESSION_ID refresh --revision CURRENT_REVISION "
+        "--idempotency-key KEY --json"
+    ) in prompt
+    assert "Use DECISION_REVISION returned by that decide response" in prompt
+    assert (
+        "research discover SESSION_ID --revision DECISION_REVISION --json"
+    ) in prompt
+    assert "research discover SESSION_ID --revision CURRENT_REVISION" not in prompt
