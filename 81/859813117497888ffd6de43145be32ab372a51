@@ -1,0 +1,31 @@
+src/yt_insights/web/__init__.py
+  s_0a442347250965::t_3b44e31c3fd75b 1
+tests/web/test_readers.py
+  s_0a442347250965::t_90ca6ee0030d44 1-80,85-133,136,140
+  s_0a442347250965::t_a6fac18f908f81 81-84,134-135,137-139
+tests/research/test_store.py
+  s_0a442347250965::t_6ce1c5623d6c2a 123-124
+  s_0a442347250965::t_90ca6ee0030d44 118-122,125-151
+src/yt_insights/research/store.py
+  s_0a442347250965::t_3b44e31c3fd75b 292-313
+src/yt_insights/web/readers.py
+  s_0a442347250965::t_650aee94a833e4 8,101
+  s_0a442347250965::t_ae738b48b3db84 272-275
+  s_0a442347250965::t_3b44e31c3fd75b 1-7,9-100,102-271,276-295
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "81859813117497888ffd6de43145be32ab372a51",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": null
+    }
+  }
+}
