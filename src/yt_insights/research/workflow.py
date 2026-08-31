@@ -369,36 +369,46 @@ class ResearchWorkflow:
         """Resume a failed stage or a lock-free orphaned acquisition."""
         if not isinstance(idempotency_key, str) or not idempotency_key:
             raise ValueError("idempotency key is required")
-        attempt = self._store.acquisition_attempt_for_retry(
+        with self._store.retry_execution_lock(
             session_id,
-            expected_revision=expected_revision,
-            idempotency_key=idempotency_key,
-        )
-        if attempt is not None:
-            with self._store.acquisition_execution_lock(attempt.attempt_id) as claimed:
-                if not claimed:
-                    return self._acquisition_in_progress(attempt)
-                reservation = self._store.claim_retry(
-                    session_id,
-                    expected_revision=expected_revision,
-                    idempotency_key=idempotency_key,
-                    acquisition_attempt_id=attempt.attempt_id,
-                )
-                return self._resume_retry(reservation, idempotency_key)
-        reservation = self._store.claim_retry(
-            session_id,
-            expected_revision=expected_revision,
-            idempotency_key=idempotency_key,
-        )
-        return self._resume_retry(reservation, idempotency_key)
+            idempotency_key,
+        ) as retry_claimed:
+            if not retry_claimed:
+                return self._retry_in_progress(session_id)
+            attempt = self._store.acquisition_attempt_for_retry(
+                session_id,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            )
+            if attempt is not None:
+                with self._store.acquisition_execution_lock(
+                    attempt.attempt_id
+                ) as acquisition_claimed:
+                    if not acquisition_claimed:
+                        return self._acquisition_in_progress(attempt)
+                    reservation = self._store.claim_retry(
+                        session_id,
+                        expected_revision=expected_revision,
+                        idempotency_key=idempotency_key,
+                        acquisition_attempt_id=attempt.attempt_id,
+                        reclaim_incomplete=True,
+                    )
+                    return self._resume_retry(reservation, idempotency_key)
+            reservation = self._store.claim_retry(
+                session_id,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+                reclaim_incomplete=True,
+            )
+            return self._resume_retry(reservation, idempotency_key)
 
     def _resume_retry(
         self,
         reservation: RetryReservation,
         idempotency_key: str,
     ) -> ResearchResponse:
+        session_id = reservation.session.session_id
         if not reservation.claimed:
-            session_id = reservation.session.session_id
             return ResearchResponse(
                 reservation.session,
                 self._store.get_latest_assessment(session_id),
@@ -467,6 +477,15 @@ class ResearchWorkflow:
             "acquisition_in_progress",
         )
 
+    def _retry_in_progress(self, session_id: str) -> ResearchResponse:
+        session = self._store.get_session(session_id)
+        return ResearchResponse(
+            session,
+            self._store.get_latest_assessment(session_id),
+            self._store.list_candidates(session_id) or None,
+            "retry_in_progress",
+        )
+
     def _continue_acquisition(
         self,
         attempt: AcquisitionAttempt,
@@ -528,22 +547,21 @@ class ResearchWorkflow:
                     raw_outcome.error_code,
                     raw_outcome.source_sha256,
                 )
-                self._store.record_acquisition_progress(
-                    session.session_id,
-                    expected_revision=session.revision,
-                    attempt_id=attempt.attempt_id,
-                    outcomes=(outcome,),
-                )
             except Exception:
-                return self._fail_acquisition(session, attempt)
-            if outcome.status is CandidateStatus.FAILED_RETRYABLE:
-                return self._fail_acquisition(session, attempt)
+                outcome = ResearchAcquisitionOutcome(
+                    attempt.attempt_id,
+                    video_id,
+                    CandidateStatus.FAILED_RETRYABLE,
+                    "acquisition_unavailable",
+                    None,
+                )
+            self._store.record_acquisition_progress(
+                session.session_id,
+                expected_revision=session.revision,
+                attempt_id=attempt.attempt_id,
+                outcomes=(outcome,),
+            )
 
-        reindexing = self._store.complete_acquisition_attempt(
-            session.session_id,
-            expected_revision=session.revision,
-            attempt_id=attempt.attempt_id,
-        )
         outcomes = tuple(
             outcome
             for outcome in self._store.get_session_history(
@@ -555,6 +573,20 @@ class ResearchWorkflow:
             outcome.status
             in {CandidateStatus.ACQUIRED, CandidateStatus.ALREADY_PRESENT}
             for outcome in outcomes
+        )
+        if (
+            not should_refresh
+            and any(
+                outcome.status is CandidateStatus.FAILED_RETRYABLE
+                for outcome in outcomes
+            )
+        ):
+            return self._fail_acquisition(session, attempt)
+
+        reindexing = self._store.complete_acquisition_attempt(
+            session.session_id,
+            expected_revision=session.revision,
+            attempt_id=attempt.attempt_id,
         )
         return self._finish_reindexing(reindexing, refresh=should_refresh)
 
@@ -587,7 +619,7 @@ class ResearchWorkflow:
         if refresh:
             try:
                 self._index_refresher(self._data_paths)
-            except (OSError, RuntimeError, TypeError, ValueError):
+            except Exception:
                 failed = self._store.record_failure(
                     session.session_id,
                     expected_revision=session.revision,

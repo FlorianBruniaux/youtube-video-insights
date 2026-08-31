@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sqlite3
 from datetime import UTC, date, datetime
 
 import pytest
@@ -805,7 +806,7 @@ def test_reindex_failure_is_retryable_without_redownloading(tmp_path) -> None:
     assert refresh_attempts == 2
 
 
-def test_acquisition_retry_reuses_persisted_inputs_and_preserves_successful_outcomes(
+def test_acquisition_retry_reuses_persisted_inputs_when_batch_has_no_progress(
     tmp_path,
 ) -> None:
     first = _candidate(video_id="zyx987WVUT0")
@@ -814,10 +815,10 @@ def test_acquisition_retry_reuses_persisted_inputs_and_preserves_successful_outc
         DiscoveryResult("yt-dlp", 1, (first, second), (), True)
     )
 
-    class PartialThenSuccessfulAcquisition:
+    class NoProgressThenSuccessfulAcquisition:
         def __init__(self) -> None:
             self.calls: list[tuple[tuple[str, ...], str, str | None]] = []
-            self.second_failed = False
+            self.failed_once: set[str] = set()
 
         def acquire_approved(
             self,
@@ -830,8 +831,8 @@ def test_acquisition_retry_reuses_persisted_inputs_and_preserves_successful_outc
             video_ids = tuple(candidate.video_id for candidate in candidates)
             self.calls.append((video_ids, language, cookies_from_browser))
             assert len(video_ids) == 1
-            if video_ids == (second.video_id,) and not self.second_failed:
-                self.second_failed = True
+            if video_ids[0] not in self.failed_once:
+                self.failed_once.add(video_ids[0])
                 raise LookupError("private downloader failure")
             return (
                 CandidateAcquisitionOutcome(
@@ -842,7 +843,7 @@ def test_acquisition_retry_reuses_persisted_inputs_and_preserves_successful_outc
                 ),
             )
 
-    acquisition = PartialThenSuccessfulAcquisition()
+    acquisition = NoProgressThenSuccessfulAcquisition()
     refresh_calls: list[DataPaths] = []
     workflow = _workflow(
         tmp_path,
@@ -885,6 +886,7 @@ def test_acquisition_retry_reuses_persisted_inputs_and_preserves_successful_outc
     assert acquisition.calls == [
         ((first.video_id,), "en", "firefox:research"),
         ((second.video_id,), "en", "firefox:research"),
+        ((first.video_id,), "en", "firefox:research"),
         ((second.video_id,), "en", "firefox:research"),
     ]
     assert retried.session.state is ResearchState.AWAITING_SUFFICIENCY
@@ -903,13 +905,132 @@ def test_acquisition_retry_reuses_persisted_inputs_and_preserves_successful_outc
         idempotency_key="retry-key",
     )
     assert replayed_retry.to_dict() == retried.to_dict()
-    assert len(acquisition.calls) == 3
+    assert len(acquisition.calls) == 4
     with pytest.raises(ValueError, match="idempotency"):
         workflow.retry(
             SESSION_ID,
             expected_revision=retried.session.revision,
             idempotency_key="retry-key",
         )
+
+
+def test_mixed_acquisition_persists_every_outcome_and_reindexes_once(tmp_path) -> None:
+    first = _candidate(video_id="zyx987WVUT0")
+    second = _candidate(video_id="zyx987WVUT1")
+    third = _candidate(video_id="zyx987WVUT2")
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (first, second, third), (), True)
+    )
+
+    class MixedAcquisition:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def acquire_approved(
+            self,
+            candidates: tuple[ResearchCandidate, ...],
+            *,
+            data_paths: DataPaths,
+            language: str,
+            cookies_from_browser: str | None = None,
+        ) -> tuple[CandidateAcquisitionOutcome, ...]:
+            video_id = candidates[0].video_id
+            self.calls.append(video_id)
+            if video_id == second.video_id:
+                raise LookupError("private second-video failure")
+            status = (
+                CandidateStatus.ACQUIRED
+                if video_id == first.video_id
+                else CandidateStatus.ALREADY_PRESENT
+            )
+            return (
+                CandidateAcquisitionOutcome(
+                    video_id,
+                    status,
+                    None,
+                    ("b" if video_id == first.video_id else "d") * 64,
+                ),
+            )
+
+    acquisition = MixedAcquisition()
+    refresh_calls: list[DataPaths] = []
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: refresh_calls.append(paths),
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(first.video_id, second.video_id, third.video_id),
+    )
+
+    response = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="mixed-acquire-key",
+        language="en",
+    )
+
+    assert acquisition.calls == [first.video_id, second.video_id, third.video_id]
+    assert len(refresh_calls) == 1
+    assert response.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert response.required_user_action == "confirm_sufficiency_or_refresh"
+    assert response.error_code is None
+    history = workflow._store.get_session_history(SESSION_ID)  # type: ignore[attr-defined]
+    assert history.acquisition_attempts[0].status == "completed"
+    assert [outcome.status for outcome in history.acquisition_outcomes] == [
+        CandidateStatus.ACQUIRED,
+        CandidateStatus.FAILED_RETRYABLE,
+        CandidateStatus.ALREADY_PRESENT,
+    ]
+
+
+def test_unexpected_index_database_error_is_bounded_and_retryable(tmp_path) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                candidate.video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+
+    def fail_refresh(paths: DataPaths) -> None:
+        raise sqlite3.DatabaseError("private database detail")
+
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=fail_refresh,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+
+    response = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="acquire-key",
+        language="fr",
+    )
+
+    assert response.session.state is ResearchState.FAILED_RETRYABLE
+    assert response.session.retry_target is ResearchState.REINDEXING
+    assert response.error_code == "index_refresh_failed"
+    assert "private database detail" not in json.dumps(response.to_dict())
 
 
 def test_released_attempt_lock_recovers_a_crashed_acquisition_without_duplicates(
@@ -1001,3 +1122,213 @@ def test_released_attempt_lock_recovers_a_crashed_acquisition_without_duplicates
         ((candidate.video_id,), "en", "firefox:research"),
         ((candidate.video_id,), "en", "firefox:research"),
     ]
+
+
+def test_reindex_retry_lock_replays_live_and_recovers_after_crash(tmp_path) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                candidate.video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+    retry_replays: list[ResearchResponse] = []
+    refresh_calls = 0
+    workflow: ResearchWorkflow
+    failed_revision = -1
+
+    def crashing_refresh(paths: DataPaths) -> None:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        if refresh_calls == 1:
+            raise RuntimeError("bounded first refresh failure")
+        if refresh_calls == 2:
+            retry_replays.append(
+                workflow.retry(
+                    SESSION_ID,
+                    expected_revision=failed_revision,
+                    idempotency_key="retry-key",
+                )
+            )
+            raise SystemExit("simulated reindex crash")
+
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=crashing_refresh,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+    failed = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="acquire-key",
+        language="fr",
+    )
+    failed_revision = failed.session.revision
+
+    with pytest.raises(SystemExit, match="simulated reindex crash"):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=failed_revision,
+            idempotency_key="retry-key",
+        )
+    crashed = workflow.status(SESSION_ID).session
+    with pytest.raises(ValueError):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=crashed.revision,
+            idempotency_key="new-key",
+        )
+    recovered = workflow.retry(
+        SESSION_ID,
+        expected_revision=failed_revision,
+        idempotency_key="retry-key",
+    )
+
+    assert retry_replays[0].error_code == "retry_in_progress"
+    assert recovered.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert refresh_calls == 3
+    assert len(acquisition.calls) == 1
+
+
+def test_assessment_retry_lock_replays_live_and_recovers_after_crash(tmp_path) -> None:
+    retry_replays: list[ResearchResponse] = []
+    workflow: ResearchWorkflow
+    failed_revision = -1
+
+    class CrashAssessmentReader(FakeEvidenceReader):
+        def __init__(self) -> None:
+            super().__init__()
+            self.phase = "initial_failure"
+
+        def capture_snapshot(self) -> DatabaseSnapshot:
+            if self.phase == "initial_failure":
+                raise AssessmentRetryableError("bounded initial assessment failure")
+            if self.phase == "crash":
+                retry_replays.append(
+                    workflow.retry(
+                        SESSION_ID,
+                        expected_revision=failed_revision,
+                        idempotency_key="retry-key",
+                    )
+                )
+                self.phase = "ready"
+                raise SystemExit("simulated assessment crash")
+            return super().capture_snapshot()
+
+    reader = CrashAssessmentReader()
+    workflow = _workflow(tmp_path, reader)
+    failed = workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    failed_revision = failed.session.revision
+    reader.phase = "crash"
+
+    with pytest.raises(SystemExit, match="simulated assessment crash"):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=failed_revision,
+            idempotency_key="retry-key",
+        )
+    crashed = workflow.status(SESSION_ID).session
+    with pytest.raises(ValueError):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=crashed.revision,
+            idempotency_key="new-key",
+        )
+    recovered = workflow.retry(
+        SESSION_ID,
+        expected_revision=failed_revision,
+        idempotency_key="retry-key",
+    )
+
+    assert retry_replays[0].error_code == "retry_in_progress"
+    assert recovered.session.state is ResearchState.AWAITING_SUFFICIENCY
+
+
+def test_discovery_retry_lock_replays_live_and_recovers_after_crash(tmp_path) -> None:
+    candidate = _candidate()
+    retry_replays: list[ResearchResponse] = []
+    workflow: ResearchWorkflow
+    failed_revision = -1
+
+    class CrashDiscoveryProvider(FakeDiscoveryProvider):
+        def __init__(self) -> None:
+            super().__init__(
+                DiscoveryResult("yt-dlp", 1, (candidate,), (), True)  # type: ignore[arg-type]
+            )
+            self.phase = "initial_failure"
+
+        def discover(
+            self, queries: tuple[QuerySpec, ...], *, limit: int = 10
+        ) -> DiscoveryResult:
+            if self.phase == "initial_failure":
+                raise RuntimeError("bounded initial discovery failure")
+            if self.phase == "crash":
+                retry_replays.append(
+                    workflow.retry(
+                        SESSION_ID,
+                        expected_revision=failed_revision,
+                        idempotency_key="retry-key",
+                    )
+                )
+                self.phase = "ready"
+                raise SystemExit("simulated discovery crash")
+            return DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+
+    provider = CrashDiscoveryProvider()
+    workflow = _workflow(tmp_path, FakeEvidenceReader(), provider)
+    workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="refresh",
+        idempotency_key="refresh-key",
+    )
+    failed = workflow.discover(SESSION_ID, expected_revision=2)
+    failed_revision = failed.session.revision
+    provider.phase = "crash"
+
+    with pytest.raises(SystemExit, match="simulated discovery crash"):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=failed_revision,
+            idempotency_key="retry-key",
+        )
+    crashed = workflow.status(SESSION_ID).session
+    with pytest.raises(ValueError):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=crashed.revision,
+            idempotency_key="new-key",
+        )
+    recovered = workflow.retry(
+        SESSION_ID,
+        expected_revision=failed_revision,
+        idempotency_key="retry-key",
+    )
+
+    assert retry_replays[0].error_code == "retry_in_progress"
+    assert recovered.session.state is ResearchState.AWAITING_CANDIDATES

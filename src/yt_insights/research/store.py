@@ -170,13 +170,32 @@ class ResearchStore:
     @contextmanager
     def acquisition_execution_lock(self, attempt_id: str) -> Iterator[bool]:
         """Claim a process-owned, crash-safe lock for one acquisition attempt."""
+        with self._execution_lock("acquisition", attempt_id) as claimed:
+            yield claimed
+
+    @contextmanager
+    def retry_execution_lock(
+        self,
+        session_id: str,
+        idempotency_key: str,
+    ) -> Iterator[bool]:
+        """Claim a process-owned lock across retry reservation and execution."""
+        with self._execution_lock(
+            "retry",
+            f"{session_id}\x00{idempotency_key}",
+        ) as claimed:
+            yield claimed
+
+    @contextmanager
+    def _execution_lock(self, namespace: str, identity: str) -> Iterator[bool]:
         if (
-            not isinstance(attempt_id, str)
-            or not attempt_id
-            or len(attempt_id.encode("utf-8")) > 1_024
+            not isinstance(identity, str)
+            or not identity
+            or len(identity.encode("utf-8")) > 2_048
+            or namespace not in {"acquisition", "retry"}
         ):
-            raise ValueError("attempt ID is invalid")
-        lock_directory = self._path.parent / ".research-acquisition-locks"
+            raise ValueError("execution lock identity is invalid")
+        lock_directory = self._path.parent / ".research-operation-locks"
         try:
             lock_directory.mkdir(mode=0o700)
         except FileExistsError:
@@ -185,7 +204,7 @@ class ResearchStore:
         if not stat.S_ISDIR(directory_stat.st_mode) or stat.S_ISLNK(
             directory_stat.st_mode
         ):
-            raise RuntimeError("acquisition lock directory is unsafe")
+            raise RuntimeError("research lock directory is unsafe")
 
         directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
         directory_flags |= getattr(os, "O_CLOEXEC", 0)
@@ -194,7 +213,9 @@ class ResearchStore:
         lock_fd: int | None = None
         claimed = False
         try:
-            lock_name = hashlib.sha256(attempt_id.encode("utf-8")).hexdigest()
+            lock_name = hashlib.sha256(
+                f"{namespace}\x00{identity}".encode("utf-8")
+            ).hexdigest()
             lock_flags = os.O_RDWR | os.O_CREAT
             lock_flags |= getattr(os, "O_CLOEXEC", 0)
             lock_flags |= getattr(os, "O_NOFOLLOW", 0)
@@ -206,7 +227,7 @@ class ResearchStore:
             )
             lock_stat = os.fstat(lock_fd)
             if not stat.S_ISREG(lock_stat.st_mode):
-                raise RuntimeError("acquisition lock file is unsafe")
+                raise RuntimeError("research lock file is unsafe")
             os.fchmod(lock_fd, 0o600)
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -642,6 +663,7 @@ class ResearchStore:
         expected_revision: int,
         idempotency_key: str,
         acquisition_attempt_id: str | None = None,
+        reclaim_incomplete: bool = False,
     ) -> RetryReservation:
         request = {"expected_revision": expected_revision}
 
@@ -658,6 +680,7 @@ class ResearchStore:
                     expected_revision=expected_revision,
                     request=request,
                     acquisition_attempt_id=acquisition_attempt_id,
+                    reclaim_incomplete=reclaim_incomplete,
                 )
 
             session = self._expected(
@@ -1113,6 +1136,7 @@ class ResearchStore:
         expected_revision: int,
         request: dict[str, int],
         acquisition_attempt_id: str | None,
+        reclaim_incomplete: bool,
     ) -> RetryReservation:
         if (
             row["session_id"] != session_id
@@ -1133,6 +1157,7 @@ class ResearchStore:
             raise ValueError("stored retry result is invalid")
         if (
             result_payload is None
+            and reclaim_incomplete
             and acquisition_attempt_id is not None
             and target_value == ResearchState.ACQUIRING.value
         ):
@@ -1187,17 +1212,44 @@ class ResearchStore:
                 attempt,
                 None,
             )
+        if result_payload is None and reclaim_incomplete:
+            target = ResearchState(target_value)
+            if target is ResearchState.ACQUIRING:
+                raise ValueError("retry acquisition attempt is required")
+            session = self._session(connection, session_id)
+            if session.state is ResearchState.FAILED_RETRYABLE:
+                if session.retry_target is not target:
+                    raise ValueError("retry reservation is not recoverable")
+                session = self._transition(
+                    connection,
+                    session,
+                    target,
+                    "retry_reclaimed",
+                    request,
+                    retry_target=None,
+                )
+                stored["claim"] = _session_payload(session)
+                stored["error_code"] = None
+                connection.execute(
+                    """UPDATE research_decisions SET payload_json = ?
+                    WHERE idempotency_key = ?""",
+                    (_canonical_json(stored), row["idempotency_key"]),
+                )
+            elif session.state is not target:
+                raise ValueError("retry reservation is not recoverable")
+            return RetryReservation(
+                session,
+                target,
+                True,
+                None,
+                None,
+            )
         return RetryReservation(
             _session_from_payload(snapshot),
             ResearchState(target_value),
             False,
             None,
-            (
-                "acquisition_in_progress"
-                if result_payload is None
-                and target_value == ResearchState.ACQUIRING.value
-                else error_code
-            ),
+            "retry_in_progress" if result_payload is None else error_code,
         )
 
     def _attempt_from_row(self, row: sqlite3.Row) -> AcquisitionAttempt:

@@ -93,6 +93,13 @@ def _emit(
             message="This acquisition is already running. Retry after it finishes or exits.",
         )
         return
+    if payload["error_code"] == "retry_in_progress":
+        _error(
+            as_json=as_json,
+            code="retry_in_progress",
+            message="This retry is already running. Retry after it finishes or exits.",
+        )
+        return
     if payload["error_code"] == "index_refresh_failed":
         _error(
             as_json=as_json,
