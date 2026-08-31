@@ -1386,8 +1386,8 @@ def test_partial_retry_finalizes_after_failure_without_reacquiring(tmp_path) -> 
         idempotency_key="partial-retry-key",
     )
 
-    assert terminal.session.state is ResearchState.FAILED_RETRYABLE
-    assert terminal.session.retry_target is ResearchState.ACQUIRING
+    assert terminal.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert terminal.required_user_action == "confirm_sufficiency_or_refresh"
     assert replayed.session == terminal.session
     assert replayed.error_code == "partial_acquisition_failed"
     assert tuple(acquisition.calls) == calls_before_replay

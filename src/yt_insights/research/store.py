@@ -824,6 +824,19 @@ class ResearchStore:
                         stored = json.loads(row["payload_json"])
                         if isinstance(stored, dict) and stored.get("result") is None:
                             raise ValueError("another retry reservation is incomplete")
+            if (
+                decision is not None
+                and session.state is ResearchState.AWAITING_SUFFICIENCY
+            ):
+                if target_value != ResearchState.ACQUIRING.value:
+                    return None
+                row = connection.execute(
+                    """SELECT * FROM research_acquisition_attempts
+                    WHERE session_id = ? AND status = 'failed_retryable'
+                    ORDER BY created_at DESC, attempt_id DESC LIMIT 1""",
+                    (session_id,),
+                ).fetchone()
+                return None if row is None else self._attempt_from_row(row)
             if session.state in {
                 ResearchState.REINDEXING,
                 ResearchState.ASSESSING,
@@ -1428,6 +1441,28 @@ class ResearchStore:
         if result_payload is None and reclaim_incomplete:
             target = ResearchState(target_value)
             session = self._session(connection, session_id)
+            if (
+                target is ResearchState.ACQUIRING
+                and session.state is ResearchState.AWAITING_SUFFICIENCY
+                and acquisition_attempt_id is not None
+            ):
+                attempt_row = connection.execute(
+                    """SELECT * FROM research_acquisition_attempts
+                    WHERE attempt_id = ? AND session_id = ?
+                    AND status = 'failed_retryable'""",
+                    (acquisition_attempt_id, session_id),
+                ).fetchone()
+                if attempt_row is None:
+                    raise ValueError("retry acquisition attempt differs")
+                attempt = self._attempt_from_row(attempt_row)
+                return RetryReservation(
+                    session,
+                    target,
+                    True,
+                    attempt,
+                    "partial_acquisition_failed",
+                    finalize_only=True,
+                )
             terminal_state = {
                 ResearchState.ACQUIRING: ResearchState.AWAITING_SUFFICIENCY,
                 ResearchState.REINDEXING: ResearchState.AWAITING_SUFFICIENCY,
