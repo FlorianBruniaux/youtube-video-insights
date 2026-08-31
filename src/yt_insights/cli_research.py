@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from contextlib import ExitStack
 from datetime import UTC
 from pathlib import Path
 from uuid import uuid4
@@ -17,7 +18,11 @@ from .config import load_config
 from .research.acquisition import ResearchAcquisitionService
 from .research.assessment import SQLiteEvidenceReader
 from .research.discovery import YtDlpDiscoveryProvider
-from .research.dossier import DossierExportRequest, DossierExportResult
+from .research.dossier import (
+    DossierExportRequest,
+    DossierExportResult,
+    bind_dossier_output_root,
+)
 from .research.models import FreshnessProfile
 from .research.store import ResearchStore
 from .research.workflow import (
@@ -522,6 +527,8 @@ def export_command(
     as_json: bool,
 ) -> None:
     """Export stored evidence without generating model-authored prose."""
+    root_stack = ExitStack()
+    bound_root = None
     if output is not None:
         try:
             output_directory = _explicit_export_path(output)
@@ -535,14 +542,13 @@ def export_command(
     else:
         try:
             configured_root = load_config({}).research_output_root
-            if (
-                configured_root is None
-                or not configured_root.is_absolute()
-                or configured_root.is_symlink()
-                or not configured_root.is_dir()
-            ):
+            if configured_root is None or not configured_root.is_absolute():
                 raise ValueError("research output root is not configured")
+            bound_root = root_stack.enter_context(
+                bind_dossier_output_root(configured_root)
+            )
         except (OSError, RuntimeError, TypeError, ValueError):
+            root_stack.close()
             _error(
                 as_json=as_json,
                 code="invalid_export_request",
@@ -554,9 +560,12 @@ def export_command(
     try:
         workflow = _workflow()
         if output is None:
+            if bound_root is None:
+                raise RuntimeError("research output root is unavailable")
             response = workflow.status(session_id)
-            topic_directory = output_directory / _topic_slug(response.session.topic)
-            topic_directory.mkdir(mode=0o755, exist_ok=True)
+            topic_directory = bound_root.ensure_topic_directory(
+                _topic_slug(response.session.topic)
+            )
             created_date = (
                 response.session.created_at.astimezone(UTC).date().isoformat()
             )
@@ -578,6 +587,8 @@ def export_command(
             message="Research export is unavailable for this session or destination.",
         )
         return
+    finally:
+        root_stack.close()
     _emit_export(result, as_json=as_json)
 
 

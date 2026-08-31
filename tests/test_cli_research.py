@@ -1086,6 +1086,42 @@ def test_research_export_rejects_a_symlink_configured_root_before_workflow(
     assert list(private_target.iterdir()) == []
 
 
+def test_research_export_rejects_an_intermediate_symlink_root_before_workflow(
+    tmp_path, monkeypatch
+) -> None:
+    from yt_insights import cli_research
+    from yt_insights import config as config_module
+
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", tmp_path / "missing.toml")
+    private_target = tmp_path / "PRIVATE-INTERMEDIATE-ROOT-CANARY"
+    private_target.mkdir()
+    configured_parent = tmp_path / "configured"
+    configured_parent.mkdir()
+    (configured_parent / "linked").symlink_to(
+        private_target,
+        target_is_directory=True,
+    )
+    configured_root = configured_parent / "linked" / "research"
+    (private_target / "research").mkdir()
+
+    def unexpected_workflow() -> object:
+        raise AssertionError("an intermediate symlink must not open research state")
+
+    monkeypatch.setattr(cli_research, "_workflow", unexpected_workflow)
+    result = CliRunner().invoke(
+        cli,
+        ["research", "export", "session", "--json"],
+        env={"YT_INSIGHTS_RESEARCH_OUTPUT_ROOT": str(configured_root)},
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {
+        "error": {"code": "invalid_export_request"},
+        "schema_version": 1,
+    }
+    assert list((private_target / "research").iterdir()) == []
+
+
 def test_research_export_bounds_missing_session_and_symlink_failures(
     tmp_path, monkeypatch
 ) -> None:

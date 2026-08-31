@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -278,6 +277,65 @@ def test_export_rejects_unsafe_destination_shapes_and_allows_another_root(tmp_pa
     link.symlink_to(target, target_is_directory=True)
     with pytest.raises(ValueError, match="symlink"):
         export_dossier(_request(link), store=store, package_version="1.2.3")
+
+
+def test_topic_directory_creation_rejects_an_intermediate_symlink_without_writing(
+    tmp_path: Path,
+) -> None:
+    """Following an intermediate configured-root symlink would redirect a write."""
+    import yt_insights.research.dossier as dossier
+
+    redirect_target = tmp_path / "PRIVATE-INTERMEDIATE-CANARY"
+    redirect_target.mkdir()
+    configured_parent = tmp_path / "configured"
+    configured_parent.mkdir()
+    (configured_parent / "linked").symlink_to(
+        redirect_target,
+        target_is_directory=True,
+    )
+    configured_root = configured_parent / "linked" / "research"
+    (redirect_target / "research").mkdir()
+
+    with pytest.raises(OSError):
+        dossier.ensure_dossier_topic_directory(configured_root, "local-ai")
+
+    assert list((redirect_target / "research").iterdir()) == []
+
+
+def test_topic_directory_creation_rejects_root_replacement_without_redirecting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A root swap before mkdir must neither redirect nor retain the owned directory."""
+    import yt_insights.research.dossier as dossier
+
+    configured_root = tmp_path / "research"
+    configured_root.mkdir()
+    moved_root = tmp_path / "moved-research"
+    replacement_root = tmp_path / "replacement-research"
+    replacement_root.mkdir()
+    original_mkdir = dossier.os.mkdir
+    original_rename = dossier.os.rename
+    swapped = False
+
+    def swap_root_before_creation(
+        name: object,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        nonlocal swapped
+        if not swapped and name == "local-ai" and kwargs.get("dir_fd") is not None:
+            swapped = True
+            original_rename(configured_root, moved_root)
+            original_rename(replacement_root, configured_root)
+        return original_mkdir(name, *args, **kwargs)
+
+    monkeypatch.setattr(dossier.os, "mkdir", swap_root_before_creation)
+
+    with pytest.raises(ValueError, match="parent changed"):
+        dossier.ensure_dossier_topic_directory(configured_root, "local-ai")
+
+    assert not (configured_root / "local-ai").exists()
+    assert not (moved_root / "local-ai").exists()
 
 
 def test_export_preserves_destination_when_publication_is_interrupted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

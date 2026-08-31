@@ -7,6 +7,8 @@ import json
 import os
 import stat
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -59,6 +61,38 @@ class DossierExportResult:
             "manifest_sha256": self.manifest_sha256,
             "dossier_sha256": self.dossier_sha256,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundDossierOutputRoot:
+    root: Path
+    descriptor: int
+    identity: tuple[int, int]
+
+    def ensure_topic_directory(self, topic_slug: str) -> Path:
+        """Create or reopen one exact child while this root remains bound."""
+        return _ensure_bound_topic_directory(self, topic_slug)
+
+
+@contextmanager
+def bind_dossier_output_root(
+    root: Path,
+) -> Iterator[_BoundDossierOutputRoot]:
+    """Bind an existing absolute root without following any symlink component."""
+    _validate_output_root(root)
+    probe = root / ".yt-insights-root-probe"
+    descriptor, identity = _open_parent_directory(probe)
+    try:
+        _verify_parent_path(probe, identity)
+        yield _BoundDossierOutputRoot(root, descriptor, identity)
+    finally:
+        os.close(descriptor)
+
+
+def ensure_dossier_topic_directory(root: Path, topic_slug: str) -> Path:
+    """Safely create the topic parent used by a configured default export."""
+    with bind_dossier_output_root(root) as bound_root:
+        return bound_root.ensure_topic_directory(topic_slug)
 
 
 def export_dossier(
@@ -115,6 +149,105 @@ def _validate_request(request: DossierExportRequest, package_version: str) -> No
         raise TypeError("force must be a boolean")
     if not isinstance(package_version, str) or not package_version:
         raise ValueError("package version must be non-empty")
+
+
+def _validate_output_root(root: Path) -> None:
+    if not isinstance(root, Path):
+        raise TypeError("research output root must be a Path")
+    if not root.is_absolute():
+        raise ValueError("research output root must be absolute")
+    if ".." in root.parts:
+        raise ValueError("research output root must not contain path traversal")
+
+
+def _validate_topic_slug(topic_slug: str) -> None:
+    if (
+        not isinstance(topic_slug, str)
+        or not 1 <= len(topic_slug) <= 64
+        or topic_slug.startswith("-")
+        or topic_slug.endswith("-")
+        or any(
+            not character.isascii()
+            or not (character.islower() or character.isdigit() or character == "-")
+            for character in topic_slug
+        )
+    ):
+        raise ValueError("topic slug must be 1 to 64 lowercase ASCII slug characters")
+
+
+def _ensure_bound_topic_directory(
+    bound_root: _BoundDossierOutputRoot,
+    topic_slug: str,
+) -> Path:
+    _validate_topic_slug(topic_slug)
+    destination = bound_root.root / topic_slug
+    _verify_parent_path(destination, bound_root.identity)
+    existing_identity = _destination_identity(bound_root.descriptor, topic_slug)
+    if existing_identity is not None:
+        child_fd = _open_named_directory(
+            bound_root.descriptor,
+            topic_slug,
+            existing_identity,
+        )
+        os.close(child_fd)
+        _verify_parent_path(destination, bound_root.identity)
+        _require_directory_identity(
+            bound_root.descriptor,
+            topic_slug,
+            existing_identity,
+        )
+        return destination
+
+    created_identity: tuple[int, int] | None = None
+    try:
+        os.mkdir(topic_slug, mode=0o755, dir_fd=bound_root.descriptor)
+        created_identity = _destination_identity(bound_root.descriptor, topic_slug)
+        if created_identity is None:
+            raise RuntimeError("created topic directory disappeared")
+        child_fd = _open_named_directory(
+            bound_root.descriptor,
+            topic_slug,
+            created_identity,
+        )
+        try:
+            _fsync_directory(child_fd)
+        finally:
+            os.close(child_fd)
+        _verify_parent_path(destination, bound_root.identity)
+        _require_directory_identity(
+            bound_root.descriptor,
+            topic_slug,
+            created_identity,
+        )
+        _fsync_directory(bound_root.descriptor)
+        _verify_parent_path(destination, bound_root.identity)
+        _require_directory_identity(
+            bound_root.descriptor,
+            topic_slug,
+            created_identity,
+        )
+        return destination
+    except BaseException:
+        if created_identity is not None:
+            _remove_empty_owned_directory(
+                bound_root.descriptor,
+                topic_slug,
+                created_identity,
+            )
+        raise
+
+
+def _remove_empty_owned_directory(
+    parent_fd: int,
+    name: str,
+    expected_identity: tuple[int, int],
+) -> None:
+    try:
+        _require_directory_identity(parent_fd, name, expected_identity)
+        os.rmdir(name, dir_fd=parent_fd)
+        _fsync_directory(parent_fd)
+    except (FileNotFoundError, NotADirectoryError, OSError, ValueError):
+        return
 
 
 def _validate_destination(destination: Path) -> Path:
