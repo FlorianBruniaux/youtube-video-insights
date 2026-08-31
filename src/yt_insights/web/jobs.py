@@ -92,11 +92,14 @@ class JobExecutor:
                 raise JobQueueFull()
             job_id: str | None = None
             try:
+                self._evict_terminal_records_locked(reserve_slots=1)
+                if len(self._records) >= self._max_records:
+                    raise JobQueueFull()
                 job_id = self._new_unique_id_locked()
                 record = _JobRecord(job_id=job_id, kind=kind, status="queued")
                 self._records[job_id] = record
                 self._executor.submit(self._run, job_id, operation)
-            except Exception:
+            except BaseException:
                 if job_id is not None:
                     self._records.pop(job_id, None)
                 self._capacity.release()
@@ -131,12 +134,13 @@ class JobExecutor:
         with self._lock:
             record = self._records[job_id]
             record.status = "running"
+        status: JobStatus = "failed"
+        public_result: dict[str, object] | None = None
+        error_code: str | None = _ERROR_OPERATION_FAILED
         try:
             result = _bounded_result(operation())
-        except Exception:
-            status: JobStatus = "failed"
-            public_result: dict[str, object] | None = None
-            error_code: str | None = _ERROR_OPERATION_FAILED
+        except BaseException:
+            pass
         else:
             status = "succeeded"
             public_result = result
@@ -152,8 +156,11 @@ class JobExecutor:
                     self._evict_terminal_records_locked()
                 self._capacity.release()
 
-    def _evict_terminal_records_locked(self) -> None:
-        while len(self._records) > self._max_records and self._terminal_ids:
+    def _evict_terminal_records_locked(self, *, reserve_slots: int = 0) -> None:
+        while (
+            len(self._records) + reserve_slots > self._max_records
+            and self._terminal_ids
+        ):
             job_id = self._terminal_ids.popleft()
             self._records.pop(job_id, None)
 
@@ -176,7 +183,9 @@ def _new_job_id() -> str:
 def _bounded_result(value: Mapping[str, object]) -> dict[str, object]:
     if not isinstance(value, Mapping):
         raise TypeError("operation result must be a mapping")
-    encoded = json.dumps(value, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
+    encoded = json.dumps(
+        dict(value), ensure_ascii=False, separators=(",", ":"), allow_nan=False
+    )
     if len(encoded.encode("utf-8")) > _MAX_RESULT_BYTES:
         return {"truncated": True}
     decoded = json.loads(encoded)

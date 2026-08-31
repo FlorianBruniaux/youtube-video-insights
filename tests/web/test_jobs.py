@@ -4,6 +4,7 @@ import json
 import threading
 import time
 from collections.abc import Callable, Iterator
+from types import MappingProxyType
 
 import pytest
 
@@ -156,7 +157,7 @@ def test_only_terminal_records_are_evicted_in_completion_order() -> None:
     """Evicting a queued or running record would make an accepted job unobservable."""
     first_release = threading.Event()
     first_started = threading.Event()
-    jobs = JobExecutor(max_queued=2, max_records=1, id_factory=iter_ids())
+    jobs = JobExecutor(max_queued=2, max_records=2, id_factory=iter_ids())
 
     def first_operation() -> dict[str, object]:
         first_started.set()
@@ -170,10 +171,13 @@ def test_only_terminal_records_are_evicted_in_completion_order() -> None:
 
         first_release.set()
         wait_until(lambda: jobs.get(second.job_id).status == "succeeded")
+        third = jobs.submit("source_preview", lambda: {"order": 3})
+        wait_until(lambda: jobs.get(third.job_id).status == "succeeded")
 
         with pytest.raises(JobNotFound):
             jobs.get(first.job_id)
         assert jobs.get(second.job_id).result == {"order": 2}
+        assert jobs.get(third.job_id).result == {"order": 3}
     finally:
         first_release.set()
         jobs.close()
@@ -202,5 +206,90 @@ def test_invalid_operation_output_becomes_a_fixed_failure() -> None:
         wait_until(lambda: jobs.get(job.job_id).status == "failed")
 
         assert jobs.get(job.job_id).error_code == "operation_failed"
+    finally:
+        jobs.close()
+
+
+def test_admission_evicts_terminal_records_before_adding_a_running_record() -> None:
+    """A new accepted job must not temporarily exceed the public record ceiling."""
+    started = threading.Event()
+    release = threading.Event()
+    jobs = JobExecutor(max_queued=0, max_records=1, id_factory=iter_ids())
+
+    def block() -> dict[str, object]:
+        started.set()
+        assert release.wait(timeout=1.0)
+        return {"name": "second"}
+
+    try:
+        first = jobs.submit("discovery", lambda: {"name": "first"})
+        wait_until(lambda: jobs.get(first.job_id).status == "succeeded")
+
+        second = jobs.submit("acquisition", block)
+        assert started.wait(timeout=1.0)
+
+        with pytest.raises(JobNotFound):
+            jobs.get(first.job_id)
+        assert jobs.get(second.job_id).status == "running"
+    finally:
+        release.set()
+        jobs.close()
+
+
+def test_base_exception_publishes_failure_and_releases_capacity() -> None:
+    """A worker interruption must not strand an accepted mutation in running state."""
+    jobs = JobExecutor(max_queued=0, max_records=3, id_factory=iter_ids())
+
+    def interrupted() -> dict[str, object]:
+        raise KeyboardInterrupt("/private/corpus.sqlite3")
+
+    try:
+        failed = jobs.submit("discovery", interrupted)
+        wait_until(lambda: jobs.get(failed.job_id).status == "failed")
+
+        snapshot = jobs.get(failed.job_id)
+        assert snapshot.error_code == "operation_failed"
+        assert "/private" not in repr(snapshot)
+
+        succeeded = jobs.submit("acquisition", lambda: {"name": "next"})
+        wait_until(lambda: jobs.get(succeeded.job_id).status == "succeeded")
+    finally:
+        jobs.close()
+
+
+def test_base_exception_from_id_factory_releases_reserved_capacity() -> None:
+    """A failed ID generation must not consume the only admission reservation."""
+    calls = 0
+
+    def id_factory() -> str:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SystemExit("/private/id-source")
+        return "job-after-factory-failure"
+
+    jobs = JobExecutor(max_queued=0, max_records=3, id_factory=id_factory)
+
+    try:
+        with pytest.raises(SystemExit):
+            jobs.submit("discovery", lambda: {})
+
+        job = jobs.submit("discovery", lambda: {"name": "accepted"})
+        wait_until(lambda: jobs.get(job.job_id).status == "succeeded")
+    finally:
+        jobs.close()
+
+
+def test_mapping_implementations_are_accepted_as_public_results() -> None:
+    """Rejecting a valid Mapping implementation narrows the documented contract."""
+    jobs = JobExecutor(max_queued=0, max_records=3, id_factory=iter_ids())
+
+    try:
+        job = jobs.submit(
+            "discovery", lambda: MappingProxyType({"name": "mapping-proxy"})
+        )
+        wait_until(lambda: jobs.get(job.job_id).status == "succeeded")
+
+        assert jobs.get(job.job_id).result == {"name": "mapping-proxy"}
     finally:
         jobs.close()
