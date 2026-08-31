@@ -1,0 +1,23 @@
+plans/evidence/2026-08-31-cumulative-research-pilot-queries.json
+  s_0a442347250965::t_54b39d7914bdd7 1-76
+plans/evidence/2026-08-31-cumulative-research-gates.json
+  s_0a442347250965::t_7fcf3a1cebfe6d 1-79
+plans/evidence/2026-08-31-cumulative-research-gates.md
+  s_0a442347250965::t_7fcf3a1cebfe6d 1-77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "31bb316c1e1d2abdcd605d573bbf3f3f58a41860",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

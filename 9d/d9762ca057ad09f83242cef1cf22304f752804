@@ -1,0 +1,21 @@
+scripts/validate_cumulative_research_gates.py
+  s_0a442347250965::t_9942e4df7a7a8b 130-151
+tests/test_cumulative_research_gates.py
+  s_0a442347250965::t_fa1e75b24801e2 199-239
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "9dd9762ca057ad09f83242cef1cf22304f752804",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
