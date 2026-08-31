@@ -87,6 +87,35 @@ def _candidate(*, video_id: str = VIDEO_ID, status: CandidateStatus = CandidateS
     )
 
 
+def _prepare_acquisition_replay(store: ResearchStore) -> None:
+    _create(store)
+    store.record_assessment(
+        SESSION_ID,
+        expected_revision=0,
+        assessment=_assessment(),
+    )
+    store.decide_sufficiency(
+        SESSION_ID,
+        expected_revision=1,
+        sufficient=False,
+        idempotency_key="refresh",
+    )
+    store.record_candidates(
+        SESSION_ID,
+        expected_revision=2,
+        candidates=(_candidate(),),
+        provider_name="provider",
+        provider_version=1,
+        errors=(),
+    )
+    store.approve_candidates(
+        SESSION_ID,
+        expected_revision=3,
+        video_ids=(VIDEO_ID,),
+        idempotency_key="approve",
+    )
+
+
 def test_new_database_creates_schema_session_and_ordered_inputs(tmp_path: object) -> None:
     """Removing schema/session inserts must break this lifecycle contract."""
     store = _store(tmp_path)
@@ -181,6 +210,104 @@ def test_idempotent_decision_replay_returns_its_committed_result_after_progress(
     assert decided.state is ResearchState.DISCOVERING
     assert replayed == decided
     assert store.get_session(SESSION_ID).state is ResearchState.AWAITING_CANDIDATES
+
+
+def test_get_decision_replay_returns_only_the_indexed_persisted_result(
+    tmp_path: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    _create(store)
+    store.record_assessment(
+        SESSION_ID,
+        expected_revision=0,
+        assessment=_assessment(),
+    )
+    committed = store.decide_sufficiency(
+        SESSION_ID,
+        expected_revision=1,
+        sufficient=False,
+        idempotency_key="refresh",
+    )
+    monkeypatch.setattr(
+        store,
+        "get_session_history",
+        lambda _session_id: pytest.fail("full session history was loaded"),
+    )
+
+    replayed = store.get_decision_replay(
+        SESSION_ID,
+        expected_revision=1,
+        action="refresh",
+        request={"sufficient": False},
+        idempotency_key="refresh",
+    )
+
+    assert replayed == committed
+    assert (
+        store.get_decision_replay(
+            SESSION_ID,
+            expected_revision=1,
+            action="refresh",
+            request={"sufficient": False},
+            idempotency_key="missing",
+        )
+        is None
+    )
+
+
+def test_get_decision_replay_rejects_a_reused_key_with_changed_identity_or_payload(
+    tmp_path: object,
+) -> None:
+    store = _store(tmp_path)
+    _create(store)
+    store.record_assessment(
+        SESSION_ID,
+        expected_revision=0,
+        assessment=_assessment(),
+    )
+    store.decide_sufficiency(
+        SESSION_ID,
+        expected_revision=1,
+        sufficient=False,
+        idempotency_key="refresh",
+    )
+
+    mismatches = (
+        {
+            "session_id": "other-session",
+            "expected_revision": 1,
+            "action": "refresh",
+            "request": {"sufficient": False},
+        },
+        {
+            "session_id": SESSION_ID,
+            "expected_revision": 2,
+            "action": "refresh",
+            "request": {"sufficient": False},
+        },
+        {
+            "session_id": SESSION_ID,
+            "expected_revision": 1,
+            "action": "sufficient",
+            "request": {"sufficient": False},
+        },
+        {
+            "session_id": SESSION_ID,
+            "expected_revision": 1,
+            "action": "refresh",
+            "request": {"sufficient": True},
+        },
+    )
+    for mismatch in mismatches:
+        with pytest.raises(ValueError, match="idempotency"):
+            store.get_decision_replay(
+                mismatch["session_id"],
+                expected_revision=mismatch["expected_revision"],
+                action=mismatch["action"],
+                request=mismatch["request"],
+                idempotency_key="refresh",
+            )
 
 
 def test_legacy_raw_decision_payload_replays_its_historical_result(tmp_path: object) -> None:
@@ -317,6 +444,78 @@ def test_candidate_acquisition_and_reindexing_lifecycle_is_durable(tmp_path: obj
         ResearchState.REINDEXING,
         ResearchState.ASSESSING,
     ]
+
+
+def test_get_acquisition_replay_returns_only_the_indexed_exact_attempt(
+    tmp_path: object,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _store(tmp_path)
+    _prepare_acquisition_replay(store)
+    attempt = store.start_acquisition_attempt(
+        SESSION_ID,
+        expected_revision=4,
+        video_ids=(VIDEO_ID,),
+        idempotency_key="attempt-key",
+        attempt_id="attempt-1",
+        language="fr",
+    ).attempt
+    monkeypatch.setattr(
+        store,
+        "get_session_history",
+        lambda _session_id: pytest.fail("full session history was loaded"),
+    )
+
+    replayed = store.get_acquisition_replay(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="attempt-key",
+        language="fr",
+        cookies_from_browser=None,
+    )
+
+    assert replayed == attempt
+    assert (
+        store.get_acquisition_replay(
+            SESSION_ID,
+            expected_revision=4,
+            idempotency_key="missing",
+            language="fr",
+            cookies_from_browser=None,
+        )
+        is None
+    )
+
+
+def test_get_acquisition_replay_rejects_a_reused_key_with_changed_payload(
+    tmp_path: object,
+) -> None:
+    store = _store(tmp_path)
+    _prepare_acquisition_replay(store)
+    store.start_acquisition_attempt(
+        SESSION_ID,
+        expected_revision=4,
+        video_ids=(VIDEO_ID,),
+        idempotency_key="attempt-key",
+        attempt_id="attempt-1",
+        language="fr",
+    )
+
+    mismatches = (
+        ("other-session", 4, "fr", None),
+        (SESSION_ID, 5, "fr", None),
+        (SESSION_ID, 4, "en", None),
+        (SESSION_ID, 4, "fr", "firefox"),
+    )
+    for session_id, expected_revision, language, cookies_from_browser in mismatches:
+        with pytest.raises(ValueError, match="idempotency"):
+            store.get_acquisition_replay(
+                session_id,
+                expected_revision=expected_revision,
+                idempotency_key="attempt-key",
+                language=language,
+                cookies_from_browser=cookies_from_browser,
+            )
 
 
 def test_failed_acquisition_is_reclaimed_only_by_durable_retry_and_keeps_progress(

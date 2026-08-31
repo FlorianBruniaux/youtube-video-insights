@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import sqlite3
@@ -16,7 +15,11 @@ from typing import Protocol, TypeVar, runtime_checkable
 from yt_insights.catalog import CatalogError
 from yt_insights.research.dossier import DossierExportRequest, DossierExportResult
 from yt_insights.research.models import ResearchSession, ResearchState
-from yt_insights.research.store import ResearchRevisionConflict, ResearchStore
+from yt_insights.research.store import (
+    ResearchIdempotencyConflict,
+    ResearchRevisionConflict,
+    ResearchStore,
+)
 from yt_insights.research.workflow import ResearchResponse, ResearchWorkflow
 from yt_insights.search.service import SearchService
 from yt_insights.search.sqlite_fts import SearchIndexError
@@ -523,15 +526,21 @@ class WebApplication:
         idempotency_key: str,
         language: str,
     ) -> bool:
-        history = self._research_store.get_session_history(session_id)
-        return any(
-            attempt.idempotency_key == idempotency_key
-            and attempt.revision == expected_revision
-            and attempt.language == language
-            and attempt.cookies_from_browser is None
-            and attempt.status in {"running", "failed_retryable", "completed"}
-            for attempt in history.acquisition_attempts
-        )
+        try:
+            attempt = self._research_store.get_acquisition_replay(
+                session_id,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+                language=language,
+                cookies_from_browser=None,
+            )
+        except ResearchIdempotencyConflict:
+            return False
+        return attempt is not None and attempt.status in {
+            "running",
+            "failed_retryable",
+            "completed",
+        }
 
     def _is_retry_replay(
         self,
@@ -540,21 +549,17 @@ class WebApplication:
         expected_revision: int,
         idempotency_key: str,
     ) -> bool:
-        history = self._research_store.get_session_history(session_id)
-        for decision in history.decisions:
-            if (
-                decision.idempotency_key != idempotency_key
-                or decision.action != "retry"
-            ):
-                continue
-            try:
-                payload = json.loads(decision.payload_json)
-            except json.JSONDecodeError:
-                return False
-            return isinstance(payload, dict) and payload.get("request") == {
-                "expected_revision": expected_revision
-            }
-        return False
+        try:
+            replay = self._research_store.get_decision_replay(
+                session_id,
+                expected_revision=expected_revision,
+                action="retry",
+                request={"expected_revision": expected_revision},
+                idempotency_key=idempotency_key,
+            )
+        except ResearchIdempotencyConflict:
+            return False
+        return replay is not None
 
     def _synchronous_research_operation(
         self,

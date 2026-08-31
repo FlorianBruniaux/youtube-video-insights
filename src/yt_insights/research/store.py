@@ -164,6 +164,10 @@ class ResearchRevisionConflict(ValueError):
     """A public snapshot no longer matches the requested stored revision."""
 
 
+class ResearchIdempotencyConflict(ValueError):
+    """An existing durable replay key belongs to another request payload."""
+
+
 class ResearchStore:
     """Own a portable SQLite file and enforce workflow transitions atomically."""
 
@@ -676,6 +680,54 @@ class ResearchStore:
             outcomes = tuple(ResearchAcquisitionOutcome(row[0], row[1], CandidateStatus(row[2]), row[3], row[4]) for row in connection.execute("""SELECT outcomes.attempt_id, outcomes.video_id, outcomes.status, outcomes.error_code, outcomes.source_sha256 FROM research_acquisition_outcomes AS outcomes JOIN research_acquisition_attempts AS attempts ON attempts.attempt_id = outcomes.attempt_id WHERE attempts.session_id = ? ORDER BY attempts.created_at, outcomes.video_id""", (session_id,)))
             events = tuple(EventRecord(row[0], None if row[1] is None else ResearchState(row[1]), ResearchState(row[2]), row[3], row[4], _datetime(row[5])) for row in connection.execute("SELECT event_id, from_state, to_state, event_code, payload_json, created_at FROM research_events WHERE session_id = ? ORDER BY event_id", (session_id,)))
             return SessionHistory(assessments, decisions, attempts, outcomes, events)
+
+    def get_decision_replay(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        action: str,
+        request: object,
+        idempotency_key: str,
+    ) -> ResearchSession | None:
+        """Return one exact persisted decision result by primary key."""
+        with self._connection() as connection:
+            return self._idempotent_decision(
+                connection,
+                idempotency_key,
+                session_id,
+                expected_revision,
+                action,
+                request,
+                recover_legacy=False,
+            )
+
+    def get_acquisition_replay(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+        language: str,
+        cookies_from_browser: str | None,
+    ) -> AcquisitionAttempt | None:
+        """Return one exact acquisition attempt by its unique replay key."""
+        with self._connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM research_acquisition_attempts WHERE idempotency_key = ?",
+                (idempotency_key,),
+            ).fetchone()
+            if row is None:
+                return None
+            attempt = self._attempt_from_row(row)
+            if (
+                attempt.session_id != session_id
+                or attempt.revision != expected_revision
+                or attempt.language != language
+                or attempt.cookies_from_browser != cookies_from_browser
+            ):
+                raise ResearchIdempotencyConflict("idempotency key payload differs")
+            return attempt
 
     def get_public_snapshot(
         self,
@@ -1245,19 +1297,37 @@ class ResearchStore:
         stored = {"request": payload, "result": _session_payload(result)}
         connection.execute("INSERT INTO research_decisions VALUES (?, ?, ?, ?, ?, ?)", (key, session_id, expected_revision, action, _canonical_json(stored), self._timestamp()))
 
-    def _idempotent_decision(self, connection: sqlite3.Connection, key: str, session_id: str, expected_revision: int, action: str, payload: object) -> ResearchSession | None:
-        row = connection.execute("SELECT * FROM research_decisions WHERE idempotency_key = ?", (key,)).fetchone()
+    def _idempotent_decision(
+        self,
+        connection: sqlite3.Connection,
+        key: str,
+        session_id: str,
+        expected_revision: int,
+        action: str,
+        payload: object,
+        *,
+        recover_legacy: bool = True,
+    ) -> ResearchSession | None:
+        row = connection.execute(
+            "SELECT * FROM research_decisions WHERE idempotency_key = ?", (key,)
+        ).fetchone()
         if row is None:
             return None
         stored = json.loads(row["payload_json"])
-        if row["session_id"] != session_id or row["expected_revision"] != expected_revision or row["action"] != action:
-            raise ValueError("idempotency key payload differs")
+        if (
+            row["session_id"] != session_id
+            or row["expected_revision"] != expected_revision
+            or row["action"] != action
+        ):
+            raise ResearchIdempotencyConflict("idempotency key payload differs")
         if "request" not in stored:
             if stored != payload:
-                raise ValueError("idempotency key payload differs")
+                raise ResearchIdempotencyConflict("idempotency key payload differs")
+            if not recover_legacy:
+                return None
             return self._legacy_decision_result(connection, row)
         if stored.get("request") != payload:
-            raise ValueError("idempotency key payload differs")
+            raise ResearchIdempotencyConflict("idempotency key payload differs")
         result = stored.get("result")
         if not isinstance(result, dict):
             raise ValueError("stored decision result is invalid")

@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -17,7 +16,10 @@ from yt_insights.research.models import (
     ResearchSession,
     ResearchState,
 )
-from yt_insights.research.store import ResearchRevisionConflict
+from yt_insights.research.store import (
+    ResearchIdempotencyConflict,
+    ResearchRevisionConflict,
+)
 from yt_insights.search.models import SearchQuery
 from yt_insights.search.sqlite_fts import SearchIndexNotFound
 from yt_insights.web.api import PlanChanged, SourcePreviewRequest
@@ -126,8 +128,12 @@ class FakeStore:
         self.session = _session()
         self.missing = False
         self.error: Exception | None = None
-        self.history = SimpleNamespace(decisions=(), acquisition_attempts=())
-        self.history_calls: list[str] = []
+        self.decision_replay: ResearchSession | None = None
+        self.decision_replay_error: Exception | None = None
+        self.decision_replay_calls: list[tuple[str, int, str, object, str]] = []
+        self.acquisition_replay: object | None = None
+        self.acquisition_replay_error: Exception | None = None
+        self.acquisition_replay_calls: list[tuple[str, int, str, str, str | None]] = []
 
     def list_sessions(self, *, limit: int, offset: int) -> tuple[ResearchSession, ...]:
         self.calls.append((limit, offset))
@@ -142,8 +148,45 @@ class FakeStore:
         return self.session
 
     def get_session_history(self, session_id: str) -> object:
-        self.history_calls.append(session_id)
-        return self.history
+        raise AssertionError(f"full history loaded for {session_id}")
+
+    def get_decision_replay(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        action: str,
+        request: object,
+        idempotency_key: str,
+    ) -> ResearchSession | None:
+        self.decision_replay_calls.append(
+            (session_id, expected_revision, action, request, idempotency_key)
+        )
+        if self.decision_replay_error is not None:
+            raise self.decision_replay_error
+        return self.decision_replay
+
+    def get_acquisition_replay(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+        language: str,
+        cookies_from_browser: str | None,
+    ) -> object | None:
+        self.acquisition_replay_calls.append(
+            (
+                session_id,
+                expected_revision,
+                idempotency_key,
+                language,
+                cookies_from_browser,
+            )
+        )
+        if self.acquisition_replay_error is not None:
+            raise self.acquisition_replay_error
+        return self.acquisition_replay
 
 
 class FakeExports:
@@ -585,22 +628,23 @@ def test_state_race_inside_queued_work_is_workflow_conflict(
 
 def test_queued_acquisition_preserves_an_exact_durable_replay(
     services: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     services.store.session = _session(
         state=ResearchState.AWAITING_SUFFICIENCY,
         revision=9,
     )
-    services.store.history = SimpleNamespace(
-        decisions=(),
-        acquisition_attempts=(
-            SimpleNamespace(
-                idempotency_key="acquisition-1",
-                revision=6,
-                language="fr",
-                cookies_from_browser=None,
-                status="completed",
-            ),
-        ),
+    services.store.acquisition_replay = SimpleNamespace(
+        idempotency_key="acquisition-1",
+        revision=6,
+        language="fr",
+        cookies_from_browser=None,
+        status="completed",
+    )
+    monkeypatch.setattr(
+        services.store,
+        "get_session_history",
+        lambda _session_id: pytest.fail("full session history was loaded"),
     )
 
     response = services.app.handle(
@@ -616,26 +660,26 @@ def test_queued_acquisition_preserves_an_exact_durable_replay(
     assert services.workflow.acquisition_calls == [
         (SESSION_ID, 6, "acquisition-1", "fr")
     ]
+    assert services.store.acquisition_replay_calls == [
+        (SESSION_ID, 6, "acquisition-1", "fr", None),
+        (SESSION_ID, 6, "acquisition-1", "fr", None),
+    ]
+    assert services.store.get_calls == [SESSION_ID, SESSION_ID]
 
 
 def test_queued_retry_preserves_an_exact_durable_replay(
     services: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     services.store.session = _session(state=ResearchState.COMPLETED, revision=10)
-    services.store.history = SimpleNamespace(
-        acquisition_attempts=(),
-        decisions=(
-            SimpleNamespace(
-                idempotency_key="retry-1",
-                action="retry",
-                payload_json=json.dumps(
-                    {
-                        "request": {"expected_revision": 7},
-                        "result": {"session_id": SESSION_ID},
-                    }
-                ),
-            ),
-        ),
+    services.store.decision_replay = _session(
+        state=ResearchState.ASSESSING,
+        revision=8,
+    )
+    monkeypatch.setattr(
+        services.store,
+        "get_session_history",
+        lambda _session_id: pytest.fail("full session history was loaded"),
     )
 
     response = services.app.handle(
@@ -649,6 +693,84 @@ def test_queued_retry_preserves_an_exact_durable_replay(
     result = services.jobs.submissions[0][1]()
     assert result["session"]["revision"] == 5
     assert services.workflow.retry_calls == [(SESSION_ID, 7, "retry-1")]
+    assert services.store.decision_replay_calls == [
+        (SESSION_ID, 7, "retry", {"expected_revision": 7}, "retry-1"),
+        (SESSION_ID, 7, "retry", {"expected_revision": 7}, "retry-1"),
+    ]
+    assert services.store.get_calls == [SESSION_ID, SESSION_ID]
+
+
+@pytest.mark.parametrize(
+    ("action", "payload", "error_attribute"),
+    (
+        (
+            "acquisition",
+            '{"expected_revision":6,"idempotency_key":"acquisition-1","language":"fr"}',
+            "acquisition_replay_error",
+        ),
+        (
+            "retry",
+            '{"expected_revision":7,"idempotency_key":"retry-1"}',
+            "decision_replay_error",
+        ),
+    ),
+)
+def test_replay_payload_mismatch_does_not_admit_a_stale_request(
+    services: SimpleNamespace,
+    action: str,
+    payload: str,
+    error_attribute: str,
+) -> None:
+    services.store.session = _session(state=ResearchState.COMPLETED, revision=10)
+    setattr(services.store, error_attribute, ResearchIdempotencyConflict())
+
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/{action}",
+            payload,
+        )
+    )
+
+    assert response.status == 409
+    assert response.json_body["error"] == {"code": "stale_revision"}
+    assert services.jobs.submissions == []
+
+
+@pytest.mark.parametrize(
+    ("action", "payload", "error_attribute"),
+    (
+        (
+            "acquisition",
+            '{"expected_revision":6,"idempotency_key":"acquisition-1","language":"fr"}',
+            "acquisition_replay_error",
+        ),
+        (
+            "retry",
+            '{"expected_revision":7,"idempotency_key":"retry-1"}',
+            "decision_replay_error",
+        ),
+    ),
+)
+def test_unexpected_targeted_replay_failure_is_internal(
+    services: SimpleNamespace,
+    action: str,
+    payload: str,
+    error_attribute: str,
+) -> None:
+    services.store.session = _session(state=ResearchState.COMPLETED, revision=10)
+    setattr(services.store, error_attribute, ValueError("corrupt private payload"))
+
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/{action}",
+            payload,
+        )
+    )
+
+    assert response.status == 500
+    assert response.json_body["error"] == {"code": "internal_error"}
+    assert b"corrupt private payload" not in response.body
+    assert services.jobs.submissions == []
 
 
 def test_missing_or_incompatible_queued_session_fails_before_submission(
@@ -831,10 +953,16 @@ def test_synchronous_post_preflight_state_race_is_workflow_conflict(
 
 def test_synchronous_decision_allows_the_domain_to_authorize_exact_replay(
     services: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     services.store.session = _session(
         state=ResearchState.AWAITING_CANDIDATES,
         revision=7,
+    )
+    monkeypatch.setattr(
+        services.store,
+        "get_session_history",
+        lambda _session_id: pytest.fail("full session history was loaded"),
     )
 
     response = services.app.handle(
