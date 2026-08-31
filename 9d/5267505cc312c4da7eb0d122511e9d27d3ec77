@@ -1,0 +1,23 @@
+docs/superpowers/plans/2026-08-31-cumulative-research-workflow.md
+  s_0a442347250965::t_2ad90a6f099430 64
+  s_0a442347250965::t_5bf586d9e2a4b2 5-6,11
+docs/superpowers/specs/2026-08-31-cumulative-research-workflow-design.md
+  s_0a442347250965::t_5bf586d9e2a4b2 3
+  s_0a442347250965::t_2ad90a6f099430 4-5
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "9d5267505cc312c4da7eb0d122511e9d27d3ec77",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
