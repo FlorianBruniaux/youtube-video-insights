@@ -1608,6 +1608,23 @@ def test_partial_retry_finalizes_after_failure_without_reacquiring(tmp_path) -> 
     assert tuple(acquisition.calls) == calls_before_replay
     assert len(refresh_calls) == refreshes_before_replay
 
+    completed = workflow.decide(
+        SESSION_ID,
+        expected_revision=replayed.session.revision,
+        decision="sufficient",
+        idempotency_key="accept-partial-key",
+    )
+    late_replay = workflow.retry(
+        SESSION_ID,
+        expected_revision=partial.session.revision,
+        idempotency_key="partial-retry-key",
+    )
+
+    assert late_replay.to_dict() == completed.to_dict()
+    assert late_replay.error_code is None
+    assert tuple(acquisition.calls) == calls_before_replay
+    assert len(refresh_calls) == refreshes_before_replay
+
 
 def test_status_exposes_safe_acquisition_history_grouped_by_attempt(tmp_path) -> None:
     candidate = _candidate()

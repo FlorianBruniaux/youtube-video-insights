@@ -189,6 +189,7 @@ class ResearchWorkflow:
             snapshot = self._store.get_public_snapshot(session.session_id)
             if snapshot.session.revision <= session.revision:
                 raise
+            error_code = None
         return self._response_from_snapshot(snapshot, error_code=error_code)
 
     def _response_from_snapshot(
