@@ -1,0 +1,24 @@
+tests/research/test_assessment.py
+  s_0a442347250965::t_03e887363bbd38 417
+  s_0a442347250965::t_ddeae27fe0abd4 421
+  s_0a442347250965::t_b3311234396e28 465-549
+src/yt_insights/research/assessment.py
+  s_0a442347250965::t_64c7f4dd20add7 172-178
+  s_0a442347250965::t_078e77dff61ed0 11,19,21,90-97,150-159,182-210,229-262,264-282
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "90bee603adddd63185c8d7ea5910ba92722a9620",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
