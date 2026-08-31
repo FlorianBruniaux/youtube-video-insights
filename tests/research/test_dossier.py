@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from pathlib import Path
 
@@ -23,6 +24,7 @@ from yt_insights.research.models import (
     ResearchAcquisitionOutcome,
     ResearchAssessment,
     ResearchCandidate,
+    ResearchState,
 )
 from yt_insights.research.store import ResearchStore
 
@@ -37,7 +39,7 @@ def _store(tmp_path: Path) -> ResearchStore:
     return ResearchStore(tmp_path / "research.sqlite3", now=lambda: NOW)
 
 
-def _completed_store(tmp_path: Path) -> ResearchStore:
+def _completed_store(tmp_path: Path, *, excerpt: str = "Local inference keeps models on-device.") -> ResearchStore:
     store = _store(tmp_path)
     store.create_session(
         session_id=SESSION_ID,
@@ -60,7 +62,7 @@ def _completed_store(tmp_path: Path) -> ResearchStore:
                 channel_id="channel-1",
                 rank=1,
                 url=WATCH_URL,
-                excerpt="Local inference keeps models on-device.",
+                excerpt=excerpt,
                 source_sha256="b" * 64,
             ),
         ),
@@ -158,7 +160,23 @@ def test_export_never_synthesizes_missing_assessment_evidence(tmp_path: Path) ->
         discovery_fingerprint="d" * 64,
     )
 
-    result = export_dossier(_request(tmp_path / "dossier"), store=store, package_version="1.2.3")
+    created = store.get_session(SESSION_ID)
+
+    class WaitingStore:
+        def get_session(self, session_id: str) -> object:
+            assert session_id == SESSION_ID
+            return replace(created, state=ResearchState.AWAITING_SUFFICIENCY)
+
+        def get_latest_assessment(self, session_id: str) -> object:
+            return store.get_latest_assessment(session_id)
+
+        def list_candidates(self, session_id: str) -> object:
+            return store.list_candidates(session_id)
+
+        def get_session_history(self, session_id: str) -> object:
+            return store.get_session_history(session_id)
+
+    result = export_dossier(_request(tmp_path / "dossier"), store=WaitingStore(), package_version="1.2.3")  # type: ignore[arg-type]
 
     manifest = json.loads((result.directory / "manifest.json").read_text())
     rendered = (result.directory / "dossier.md").read_text()
@@ -166,6 +184,53 @@ def test_export_never_synthesizes_missing_assessment_evidence(tmp_path: Path) ->
     assert manifest["evidence"] == []
     assert "No stored assessment is available." in rendered
     assert "No source-backed passages were stored." in rendered
+
+
+@pytest.mark.parametrize(
+    "state",
+    (
+        ResearchState.ASSESSING,
+        ResearchState.DISCOVERING,
+        ResearchState.ACQUIRING,
+        ResearchState.REINDEXING,
+        ResearchState.FAILED_RETRYABLE,
+        ResearchState.CANCELLED,
+    ),
+)
+def test_export_rejects_sessions_that_are_not_waiting_or_completed(tmp_path: Path, state: ResearchState) -> None:
+    """An active, failed, or cancelled workflow has no stable export contract."""
+    store = _completed_store(tmp_path)
+    completed = store.get_session(SESSION_ID)
+
+    class StateStore:
+        def get_session(self, session_id: str) -> object:
+            assert session_id == SESSION_ID
+            return replace(completed, state=state)
+
+        def get_latest_assessment(self, session_id: str) -> object:
+            return store.get_latest_assessment(session_id)
+
+        def list_candidates(self, session_id: str) -> object:
+            return store.list_candidates(session_id)
+
+        def get_session_history(self, session_id: str) -> object:
+            return store.get_session_history(session_id)
+
+    target = tmp_path / state.value
+    with pytest.raises(ValueError, match="completed or waiting"):
+        export_dossier(_request(target), store=StateStore(), package_version="1.2.3")  # type: ignore[arg-type]
+    assert not target.exists()
+
+
+def test_export_quotes_every_line_of_a_stored_excerpt(tmp_path: Path) -> None:
+    """Stored text must not be able to inject a Markdown section heading."""
+    store = _completed_store(tmp_path, excerpt="First line\n## injected")
+
+    result = export_dossier(_request(tmp_path / "dossier"), store=store, package_version="1.2.3")
+
+    rendered = (result.directory / "dossier.md").read_text()
+    assert "  > First line\n  > ## injected\n" in rendered
+    assert "\n## injected\n" not in rendered
 
 
 def test_existing_output_requires_force_and_force_requires_valid_prior_dossier(tmp_path: Path) -> None:
@@ -223,7 +288,7 @@ def test_export_preserves_destination_when_publication_is_interrupted(tmp_path: 
     original_rename = dossier.os.rename
 
     def fail_stage_publish(source: object, destination: object, *args: object, **kwargs: object) -> object:
-        if Path(destination) == target:
+        if destination == target.name:
             raise OSError("interrupted publication")
         return original_rename(source, destination, *args, **kwargs)
 
@@ -245,7 +310,7 @@ def test_export_refuses_a_destination_created_during_publication(tmp_path: Path,
     original_rename = dossier.os.rename
 
     def swap_destination(source: object, destination: object, *args: object, **kwargs: object) -> object:
-        if Path(destination) == target:
+        if destination == target.name:
             target.mkdir()
             (target / "intruder.txt").write_text("do not replace")
         return original_rename(source, destination, *args, **kwargs)
@@ -256,3 +321,35 @@ def test_export_refuses_a_destination_created_during_publication(tmp_path: Path,
         export_dossier(_request(target), store=store, package_version="1.2.3")
 
     assert (target / "intruder.txt").read_text() == "do not replace"
+
+
+def test_export_rejects_a_parent_swapped_after_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A parent pathname swap must neither redirect nor retain publication."""
+    store = _completed_store(tmp_path)
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    moved_parent = tmp_path / "moved-parent"
+    external = tmp_path / "external"
+    external.mkdir()
+    target = parent / "dossier"
+    import yt_insights.research.dossier as dossier
+
+    original_mkdir = dossier.os.mkdir
+    original_rename = dossier.os.rename
+    swapped = False
+
+    def swap_parent(path: object, *args: object, **kwargs: object) -> object:
+        nonlocal swapped
+        if not swapped and Path(path).name.startswith(".dossier.staging-"):
+            swapped = True
+            original_rename(parent, moved_parent)
+            parent.symlink_to(external, target_is_directory=True)
+        return original_mkdir(path, *args, **kwargs)
+
+    monkeypatch.setattr(dossier.os, "mkdir", swap_parent)
+
+    with pytest.raises(ValueError, match="parent changed"):
+        export_dossier(_request(target), store=store, package_version="1.2.3")
+
+    assert not (external / "dossier").exists()
+    assert not (moved_parent / "dossier").exists()

@@ -19,6 +19,7 @@ from .models import (
     ResearchAssessment,
     ResearchCandidate,
     ResearchSession,
+    ResearchState,
     SessionHistory,
 )
 from .store import ResearchStore
@@ -29,6 +30,14 @@ _DOSSIER_NAME = "dossier.md"
 _MANIFEST_NAME = "manifest.json"
 _EXPECTED_FILES = frozenset({_DOSSIER_NAME, _MANIFEST_NAME})
 _SHA256_HEX_LENGTH = 64
+_EXPORTABLE_STATES = frozenset(
+    {
+        ResearchState.AWAITING_SUFFICIENCY,
+        ResearchState.AWAITING_CANDIDATES,
+        ResearchState.COMPLETED,
+    }
+)
+_DIRECTORY_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +76,8 @@ def export_dossier(
     destination = _validate_destination(request.output_directory)
 
     session = store.get_session(request.session_id)
+    if session.state not in _EXPORTABLE_STATES:
+        raise ValueError("dossier export requires a completed or waiting session")
     assessment = store.get_latest_assessment(request.session_id)
     candidates = store.list_candidates(request.session_id)
     history = store.get_session_history(request.session_id)
@@ -299,7 +310,7 @@ def _render_dossier(
             lines.extend(
                 [
                     f"- [{passage.video_id}]({passage.url}) | query: {passage.query} | rank: {passage.rank} | source SHA-256: `{passage.source_sha256}`",
-                    f"  > {passage.excerpt}",
+                    *[f"  > {line}" for line in passage.excerpt.splitlines()],
                 ]
             )
     lines.extend(["", "## Newly acquired sources", ""])
@@ -345,27 +356,77 @@ def _date(value: date | None) -> str | None:
 
 
 def _publish(*, destination: Path, dossier_bytes: bytes, manifest_bytes: bytes, force: bool) -> None:
-    initial = _destination_identity(destination)
-    if initial is not None:
-        if not force:
-            raise FileExistsError("output directory already exists; use force to replace a validated prior dossier")
-        _validate_prior_dossier(destination)
-    stage = destination.parent / f".{destination.name}.staging-{uuid.uuid4().hex}"
+    parent_fd, parent_identity = _open_parent_directory(destination)
+    stage_name: str | None = None
+    stage_identity: tuple[int, int] | None = None
     try:
-        os.mkdir(stage, mode=0o700)
-        _write_private_file(stage / _DOSSIER_NAME, dossier_bytes)
-        _write_private_file(stage / _MANIFEST_NAME, manifest_bytes)
-        _validate_staged_dossier(stage, dossier_bytes, manifest_bytes)
-        _fsync_directory(stage)
-        _publish_stage(destination, stage, force=force, expected_identity=initial)
+        initial = _destination_identity(parent_fd, destination.name)
+        if initial is not None:
+            if not force:
+                raise FileExistsError("output directory already exists; use force to replace a validated prior dossier")
+            _validate_prior_dossier(parent_fd, destination.name, initial)
+        stage_name = f".{destination.name}.staging-{uuid.uuid4().hex}"
+        os.mkdir(stage_name, mode=0o700, dir_fd=parent_fd)
+        stage_identity = _destination_identity(parent_fd, stage_name)
+        if stage_identity is None:
+            raise RuntimeError("private staging directory disappeared")
+        stage_fd = _open_named_directory(parent_fd, stage_name, stage_identity)
+        try:
+            _write_private_file(stage_fd, _DOSSIER_NAME, dossier_bytes)
+            _write_private_file(stage_fd, _MANIFEST_NAME, manifest_bytes)
+            _validate_staged_dossier(stage_fd, dossier_bytes, manifest_bytes)
+            _fsync_directory(stage_fd)
+        finally:
+            os.close(stage_fd)
+        _publish_stage(
+            destination=destination,
+            parent_fd=parent_fd,
+            parent_identity=parent_identity,
+            stage_name=stage_name,
+            stage_identity=stage_identity,
+            force=force,
+            expected_identity=initial,
+        )
     except BaseException:
-        _remove_private_stage(stage)
+        if stage_name is not None and stage_identity is not None:
+            _remove_private_stage(parent_fd, stage_name, stage_identity)
+        raise
+    finally:
+        os.close(parent_fd)
+
+
+def _open_parent_directory(destination: Path) -> tuple[int, tuple[int, int]]:
+    descriptor = os.open(destination.anchor, _DIRECTORY_OPEN_FLAGS)
+    try:
+        for part in destination.parts[1:-1]:
+            next_descriptor = os.open(part, _DIRECTORY_OPEN_FLAGS, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = next_descriptor
+        details = os.fstat(descriptor)
+        if not stat.S_ISDIR(details.st_mode):
+            raise NotADirectoryError("output parent is not a directory")
+        return descriptor, (details.st_dev, details.st_ino)
+    except BaseException:
+        os.close(descriptor)
         raise
 
 
-def _destination_identity(destination: Path) -> tuple[int, int] | None:
-    entry = _lstat(destination)
-    if entry is None:
+def _verify_parent_path(destination: Path, expected_identity: tuple[int, int]) -> None:
+    try:
+        descriptor, identity = _open_parent_directory(destination)
+    except OSError as exc:
+        raise ValueError("output parent changed during publication") from exc
+    try:
+        if identity != expected_identity:
+            raise ValueError("output parent changed during publication")
+    finally:
+        os.close(descriptor)
+
+
+def _destination_identity(parent_fd: int, name: str) -> tuple[int, int] | None:
+    try:
+        entry = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
         return None
     if stat.S_ISLNK(entry.st_mode):
         raise ValueError("output directory must not be a symlink")
@@ -374,11 +435,26 @@ def _destination_identity(destination: Path) -> tuple[int, int] | None:
     return (entry.st_dev, entry.st_ino)
 
 
-def _write_private_file(path: Path, payload: bytes) -> None:
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = os.open(path, flags, 0o600)
+def _open_named_directory(parent_fd: int, name: str, expected_identity: tuple[int, int]) -> int:
+    current = _destination_identity(parent_fd, name)
+    if current != expected_identity:
+        raise ValueError("directory changed during publication")
+    descriptor = os.open(name, _DIRECTORY_OPEN_FLAGS, dir_fd=parent_fd)
+    opened = os.fstat(descriptor)
+    if (opened.st_dev, opened.st_ino) != expected_identity:
+        os.close(descriptor)
+        raise ValueError("directory changed during publication")
+    return descriptor
+
+
+def _require_directory_identity(parent_fd: int, name: str, expected_identity: tuple[int, int]) -> None:
+    if _destination_identity(parent_fd, name) != expected_identity:
+        raise ValueError("directory changed during publication")
+
+
+def _write_private_file(directory_fd: int, name: str, payload: bytes) -> None:
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(name, flags, 0o600, dir_fd=directory_fd)
     try:
         offset = 0
         while offset < len(payload):
@@ -388,65 +464,108 @@ def _write_private_file(path: Path, payload: bytes) -> None:
         os.close(descriptor)
 
 
-def _validate_staged_dossier(stage: Path, dossier_bytes: bytes, manifest_bytes: bytes) -> None:
-    if (stage / _DOSSIER_NAME).read_bytes() != dossier_bytes:
+def _read_regular_file(directory_fd: int, name: str) -> bytes:
+    try:
+        named = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+    except FileNotFoundError as exc:
+        raise ValueError("dossier file is missing") from exc
+    if stat.S_ISLNK(named.st_mode) or not stat.S_ISREG(named.st_mode):
+        raise ValueError("dossier file is not regular")
+    descriptor = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=directory_fd)
+    try:
+        opened = os.fstat(descriptor)
+        if (opened.st_dev, opened.st_ino) != (named.st_dev, named.st_ino) or not stat.S_ISREG(opened.st_mode):
+            raise ValueError("dossier file changed during validation")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 65_536):
+            chunks.append(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(descriptor)
+
+
+def _validate_staged_dossier(stage_fd: int, dossier_bytes: bytes, manifest_bytes: bytes) -> None:
+    if _read_regular_file(stage_fd, _DOSSIER_NAME) != dossier_bytes:
         raise ValueError("staged dossier checksum mismatch")
-    parsed = json.loads((stage / _MANIFEST_NAME).read_text(encoding="utf-8"))
-    if not isinstance(parsed, dict) or _sha256(manifest_bytes) != _sha256((stage / _MANIFEST_NAME).read_bytes()):
+    manifest_bytes_on_disk = _read_regular_file(stage_fd, _MANIFEST_NAME)
+    parsed = json.loads(manifest_bytes_on_disk.decode("utf-8"))
+    if not isinstance(parsed, dict) or _sha256(manifest_bytes) != _sha256(manifest_bytes_on_disk):
         raise ValueError("staged manifest checksum mismatch")
     if parsed.get("dossier_sha256") != _sha256(dossier_bytes):
         raise ValueError("staged dossier checksum is not recorded in its manifest")
 
 
-def _publish_stage(destination: Path, stage: Path, *, force: bool, expected_identity: tuple[int, int] | None) -> None:
-    current = _destination_identity(destination)
-    if current != expected_identity:
+def _publish_stage(
+    *,
+    destination: Path,
+    parent_fd: int,
+    parent_identity: tuple[int, int],
+    stage_name: str,
+    stage_identity: tuple[int, int],
+    force: bool,
+    expected_identity: tuple[int, int] | None,
+) -> None:
+    _verify_parent_path(destination, parent_identity)
+    if _destination_identity(parent_fd, destination.name) != expected_identity:
         raise FileExistsError("destination changed during publication")
+    _require_directory_identity(parent_fd, stage_name, stage_identity)
     if not force:
         try:
-            os.rename(stage, destination)
+            os.rename(stage_name, destination.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         except OSError as exc:
-            if _destination_identity(destination) is not None:
+            if _destination_identity(parent_fd, destination.name) is not None:
                 raise FileExistsError("destination changed during publication") from exc
             raise
-        _fsync_directory(destination.parent)
+        _verify_parent_path(destination, parent_identity)
+        _require_directory_identity(parent_fd, destination.name, stage_identity)
+        _fsync_directory(parent_fd)
         return
 
     if expected_identity is None:
         raise ValueError("force requires an existing validated prior dossier")
-    _validate_prior_dossier(destination)
-    backup = destination.parent / f".{destination.name}.backup-{uuid.uuid4().hex}"
+    _validate_prior_dossier(parent_fd, destination.name, expected_identity)
+    backup_name = f".{destination.name}.backup-{uuid.uuid4().hex}"
+    moved_prior = False
     try:
-        os.rename(destination, backup)
-        os.rename(stage, destination)
-        _fsync_directory(destination.parent)
+        _verify_parent_path(destination, parent_identity)
+        _require_directory_identity(parent_fd, destination.name, expected_identity)
+        _require_directory_identity(parent_fd, stage_name, stage_identity)
+        os.rename(destination.name, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        moved_prior = True
+        _require_directory_identity(parent_fd, backup_name, expected_identity)
+        _require_directory_identity(parent_fd, stage_name, stage_identity)
+        os.rename(stage_name, destination.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        _verify_parent_path(destination, parent_identity)
+        _require_directory_identity(parent_fd, destination.name, stage_identity)
+        _fsync_directory(parent_fd)
     except BaseException:
-        if _lstat(backup) is not None and _lstat(destination) is None:
-            os.rename(backup, destination)
+        if moved_prior and _destination_identity(parent_fd, destination.name) is None:
+            _require_directory_identity(parent_fd, backup_name, expected_identity)
+            os.rename(backup_name, destination.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         raise
-    _remove_validated_prior(backup)
+    _remove_validated_prior(parent_fd, backup_name, expected_identity)
 
 
-def _validate_prior_dossier(directory: Path) -> None:
-    entry = _lstat(directory)
-    if entry is None or stat.S_ISLNK(entry.st_mode) or not stat.S_ISDIR(entry.st_mode):
-        raise ValueError("force requires a validated prior dossier")
-    names = set(os.listdir(directory))
-    if names != _EXPECTED_FILES:
-        raise ValueError("force requires a validated prior dossier")
-    for name in _EXPECTED_FILES:
-        item = _lstat(directory / name)
-        if item is None or stat.S_ISLNK(item.st_mode) or not stat.S_ISREG(item.st_mode):
-            raise ValueError("force requires a validated prior dossier")
+def _validate_prior_dossier(parent_fd: int, name: str, expected_identity: tuple[int, int]) -> None:
     try:
-        manifest = json.loads((directory / _MANIFEST_NAME).read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        directory_fd = _open_named_directory(parent_fd, name, expected_identity)
+    except (FileNotFoundError, NotADirectoryError, ValueError, OSError) as exc:
         raise ValueError("force requires a validated prior dossier") from exc
-    if not _is_valid_manifest_shape(manifest):
-        raise ValueError("force requires a validated prior dossier")
-    checksum = manifest["dossier_sha256"]
-    if not _is_sha256(checksum) or checksum != _sha256((directory / _DOSSIER_NAME).read_bytes()):
-        raise ValueError("force requires a validated prior dossier")
+    try:
+        if set(os.listdir(directory_fd)) != _EXPECTED_FILES:
+            raise ValueError("force requires a validated prior dossier")
+        try:
+            manifest = json.loads(_read_regular_file(directory_fd, _MANIFEST_NAME).decode("utf-8"))
+            dossier_bytes = _read_regular_file(directory_fd, _DOSSIER_NAME)
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+            raise ValueError("force requires a validated prior dossier") from exc
+        if not _is_valid_manifest_shape(manifest):
+            raise ValueError("force requires a validated prior dossier")
+        checksum = manifest["dossier_sha256"]
+        if not _is_sha256(checksum) or checksum != _sha256(dossier_bytes):
+            raise ValueError("force requires a validated prior dossier")
+    finally:
+        os.close(directory_fd)
 
 
 def _is_sha256(value: object) -> bool:
@@ -478,32 +597,39 @@ def _is_valid_manifest_shape(manifest: object) -> bool:
     )
 
 
-def _remove_private_stage(stage: Path) -> None:
-    if not stage.name.startswith(".") or ".staging-" not in stage.name or _lstat(stage) is None:
+def _remove_private_stage(parent_fd: int, name: str, expected_identity: tuple[int, int]) -> None:
+    if not name.startswith(".") or ".staging-" not in name:
         return
-    for name in _EXPECTED_FILES:
-        item = stage / name
-        if _lstat(item) is not None:
-            os.unlink(item)
     try:
-        os.rmdir(stage)
-    except FileNotFoundError:
+        stage_fd = _open_named_directory(parent_fd, name, expected_identity)
+    except (FileNotFoundError, NotADirectoryError, ValueError, OSError):
         return
-
-
-def _remove_validated_prior(directory: Path) -> None:
-    _validate_prior_dossier(directory)
-    for name in _EXPECTED_FILES:
-        os.unlink(directory / name)
-    os.rmdir(directory)
-
-
-def _fsync_directory(directory: Path) -> None:
-    flags = os.O_RDONLY
-    if hasattr(os, "O_DIRECTORY"):
-        flags |= os.O_DIRECTORY
-    descriptor = os.open(directory, flags)
     try:
-        os.fsync(descriptor)
+        for item_name in _EXPECTED_FILES:
+            try:
+                os.unlink(item_name, dir_fd=stage_fd)
+            except FileNotFoundError:
+                continue
     finally:
-        os.close(descriptor)
+        os.close(stage_fd)
+    try:
+        _require_directory_identity(parent_fd, name, expected_identity)
+        os.rmdir(name, dir_fd=parent_fd)
+    except (FileNotFoundError, ValueError, OSError):
+        return
+
+
+def _remove_validated_prior(parent_fd: int, name: str, expected_identity: tuple[int, int]) -> None:
+    _validate_prior_dossier(parent_fd, name, expected_identity)
+    directory_fd = _open_named_directory(parent_fd, name, expected_identity)
+    try:
+        for item_name in _EXPECTED_FILES:
+            os.unlink(item_name, dir_fd=directory_fd)
+    finally:
+        os.close(directory_fd)
+    _require_directory_identity(parent_fd, name, expected_identity)
+    os.rmdir(name, dir_fd=parent_fd)
+
+
+def _fsync_directory(directory_fd: int) -> None:
+    os.fsync(directory_fd)
