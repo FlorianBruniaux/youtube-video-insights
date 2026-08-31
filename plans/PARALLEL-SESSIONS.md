@@ -85,10 +85,10 @@ Task 10 E2E, quality and docs
 | Taille refresh | 3 332 documents, 184 636 passages |
 | YouTube live final | `UNKNOWN` |
 | Claude Code frais | `UNKNOWN` |
-| Codex frais | `UNKNOWN` |
+| Codex frais | `PASS`, skill projet et limites d'approbation chargés dans un processus éphémère read-only |
 | Activation globale | `false` |
 | Qualité locale | `PASS`, 844 tests + 10 subtests, Ruff, Mypy 44 fichiers, diff-check |
-| GitHub CI hébergée | `PASS` sur `906786e`, [run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735), trois jobs `PASS` |
+| GitHub CI hébergée | `PASS` sur `000e9b4`, [run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777), trois jobs `PASS` |
 
 La pertinence `UNKNOWN` n'empêche pas une acquisition locale explicitement
 approuvée. Elle interdit un claim de qualité validée et toute activation
@@ -99,12 +99,12 @@ globale.
 Ordre strict :
 
 1. réaliser les 20 jugements humains de pertinence;
-2. lancer le canari YouTube live et les canaris frais Claude Code et Codex;
+2. lancer le canari YouTube live et terminer le canari frais Claude Code;
 3. seulement ensuite préparer un candidat global inerte et son digest;
 4. conserver web, extension, writable MCP, vectoriel et graphe hors du chemin
    critique tant que leurs déclencheurs ne sont pas observés.
 
-Le run hébergé `33413953735` valide uniquement `906786e`; chaque SHA ultérieur
+Le run hébergé `33414788777` valide uniquement `000e9b4`; chaque SHA ultérieur
 requiert sa propre exécution CI.
 
 ## Handoff obligatoire

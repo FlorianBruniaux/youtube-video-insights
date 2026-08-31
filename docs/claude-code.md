@@ -13,7 +13,7 @@ index-publication logic.
 | Native researchers | Claude Code and Codex read-only agents are versioned | Global installation not verified |
 | Runtime | Wheel and offline smoke are versioned | Managed global runtime not verified |
 | MCP | Exactly four read-only tools | Global client registrations not verified |
-| Fresh clients | Static assets and routing fixtures are tested | Claude Code `UNKNOWN`, Codex `UNKNOWN` |
+| Fresh clients | Static assets and routing fixtures are tested | Claude Code `UNKNOWN`, project-local Codex `PASS` |
 | Global activation | Candidate workflow exists | `false` |
 
 Cloning, installing the project, and the default setup preview do not change
@@ -125,12 +125,15 @@ Observed external gates at this checkpoint:
 - discovery probe: `PASS`, 3 subjects with 10 candidates each;
 - refresh performance: `PASS`, 5 builds, p95 `47.122951 s`;
 - live YouTube cumulative flow: `UNKNOWN`;
-- fresh Claude Code and Codex sessions: `UNKNOWN`;
+- fresh Claude Code session: `UNKNOWN`, CLI not authenticated;
+- fresh project-local Codex session: `PASS`, skill and approval boundaries loaded;
 - global activation: `false`.
 
 Local validation passed `844` tests plus `10` subtests, full Ruff, Mypy on the
 44 source files, and `git diff --check`. This is not a `mypy --strict` claim.
 Hosted GitHub Actions
-[run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735)
-passed on `906786e`, including Python 3.11, Python 3.12, and packaging/runtime.
-This hosted result validates that SHA only, not later commits.
+[run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
+passed on `000e9b4`, including Python 3.11, Python 3.12, and packaging/runtime.
+This hosted result validates that SHA only, not later commits. The detailed
+fresh-client evidence is in
+[the canary receipt](../plans/evidence/2026-08-31-fresh-client-canaries.md).

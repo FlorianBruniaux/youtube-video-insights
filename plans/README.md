@@ -38,12 +38,13 @@
 | Refresh | `PASS` | 5 builds, p95 `47.122951 s`, 3 332 documents, 184 636 passages |
 | YouTube live | `UNKNOWN` | Non exécuté dans ce lot |
 | Claude Code frais | `UNKNOWN` | Non exécuté |
-| Codex frais | `UNKNOWN` | Non exécuté |
+| Codex frais | `PASS` | Skill projet et limites d'approbation validés dans un processus éphémère read-only |
 | Activation globale | `false` | Aucune promotion du quatrième skill |
 | Qualité locale | `PASS` | 844 tests + 10 subtests, Ruff complet, `mypy src` sur 44 fichiers et `git diff --check` |
-| GitHub CI hébergée | `PASS` sur `906786e` | [Run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735), Python 3.11, Python 3.12 et packaging/runtime `PASS` |
+| GitHub CI hébergée | `PASS` sur `000e9b4` | [Run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777), Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 [Artefacts JSON et Markdown](evidence/2026-08-31-cumulative-research-gates.md)
+et [canaris clients frais](evidence/2026-08-31-fresh-client-canaries.md)
 
 ## Plans historiques conservés
 
@@ -72,5 +73,5 @@ Web UI, extension, API hébergée, MCP writable, vectoriel, graphe et acquisitio
 automatique restent conditionnels. Aucun de ces éléments n'est implémenté ou
 autorisé par les plans actuels.
 
-Le run GitHub CI `33413953735` a passé sur `906786e`. Cette preuve ne couvre pas
+Le run GitHub CI `33414788777` a passé sur `000e9b4`. Cette preuve ne couvre pas
 les commits ultérieurs; les autres preuves mentionnées ici restent locales.

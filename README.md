@@ -803,8 +803,10 @@ requests or forbidden activations.
 On the development workstation, the older digest-approved shared release
 `60cbcac…` contains three skills. The fourth cumulative skill exists in this
 repository and in the wheel candidate, but it has not been installed globally.
-Fresh Claude Code and Codex canaries for this workflow remain `UNKNOWN` and
-`global_activation_ready` is `false`.
+A fresh Codex CLI 0.150.1 canary passed project-local discovery and the two
+mandatory human boundaries. The fresh Claude Code canary remains `UNKNOWN`
+because the installed CLI is not authenticated. `global_activation_ready`
+remains `false`.
 
 The setup command previews by default, refuses different existing files, and
 rolls back newly created state if one client registration fails:
@@ -838,17 +840,19 @@ uv run yt-insights setup assistants --client both --assets-only --verify
 `--apply` changes the user-level Claude Code and Codex configuration. Cloning,
 installing, or running the default preview changes nothing globally. The
 development workstation has not applied this new four-skill transaction. Live
-YouTube research and fresh Claude Code and Codex workflow canaries remain
-`UNKNOWN`.
+YouTube research and the fresh Claude Code workflow canary remain `UNKNOWN`.
+The project-local Codex canary is `PASS`; this is not a global-installation
+claim.
 
 The assembled local validation passed `844` tests plus `10` subtests, full
 Ruff, Mypy on the 44 source files, and `git diff --check`. This is not a
 `mypy --strict` claim. Hosted GitHub Actions
-[run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735)
-passed on `906786e`: Python 3.11, Python 3.12, and packaging/runtime all passed.
-That evidence is bound to `906786e` and does not validate later commits. Human
-relevance, live YouTube, and fresh Claude Code/Codex canaries remain `UNKNOWN`,
-and global activation remains `false`.
+[run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
+passed on `000e9b4`: Python 3.11, Python 3.12, and packaging/runtime all passed.
+That evidence is bound to `000e9b4` and does not validate later commits. Human
+relevance, live YouTube, and the fresh Claude Code canary remain `UNKNOWN`.
+The project-local Codex canary is `PASS`, and global activation remains
+`false`.
 
 | Document | Purpose |
 |---|---|

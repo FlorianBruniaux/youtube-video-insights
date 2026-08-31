@@ -6,13 +6,13 @@
 
 **Activation globale :** `false`
 
-**GitHub CI hébergée :** `PASS` sur `906786e`
+**GitHub CI hébergée :** `PASS` sur `000e9b4`
 
 Le SHA assemblé a passé localement `844` tests et `10` subtests, Ruff sur
 `src tests scripts`, Mypy sur les 44 fichiers source, et `git diff --check`.
-Le [run GitHub Actions 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735)
-a ensuite passé sur `906786e`, avec les jobs Python 3.11, Python 3.12 et
-packaging/runtime au vert. Cette preuve hébergée est liée à `906786e` et ne
+Le [run GitHub Actions 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
+a ensuite passé sur `000e9b4`, avec les jobs Python 3.11, Python 3.12 et
+packaging/runtime au vert. Cette preuve hébergée est liée à `000e9b4` et ne
 valide pas les commits ultérieurs. Mypy n'a pas été exécuté avec `--strict`.
 
 ## Vue d'ensemble
@@ -101,10 +101,10 @@ les candidats à acquérir.
 | Refresh | `PASS` | 5 builds, p95 `47.122951 s`, 3 332 documents, 184 636 passages |
 | YouTube live final | `UNKNOWN` | Pas de canari live dans la vérification hermétique |
 | Claude Code frais | `UNKNOWN` | Chargement statique seulement |
-| Codex frais | `UNKNOWN` | Chargement statique seulement |
+| Codex frais | `PASS` | Processus éphémère read-only: skill projet chargé, deux décisions et limites 10/5 restituées |
 | Activation globale | `false` | Pas de promotion du quatrième skill ou du runtime |
 | Qualité locale | `PASS` | 844 tests + 10 subtests, Ruff complet, Mypy sur 44 fichiers et diff-check |
-| GitHub CI hébergée | `PASS` sur `906786e` | [Run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735), Python 3.11, Python 3.12 et packaging/runtime `PASS` |
+| GitHub CI hébergée | `PASS` sur `000e9b4` | [Run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777), Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 Les gates externes encore `UNKNOWN` bloquent les affirmations correspondantes
 et l'activation globale. Elles ne bloquent pas une acquisition locale

@@ -27,8 +27,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Final local quality validation: `844` tests plus `10` subtests, full Ruff,
   Mypy on all 44 source files, and `git diff --check` passed. Mypy was not run
   with `--strict`. Hosted GitHub Actions
-  [run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735)
-  passed on `906786e`, including Python 3.11, Python 3.12, and
+  [run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
+  passed on `000e9b4`, including Python 3.11, Python 3.12, and
   packaging/runtime. This hosted evidence applies only to that SHA.
 - Deterministic research dossiers with `dossier.md` and `manifest.json`, safe
   absolute destinations, source hashes, timestamped evidence, coverage limits,
@@ -40,8 +40,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   inspecting or mutating existing MCP registrations.
 - Replayable cumulative-research gate artifacts. Discovery passed for three
   subjects with ten candidates each; five full refreshes passed with p95
-  `47.122951 s`, 3,332 documents, and 184,636 passages. Human relevance and
-  live client canaries remain `UNKNOWN`, so global activation remains false.
+  `47.122951 s`, 3,332 documents, and 184,636 passages. A fresh Codex CLI
+  canary passed the project-local skill boundaries. Human relevance, live
+  YouTube, and the fresh Claude Code canary remain `UNKNOWN`, so global
+  activation remains false.
 - Explicit LLM backend selection through `--backend` and
   `YT_INSIGHTS_BACKEND` for Ollama, MLX, cc-bridge, Anthropic, OpenAI-compatible
   endpoints, or automatic local-first detection. Local backends use one worker;

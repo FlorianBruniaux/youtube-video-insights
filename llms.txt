@@ -138,7 +138,8 @@ The cumulative skill instructions and all copy-ready prompts are English. The
 three legacy skill frontmatter files retain French trigger phrases.
 
 The repository and wheel contain the fourth skill. It is not globally active.
-Fresh Claude Code and Codex canaries remain `UNKNOWN`.
+The fresh project-local Codex canary is `PASS`. The fresh Claude Code canary
+remains `UNKNOWN` because the installed CLI is not authenticated.
 
 ## Gates observed on 2026-08-31
 
@@ -149,13 +150,14 @@ Fresh Claude Code and Codex canaries remain `UNKNOWN`.
   184,636 passages.
 - live final YouTube workflow: `UNKNOWN`.
 - fresh Claude Code workflow: `UNKNOWN`.
-- fresh Codex workflow: `UNKNOWN`.
+- fresh project-local Codex workflow: `PASS`; global installation is not
+  claimed.
 - global activation: `false`.
 - local quality: `PASS`; 844 tests plus 10 subtests, full Ruff, Mypy on 44
   source files, and `git diff --check`.
-- GitHub CI hosted execution: `PASS` on `906786e`; run 33413953735 passed the
+- GitHub CI hosted execution: `PASS` on `000e9b4`; run 33414788777 passed the
   Python 3.11, Python 3.12, and packaging/runtime jobs:
-  https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735
+  https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777
 
 Mypy was run as `mypy src`; do not claim `mypy --strict` passes.
 
@@ -171,7 +173,7 @@ git diff --check
 ```
 
 These Ruff and Mypy commands pass on the assembled local SHA. Hosted run
-33413953735 validates `906786e` only; later commits require their own run. None
+33414788777 validates `000e9b4` only; later commits require their own run. None
 of these checks prove live YouTube or fresh-client behavior.
 
 Static and hermetic checks do not prove live YouTube, Claude Code, or Codex

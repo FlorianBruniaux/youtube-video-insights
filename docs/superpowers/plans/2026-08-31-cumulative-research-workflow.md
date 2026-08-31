@@ -1462,7 +1462,11 @@ Completed at `906786e`: `main` was fast-forwarded and pushed, and all five
 user-dirty zones were rechecked and preserved. Hosted GitHub Actions
 [run 33413953735](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33413953735)
 passed the Python 3.11, Python 3.12, and packaging/runtime jobs on that SHA.
-This evidence does not cover later commits.
+The final documentation SHA `000e9b4` then passed the same three jobs in
+[run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777).
+A fresh project-local Codex canary subsequently passed; Claude Code remains
+`UNKNOWN` because its installed CLI is not authenticated. These client results
+do not authorize global activation.
 
 ---
 
