@@ -1,201 +1,146 @@
-# Architecture Claude Code et Codex pour yt-insights
+# Plateforme Claude Code et Codex
 
-**Date :** 2026-08-28  
-**Statut :** design consolidé après revue d'architecture  
-**Périmètre :** usage personnel global sur cette machine, depuis n'importe quel dépôt  
-**Hypothèse de vocabulaire :** « Cloud » dans la demande désigne Claude Code. La voie vers un service hébergé reste documentée séparément.
+**Mise à jour :** 2026-08-31
 
-## Résultat attendu
+**Périmètre :** intégration locale et portable de YT Insights
 
-Depuis une session Claude Code ou Codex, l'utilisateur peut formuler ces demandes sans connaître les commandes internes :
+**Activation globale du workflow cumulatif :** `false`
 
-1. « Trouve dans mon corpus les passages sur les agents fiables. »
-2. « Récupère le transcript de cette vidéo. »
-3. « Ajoute cette chaîne au corpus pour 2025 et 2026. »
-4. « Exporte cette vidéo en Markdown pour préparer un article. »
+## Décision
 
-La recherche passe par un MCP local en lecture seule. L'acquisition et l'export passent par une CLI installée globalement. Les skills décrivent le workflow et les agents isolent les recherches longues. Les hooks ne réimplémentent aucune logique produit.
+Claude Code et Codex consomment le même contrat `yt-insights research`. La CLI
+porte l'état, les validations, les écritures et la reprise. Les skills portent
+les instructions humaines. Le MCP reste une façade de recherche locale en
+lecture seule.
 
-## État observé au 2026-08-28
+Cette séparation évite trois implémentations divergentes et rend les deux
+confirmations humaines testables.
 
-> Ce bloc conserve le snapshot antérieur à l'implémentation. Pour l'état courant,
-> voir le [suivi d'implémentation](../../docs/IMPLEMENTATION-STATUS.md).
+## Surfaces
 
-- La CLI, l'index FTS5 complet et le MCP à deux outils fonctionnent dans le dépôt.
-- Le MCP utilise encore un chemin de base relatif par défaut.
-- Le dépôt contient cinq skills, un agent et un hook propres à Claude Code.
-- Ces skills appellent parfois `yt-dlp` directement, supposent une langue ou un répertoire courant, et dupliquent des règles présentes dans la CLI.
-- Codex charge déjà les skills personnels depuis `~/.agents/skills`, les agents personnels depuis `~/.codex/agents`, les hooks depuis `~/.codex/hooks.json` ou `config.toml`, et les MCP depuis `~/.codex/config.toml`.
-- La configuration globale partagée est publiée sous forme de releases immuables depuis `~/.config/ai-agents` avec approbation liée à un digest.
+| Surface | Responsabilité | Interdit |
+|---|---|---|
+| CLI | Acquisition, évaluation, décisions, découverte, refresh, retry et dossier | Décider que les preuves suffisent |
+| MCP | Lire corpus, vidéos et passages | Toute mutation, shell ou SQL brut |
+| Skills portables | Guider l'utilisateur et appeler la CLI ou le MCP | Réimplémenter la logique produit |
+| Chercheur natif | Recherche longue et sourcée sur le corpus existant | Acquisition ou dossier writable |
+| Hooks | Aucun routeur YouTube implicite supplémentaire | Acquisition automatique |
 
-## Décisions
+## Skills communs
 
-### Une seule logique exécutable
+| Skill | Cas d'usage | Processus |
+|---|---|---|
+| `youtube-acquire` | Ajouter une source connue après preview | Session principale |
+| `youtube-research` | Chercher dans le corpus existant | MCP read-only ou CLI read-only |
+| `youtube-export` | Exporter une source existante | Session principale |
+| `youtube-cumulative-research` | Construire un corpus par cycles contrôlés | Session principale, CLI `research` |
 
-La CLI `yt-insights` porte la classification des sources, les chemins, les contrôles de volume, l'acquisition, les exports et les diagnostics. Un skill ne contient ni pipeline `yt-dlp` alternatif, ni logique de déduplication, ni règle de sélection de backend.
+Le quatrième skill doit toujours :
 
-### Un répertoire de données explicite
+1. chercher localement avant le réseau;
+2. montrer couverture, fraîcheur, dates et limites;
+3. demander si les preuves sont suffisantes;
+4. traiter `refresh` comme une autorisation de découverte uniquement;
+5. présenter au maximum dix candidats;
+6. demander un choix de un à cinq IDs exacts;
+7. acquérir seulement ces IDs, réévaluer, puis reposer la question;
+8. demander ensuite dossier, brouillon, corpus exporté, les deux, ou rien.
 
-La configuration ajoute `data_root`. Les chemins dérivés sont :
+Le statut de session expose l'historique structuré des tentatives et résultats
+par vidéo. Un retry de lot partiel conserve les succès et ne réacquiert pas les
+éléments déjà terminés.
+
+Le dossier déterministe est produit par la CLI. Un brouillon d'article reste
+une action explicite de l'assistant et ne devient jamais une source YouTube.
+
+## Données partagées
 
 ```text
-data_root/
-├── catalog.sqlite3
-├── .search/search-v1.sqlite3
-├── transcripts/              # boîte d'arrivée historique pour une vidéo isolée
-├── insights/
-├── exports/
-└── <channel-slug>/
-    ├── transcripts/
-    ├── insights/
-    └── INDEX.md
+VTT + metadata
+  ├── catalog.sqlite3              inventory
+  └── .search/search-v1.sqlite3    timestamped passages
+
+.research/research-v1.sqlite3      sessions and decisions
+research/.../dossier.md            deterministic publication
+research/.../manifest.json         evidence manifest
 ```
 
-Ordre de résolution : option CLI explicite, variable `YT_INSIGHTS_DATA_ROOT`, fichier `~/.config/yt-insights/config.toml`, puis `output/` pour préserver la compatibilité du dépôt.
+Claude Code et Codex doivent recevoir les mêmes chemins absolus et utiliser la
+même révision de session. Aucun client ne déduit le corpus ou la racine des
+dossiers de son répertoire courant.
 
-### Une façade d'acquisition sûre
+## MCP read-only
 
-`yt-insights acquire` devient la commande utilisée par les agents. Elle classe la source en `video`, `playlist`, `channel` ou `batch`, puis produit un aperçu avant mutation.
+Le serveur expose exactement :
 
-- Une vidéo isolée peut être acquise sans confirmation supplémentaire lorsqu'elle correspond à la demande explicite de l'utilisateur.
-- Une chaîne, une playlist ou un batch calcule le volume, le dossier cible et la fenêtre de dates, puis exige `--yes` pour commencer.
-- Une relance est idempotente par défaut.
-- Les cookies navigateur ne sont jamais ajoutés automatiquement. L'utilisateur choisit explicitement le navigateur après un échec documenté.
-- La commande ne supprime pas de piste de langue. Une future commande de normalisation pourra archiver les doublons après validation séparée.
+1. `list_corpora`;
+2. `search_videos`;
+3. `search_passages`;
+4. `get_passage`.
 
-### Un export source-first
+Un MCP writable n'est pas implémenté. Il ne sera étudié qu'après cinq sessions
+réelles documentant une friction CLI répétée.
 
-`yt-insights export video` produit `vtt`, `txt` ou `md`. Le Markdown conserve le titre, la chaîne, l'identifiant vidéo, l'URL YouTube et les timestamps. Aucun résumé LLM n'est nécessaire pour exporter la matière source.
+## Installation sûre
 
-Un export de dossier multi-vidéos reste hors du premier lot. Il dépend d'un article réel et de son angle, conformément à la roadmap existante.
+Le dépôt fournit :
 
-### MCP en lecture seule
-
-Le serveur conserve sa frontière locale et ajoute seulement les outils nécessaires à la découverte :
-
-| Outil | Effet | Limite |
-|---|---|---|
-| `list_corpora` | Liste les chaînes et les comptes disponibles | 100 lignes, aucun chemin absolu |
-| `search_videos` | Recherche titres et insights du catalogue | 20 résultats |
-| `search_passages` | Recherche les passages horodatés | 20 résultats |
-| `get_passage` | Lit un passage identifié | 1 500 caractères |
-
-Le MCP n'acquiert pas de vidéo, n'écrit pas d'export, n'expose pas SQL et ne lance pas de shell. Claude Code et Codex utilisent le même exécutable et la même base absolue.
-
-### Trois skills communs
-
-| Skill | Déclencheurs principaux | Autorisation |
-|---|---|---|
-| `youtube-acquire` | récupérer, télécharger, ajouter une vidéo, chaîne ou playlist | réseau et écriture locale selon la demande |
-| `youtube-research` | chercher, comparer, trouver un passage ou une source | MCP en lecture seule |
-| `youtube-export` | exporter un transcript ou préparer une matière source | lecture du corpus et écriture du fichier demandé |
-
-Les descriptions couvrent les formulations françaises et anglaises utiles sans attirer les demandes de développement d'un lecteur YouTube ou d'une interface vidéo.
-
-### Deux agents spécialisés
-
-- Claude Code reçoit `youtube-corpus-researcher.md`. Il précharge `youtube-research`, utilise le MCP `yt-insights` et reste centré sur la recherche sourcée.
-- Codex reçoit `youtube_corpus_researcher.toml`. Il utilise un sandbox `read-only` et hérite du MCP. Il ne sert pas à l'acquisition.
-
-L'acquisition reste dans la session principale, car elle nécessite parfois une permission réseau, une écriture hors du dépôt courant et une confirmation de volume.
-
-### Pas de deuxième hook global
-
-La machine possède déjà un routeur de skills global sur `UserPromptSubmit`. Les nouveaux skills rejoignent son index et ses évaluations. Ajouter un second hook YouTube créerait deux routes concurrentes et deux sources de règles.
-
-Le hook local `.claude/hooks/yt-channel-router.sh` reste actif jusqu'à ce que les tests de nouvelles sessions atteignent les deux critères suivants :
-
-- au moins 27 bonnes routes sur 30 prompts positifs ;
-- aucune activation sur 15 prompts négatifs liés au développement vidéo, au SEO YouTube ou à une simple discussion sur une vidéo.
-
-Après réussite, une modification séparée retire le hook local et son entrée dans `.claude/settings.json`.
-
-### Installation globale transactionnelle
-
-L'installation suit trois transactions approuvées séparément :
-
-1. `yt-runtime` installe le wheel vérifié, active ses deux entrypoints et écrit `~/.config/yt-insights/config.toml` avec un `data_root` absolu après `GO INSTALL YT RUNTIME <digest>` ;
-2. `shared` publie la release immuable contenant les trois skills après `GO INSTALL SHARED <digest>` ;
-3. `yt-integrations` installe les deux agents et les deux configurations MCP après `GO INSTALL YT INTEGRATIONS <digest>`.
-
-Les trois candidats sont construits et testés sans écriture dans les cibles
-globales, puis leurs diffs expurgés et digests sont présentés dans un tour qui
-s'arrête avant installation. Chaque transaction possède ses préimages, son
-journal et son rollback. Les MCP et la CLI lisent le même `data_root` absolu.
-Un test depuis deux répertoires courants distincts doit retrouver le même corpus.
-
-Une approbation générique ne suffit pas. Chaque écriture vérifie que les hashes des préimages globales n'ont pas changé depuis la préparation.
-
-## Flux cible
-
-```mermaid
-flowchart LR
-    U[Demande utilisateur] --> R{Intention}
-    R -->|chercher| S[youtube-research]
-    R -->|récupérer| A[youtube-acquire]
-    R -->|exporter| E[youtube-export]
-
-    S --> M[MCP read-only]
-    M --> C[(catalog.sqlite3)]
-    M --> F[(search-v1.sqlite3)]
-
-    A --> P[yt-insights acquire]
-    P --> V[VTT + info JSON]
-    V --> I[Insights optionnels]
-    I --> C
-    I --> F
-
-    E --> X[yt-insights export video]
-    X --> D[Markdown, texte ou VTT]
-
-    CA[Agent Claude] --> S
-    CO[Agent Codex] --> S
+```bash
+yt-insights setup assistants --client both --dry-run
+yt-insights setup assistants --client both --apply
+yt-insights setup assistants --client both --verify
 ```
 
-## Backend local ou distant
+Le mode complet gère skills, agents natifs et inscriptions MCP. Il refuse les
+préimages différentes et rollback son propre état en cas d'échec partiel.
 
-`yt-insights doctor --json` expose les backends disponibles sans imprimer de secret. L'ordre automatique reste compatible avec le résolveur actuel, mais le choix explicite gagne toujours.
+Le mode suivant ne lit ni ne modifie le MCP :
 
-| Usage | Route recommandée | Raison |
+```bash
+yt-insights setup assistants --client both --assets-only --dry-run
+yt-insights setup assistants --client both --assets-only --apply
+yt-insights setup assistants --client both --assets-only --verify
+```
+
+Une installation globale exige toujours un candidat inerte, les empreintes des
+préimages, un diff expurgé, un digest d'approbation, une nouvelle lecture des
+préimages, un rollback et des canaris frais. Le dépôt et ce document
+n'autorisent aucune écriture globale.
+
+## Routage
+
+L'invocation explicite reste la règle. Le précédent corpus disjoint a rejeté le
+routeur implicite, qui conservait des activations interdites. Le workflow
+cumulatif n'ajoute aucun hook global et aucun agent writable.
+
+## Gates actuelles
+
+| Gate | Statut | Conséquence |
 |---|---|---|
-| recherche et export | aucun LLM | déterministe et immédiat |
-| acquisition de transcripts | aucun LLM | `yt-dlp` suffit |
-| extraction en volume | Ollama ou cc-bridge local | coût maîtrisé |
-| extraction ponctuelle à exigence éditoriale élevée | backend distant explicite | choix assumé par l'utilisateur |
-| MLX direct | expérimentation après réparation du backend | l'adaptateur présent ne charge pas encore de modèle explicitement |
+| Pertinence humaine | `UNKNOWN` | Ne pas présenter la qualité comme validée |
+| Découverte locale | `PASS`, 3 sujets sur 3, 10 candidats chacun | Provider local utilisable expérimentalement |
+| Refresh | `PASS`, p95 `47.122951 s` sur 5 builds | Pas d'indexation incrémentale requise |
+| YouTube live final | `UNKNOWN` | Pas de claim de comportement live |
+| Claude Code frais | `UNKNOWN` | Pas de claim d'activation |
+| Codex frais | `UNKNOWN` | Pas de claim d'activation |
+| Activation globale | `false` | Quatrième skill et runtime non promus |
 
-La transcription audio n'entre pas dans ce plan. Elle sert seulement lorsque YouTube ne fournit aucun sous-titre exploitable.
+## Ce qui reste hors périmètre
 
-## Critères d'acceptation
+- interface web;
+- extension navigateur;
+- API hébergée;
+- MCP writable;
+- recherche vectorielle ou hybride;
+- base graphe;
+- acquisition automatique.
 
-Le socle est accepté lorsque :
+Ces éléments restent soumis aux déclencheurs de la [roadmap](../../ROADMAP.md).
 
-1. `yt-insights doctor --json` fonctionne depuis un répertoire sans rapport avec le dépôt et ne révèle aucun secret ;
-2. `yt-insights acquire --dry-run` classe correctement une vidéo, une chaîne, une playlist et un batch ;
-3. une chaîne ne démarre pas sans `--yes` après l'aperçu ;
-4. `yt-insights export video` produit les trois formats avec provenance ;
-5. le MCP expose exactement quatre outils read-only et utilise une base absolue ;
-6. Claude Code et Codex trouvent le même passage pour cinq requêtes de contrôle ;
-7. les trois skills passent les tests de routage positifs et négatifs ;
-8. les deux agents restent en lecture seule pour la recherche ;
-9. les canaris Claude Code et Codex prouvent qu'ils ne peuvent ni écrire, ni acquérir, ni exporter ;
-10. la CLI retrouve le même corpus depuis deux répertoires courants sans variable manuelle ;
-11. les trois transactions globales refusent une préimage modifiée ou un digest incorrect ;
-12. chaque rollback restaure les hashes précédents ;
-13. la suite Python, le smoke wheel et les validations de la release globale passent.
+## Acceptation
 
-## Voie hébergée conditionnelle
-
-Une extension navigateur ou un accès depuis plusieurs machines exige un service
-distant. La première version mono-utilisateur conserve le corpus filesystem et
-SQLite sur un volume persistant avec un seul worker d'écriture. PostgreSQL et
-le stockage objet arrivent seulement avec la concurrence ou le multi-utilisateur.
-
-Elle démarre seulement si l'un de ces faits est observé :
-
-- au moins dix envois manuels de vidéos par semaine pendant deux semaines ;
-- besoin d'accéder au corpus depuis une seconde machine ;
-- besoin de partager un dossier avec une autre personne ;
-- impossibilité répétée d'utiliser la CLI ou le MCP local depuis le navigateur.
-
-Sans ce signal, le fonctionnement local Claude Code et Codex reste le produit prioritaire.
+La plateforme projet est acceptable lorsque les assets statiques, le wheel et
+le setup en HOME temporaire passent, sans invoquer les clients. L'activation
+globale exige en plus deux sessions fraîches qui découvrent le quatrième skill,
+s'arrêtent aux mêmes questions, et ne transforment jamais `refresh` en
+approbation.

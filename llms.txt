@@ -1,219 +1,185 @@
 # yt-insights
 
-Local-first Python CLI for turning YouTube channels, playlists, videos, and
-existing transcript corpora into searchable structured intelligence.
+Local-first YouTube corpus, timestamped FTS5 search, resumable cumulative
+research, deterministic evidence dossiers, optional LLM analysis, and a
+four-tool read-only MCP server.
 
 Repository: https://github.com/FlorianBruniaux/youtube-video-insights
-Package: yt-insights
+Package version: 0.2.0
 Python: 3.11+
-License: MIT
+Primary CLI: `yt-insights`
+Optional MCP entrypoint: `yt-insights-mcp`
 
-## Primary workflows
+## Product boundary
 
-1. Analyze a source with an LLM:
-   `yt-insights run SOURCE`
-2. Inspect the local runtime without writes or completion calls:
-   `yt-insights doctor --json [--probe-backends]`
-3. Preview or acquire subtitles and metadata:
-   `yt-insights acquire SOURCE [--dry-run] [--yes] [--slug SLUG]`
-4. Export one transcript without an LLM:
-   `yt-insights export video VIDEO_OR_URL [--format vtt|txt|md]`
-5. Import an existing corpus without an LLM:
-   `yt-insights catalog import-corpus CORPUS_ROOT`
-6. Discover video metadata without downloading media:
-   `yt-insights catalog discover SOURCE`
-7. Search the local catalog:
-   `yt-insights catalog search QUERY [--source SLUG] [--limit N]`
-8. Build and search timestamped transcript passages:
-   `yt-insights index [--all|--status|--dry-run]`
-   `yt-insights search QUERY [--channel ID] [--lang CODE] [--limit N]`
-9. Expose the corpus to a local LLM client:
-   `yt-insights-mcp`
-10. Audit local catalog state:
-   `yt-insights catalog stats`
-   `yt-insights catalog errors [--run-id N]`
+- The source text is YouTube VTT subtitles. The runtime does not transcribe audio.
+- Local assessment never calls YouTube or an LLM.
+- Every assessment asks whether evidence is sufficient.
+- `refresh` authorizes metadata discovery only.
+- Discovery returns at most 10 candidates.
+- Acquisition requires a separate approval for 1 to 5 exact candidate IDs.
+- Acquired sources trigger one catalogue and FTS refresh, then reassessment.
+- Dossiers are deterministic outputs and never become source passages.
+- The MCP remains read-only and exposes exactly four tools.
 
-The catalog defaults to `output/catalog.sqlite3`. Timestamped passage search
-defaults to `output/.search/search-v1.sqlite3`. Both databases are derived and
-gitignored. The VTT files remain the source of truth.
+## Four data layers
 
-For use outside this repository, configure one absolute `data_root` in
-`~/.config/yt-insights/config.toml` or `YT_INSIGHTS_DATA_ROOT`. Precedence is
-CLI override, environment, TOML, then `output` relative to the current working
-directory. Named database options override the derived paths per command.
+1. VTT and metadata files: immutable source text, timestamps, and YouTube identity.
+2. `catalog.sqlite3`: source inventory, memberships, artifacts, runs, and errors.
+3. `.search/search-v1.sqlite3`: derived FTS5 passages and timestamped URLs.
+4. `.research/research-v1.sqlite3`: sessions, assessments, decisions, candidates,
+   acquisition attempts, outcomes, and events.
 
-## Module map
+Tracked or copied `dossier.md` and `manifest.json` files are publications, not a
+fifth source layer.
 
-- `src/yt_insights/cli.py`: Click command surface.
-- `src/yt_insights/cli_doctor.py`: no-write, secret-safe runtime diagnostics.
-- `src/yt_insights/cli_acquire.py`: preview-first acquisition adapter.
-- `src/yt_insights/acquisition.py`: bounded acquisition plans and publication.
-- `src/yt_insights/cli_export.py`: deterministic export command group.
-- `src/yt_insights/exporter.py`: VTT, text, and sourced Markdown exports.
-- `src/yt_insights/downloader.py`: yt-dlp subprocess adapter and structured
-  discovery/download results.
-- `src/yt_insights/cleaner.py`: VTT text cleaning. Preserve its existing
-  behavior when extending ingestion.
-- `src/yt_insights/analyzer.py`: transcript-to-insight LLM pipeline.
-- `src/yt_insights/reporter.py`: aggregate reports.
-- `src/yt_insights/shorts.py`: Short suggestions and clip extraction.
-- `src/yt_insights/catalog.py`: SQLite schema, corpus import, discovery
-  ingestion, FTS5 search, run history, and durable collection errors.
-- `src/yt_insights/cli_search.py`: Click adapters for transcript index, status,
-  dry-run, and search commands.
-- `src/yt_insights/search/corpus.py`: safe VTT discovery and channel metadata
-  association.
-- `src/yt_insights/search/preflight.py`: full-corpus disk-capacity preflight.
-- `src/yt_insights/search/sqlite_fts.py`: atomic timestamped FTS5 index,
-  SHA-256 generation receipt, validation, and passage lookup.
-- `src/yt_insights/search/service.py`: shared read-only search service.
-- `src/yt_insights/mcp_server.py`: closed-world MCP facade with exactly four
-  read-only tools.
-- `src/yt_insights/mcp_entrypoint.py`: optional MCP console entrypoint.
-- `src/yt_insights/config.py`: defaults, TOML, environment variables, and CLI
-  override merge.
-- `scripts/build_index.py`: Markdown/YAML index generation for `output/`.
-- `runbook/run-channel.sh`: repeatable full-channel ingestion.
+## Cumulative research commands
 
-## Catalog data model
+```text
+yt-insights research start TOPIC [--query QUERY]... [--lang LANG]... [--freshness-profile fast|standard|stable|historical] [--json]
+yt-insights research status SESSION_ID [--json]  # includes structured attempts and per-video outcomes
+yt-insights research decide SESSION_ID sufficient|refresh --revision N --idempotency-key KEY [--json]
+yt-insights research discover SESSION_ID --revision N [--json]
+yt-insights research candidates SESSION_ID [--json]
+yt-insights research approve SESSION_ID VIDEO_ID... --revision N --idempotency-key KEY [--json]
+yt-insights research cancel SESSION_ID --revision N --idempotency-key KEY [--json]
+yt-insights research acquire SESSION_ID --revision N --idempotency-key KEY [--lang LANG] [--json]
+yt-insights research retry SESSION_ID --revision N --idempotency-key KEY [--json]
+yt-insights research export SESSION_ID [--output ABSOLUTE_DIRECTORY] [--force] [--json]
+```
 
-- `videos`: canonical row per YouTube video ID.
-- `video_sources`: many-to-many source membership.
-- `artifacts`: transcript and insight files, language, path, searchable text,
-  and SHA-256 identity.
-- `ingestion_runs`: one auditable row per import or discovery command.
-- `collection_errors`: exact source, stage, item, and diagnostic.
-- `video_search`: SQLite FTS5 index over title, sources, insight text, and
-  cleaned transcript text.
+Use the latest returned revision for each mutation. Reuse an idempotency key
+only for the exact same request payload. Status history exposes attempt ID,
+attempt status, and per-video `error_code` and `source_sha256` when present.
+Retry preserves successful outcomes and does not reacquire completed items from
+a partial batch.
 
-Corpus import is idempotent. Re-importing unchanged files creates an audit run
-but does not duplicate videos or artifacts. Expected file-level failures are
-recorded and produce `status=partial`. Database or programming failures roll
-back domain writes and produce `status=failed`.
+## Other stable commands
 
-## Insight artifact contract
+- `yt-insights doctor --json`: secret-safe no-write diagnostics.
+- `yt-insights acquire SOURCE --dry-run --json`: preview acquisition.
+- `yt-insights acquire SOURCE --yes`: confirm a channel, playlist, or batch.
+- `yt-insights export video VIDEO_ID --format vtt|txt|md`: deterministic source export.
+- `yt-insights index --all`: build the full timestamped FTS index.
+- `yt-insights index --status`: validate the configured index.
+- `yt-insights search QUERY --limit 1..20 --json`: search timestamped passages.
+- `yt-insights catalog import-corpus ROOT`: rebuild the inventory catalogue.
+- `yt-insights setup assistants --assets-only --dry-run|--apply|--verify`: manage
+  repository skills and native agents without MCP access.
 
-Insight JSON is the source of truth. The expected keys are:
+## Research modules
 
-- `subject`
-- `key_points`
-- `tools`
-- `advice`
-- `quotes`
+- `src/yt_insights/research/models.py`: immutable enums, values, fingerprints,
+  assessments, sessions, candidates, attempts, and event models.
+- `src/yt_insights/research/store.py`: schema v1, revisions, idempotence,
+  transitions, history, attempts, outcomes, and retry state.
+- `src/yt_insights/research/assessment.py`: bounded local catalogue and passage
+  reads with before/after database-generation checks.
+- `src/yt_insights/research/discovery.py`: provider protocol, yt-dlp metadata
+  discovery, deduplication, known-ID exclusion, and channel diversity.
+- `src/yt_insights/research/acquisition.py`: exact candidate-to-acquisition
+  adapter with structured outcomes.
+- `src/yt_insights/research/workflow.py`: application state machine.
+- `src/yt_insights/research/dossier.py`: deterministic and path-safe dossier
+  publication.
+- `src/yt_insights/cli_research.py`: Click and stable JSON adapter.
 
-Markdown is rendered from JSON. Writes must remain atomic. Truncated LLM
-responses with `stop_reason == "max_tokens"` must never enter the cache.
-Insight and Shorts generation receive at most 10,000 transcript characters per
-call. Timestamped FTS search indexes the full VTT content independently.
+## Existing modules
 
-## Timestamped search contract
+- `src/yt_insights/acquisition.py`: preview, acquisition, structured item
+  reports, and atomic catalogue/search pair publication.
+- `src/yt_insights/catalog.py`: local SQLite inventory.
+- `src/yt_insights/search/`: timestamped FTS5 indexing and search.
+- `src/yt_insights/exporter.py`: source transcript exports.
+- `src/yt_insights/mcp_server.py`: four-tool read-only MCP facade.
+- `src/yt_insights/assistant_setup.py`: transactional assistant asset and MCP setup.
+- `src/yt_insights/backends/`: optional Ollama, MLX, cc-bridge, Anthropic, and
+  OpenAI-compatible analysis backends.
 
-- VTT text and timestamps are authoritative.
-- A default build selects at most 50 files. `index --all` requires a disk-space
-  preflight and indexes every valid transcript.
-- `search-v1.sqlite3` is published through a sibling temporary file and
-  `os.replace()`.
-- The generation receipt binds the index `generation_id` to the database
-  SHA-256. Validation is cached only while device, inode, size, mtime, and ctime
-  remain unchanged.
-- CLI and MCP use the same `SearchService`; the MCP exposes, in order,
-  `list_corpora`, `search_videos`, `search_passages`, and `get_passage`.
-- `catalog.sqlite3` is an inventory database. It never supplies timestamped
-  passages to `search-v1.sqlite3`.
+## Configuration
 
-## Agent runtime contract
+- `data_root`: corpus root.
+- `research_output_root`: optional absolute canonical dossier root.
+- `YT_INSIGHTS_DATA_ROOT`: environment override.
+- `YT_INSIGHTS_RESEARCH_OUTPUT_ROOT`: dossier-root override.
+- `YT_INSIGHTS_SEARCH_DATABASE` and `YT_INSIGHTS_CATALOG_DATABASE`: explicit MCP
+  database overrides.
 
-- `doctor --json` does not create corpus paths, call a completion endpoint, or
-  reveal configured secret values. Optional probes target localhost only.
-- `acquire --dry-run` writes nothing. Channel, playlist, and batch execution
-  requires `--yes`; a single video does not.
-- Acquisition downloads subtitles and metadata. It invokes an LLM only with
-  `--analyze`.
-- `export video` resolves one exact video. VTT preserves source bytes, TXT is
-  cleaned text, and Markdown contains source identity, canonical URL, SHA-256,
-  and timestamps.
-- `YT_INSIGHTS_SEARCH_DATABASE` and `YT_INSIGHTS_CATALOG_DATABASE` select the
-  two MCP databases. If absent, paths derive from the configured data root.
-- No command in this runtime transcribes audio. YouTube VTT remains the text
-  source.
+The CLI never infers a dossier repository from the current working directory.
+An omitted `research_output_root` requires `research export --output`.
 
-## Constraints
+## MCP contract
 
-- Run yt-dlp as a subprocess, never import it as a Python library.
-- Never put API keys, cookies, transcripts, generated reports, or SQLite files
-  in Git.
-- Every channel belongs under `output/<slug>/`; always pass an explicit
-  channel output directory.
-- Preserve source artifacts during catalog import.
-- Prefer deterministic collection, normalization, deduplication, storage,
-  scoring, and export. Use an LLM only for semantic classification, speaker
-  extraction, summarization, newsletter angles, and optional reranking.
-- Keep the MCP layer thin: it must call the same Python transcript search
-  service as the CLI instead of duplicating storage or query logic.
-- Backend choice is irrelevant to acquisition without `--analyze`, doctor,
-  export, index, search, and MCP. For LLM analysis, use `--backend` with the
-  exact model when provider choice matters; `auto` keeps local-first detection.
+Exactly four tools, in order:
 
-## Current state
+1. `list_corpora`
+2. `search_videos`
+3. `search_passages`
+4. `get_passage`
 
-Implemented:
+The MCP does not mutate research state, acquire sources, rebuild indexes, write
+exports, expose SQL, or invoke a shell.
 
-- yt-dlp collection and transcript download;
-- transcript cleaning and structured LLM insights;
-- aggregate reports and Short suggestions;
-- SQLite catalog and corpus import;
-- video/artifact deduplication;
-- FTS5 search and source filtering;
-- durable run and error history;
-- timestamped full-corpus FTS5 indexing and passage search;
-- stable absolute data-root resolution and derived corpus paths;
-- secret-safe runtime diagnostics;
-- preview-first acquisition with confirmation for multi-video sources;
-- deterministic VTT, text, and Markdown transcript exports;
-- four read-only MCP tools for corpus, video, and passage research;
-- backend/model identity reporting and secret-safe endpoint display;
-- explicit Ollama, MLX, cc-bridge, Anthropic, and OpenAI-compatible routing;
-- three portable YouTube skills plus native read-only researcher agents for
-  Claude Code and Codex;
-- a packaged `setup assistants` command with dry-run default, explicit apply,
-  conflict refusal, verification and rollback for Claude Code and Codex;
-- digest-approved shared release `60cbcac…`, with the three skills discovered
-  by a fresh Codex session on the development workstation;
-- portable catalog schema v2 with immutable readers and copy-on-write writers;
-- clean-source wheel smoke tests for minimal and MCP installations outside the
-  checkout.
+## Assistant contract
 
-Planned:
+Portable skills:
 
-- human relevance review for the frozen P2 search artifact;
-- digest-bound application of the still-absent global CLI, native agents and
-  MCP entries; the repository-side installer is implemented and tested;
-- a fresh Claude discovery canary after its local CLI is connected;
-- chunked LLM analysis for transcripts longer than 10,000 characters;
-- YouTube Data API and channel RSS discovery adapters;
-- metadata refresh policy and quota tracking;
-- deterministic Tech/Product/AI relevance scoring;
-- newsletter selection export;
-- local UI or browser extension only after measured workflow friction;
-- hosted API only after a real remote or multi-user requirement;
-- optional semantic embeddings only if FTS5 recall proves insufficient.
+- `youtube-acquire`
+- `youtube-research`
+- `youtube-export`
+- `youtube-cumulative-research`
 
-## Documentation
+The cumulative skill runs in the main session, interprets
+`required_user_action`, and asks before discovery and candidate acquisition.
+All skill instructions, metadata, and copy-ready prompts are English.
 
-- `README.md`: installation, commands, workflows, and operational behavior.
-- `CHANGELOG.md`: unreleased and released changes.
-- `ROADMAP.md`: delivered phases, promotion gates, and conditional work.
-- `plans/specs/AGENT-PLATFORM.md`: Claude Code and Codex target architecture.
-- `plans/2026-08-28-09-agent-ready-runtime.md`: executable runtime plan.
-- `plans/2026-08-28-10-claude-codex-global-integration.md`: portable skills,
-  native agents, routing evaluation, and global installation plan.
-- `plans/2026-08-28-11-hosted-extension.md`: conditional hosted service and
-  browser extension plan.
-- `docs/IMPLEMENTATION-STATUS.md`: current diagram, remaining work, and test
-  commands.
-- `examples/agent-prompts.md`: explicit prompts for acquire, research and export.
-- `CLAUDE.md`: repository constraints and agent workflow.
-- `docs/superpowers/specs/2026-08-26-youtube-newsletter-watch-design.md`:
-  MVP architecture and source trade-offs.
-- `docs/superpowers/plans/2026-08-26-youtube-catalog-vertical-slice.md`:
-  phased implementation and acceptance plan.
+The repository and wheel contain the fourth skill. It is not globally active.
+Fresh Claude Code and Codex canaries remain `UNKNOWN`.
+
+## Gates observed on 2026-08-31
+
+- relevance pilot: `UNKNOWN`; representative packet returned 0 results, so 0
+  of the required 20 human judgments exist.
+- discovery probe: `PASS`; 3 subjects, 10 candidates each, no local-state write.
+- refresh performance: `PASS`; 5 builds, p95 `47.122951 s`, 3,332 documents,
+  184,636 passages.
+- live final YouTube workflow: `UNKNOWN`.
+- fresh Claude Code workflow: `UNKNOWN`.
+- fresh Codex workflow: `UNKNOWN`.
+- global activation: `false`.
+- GitHub CI: absent; verification is local.
+
+The latest combined test count before Task 10 finalization is an interim
+`799 passed, 10 subtests passed`. Do not present it as the final release count.
+
+## Verification
+
+```text
+uv run --extra mcp --extra dev pytest -q
+uv run --extra dev ruff check src tests scripts
+uv run --extra dev mypy src
+uv lock --check
+.venv/bin/python scripts/smoke_wheel.py --offline
+git diff --check
+```
+
+Static and hermetic checks do not prove live YouTube, Claude Code, or Codex
+behavior.
+
+## Deferred
+
+Not implemented: web UI, browser extension, hosted API, writable MCP, vector or
+hybrid retrieval, graph database, automatic acquisition, and ranking
+self-learning. See `ROADMAP.md` for measured triggers.
+
+## Primary references
+
+- `README.md`
+- `INSTALL.md`
+- `ROADMAP.md`
+- `docs/IMPLEMENTATION-STATUS.md`
+- `docs/claude-code.md`
+- `docs/superpowers/specs/2026-08-31-cumulative-research-workflow-design.md`
+- `docs/superpowers/plans/2026-08-31-cumulative-research-workflow.md`
+- `plans/evidence/2026-08-31-cumulative-research-gates.json`
+- `examples/agent-prompts.md`

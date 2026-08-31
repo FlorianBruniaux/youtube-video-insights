@@ -10,12 +10,38 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Durable `yt-insights research` workflow with catalogue-first assessment,
+  deterministic freshness profiles, mandatory sufficiency questions, revisions,
+  idempotent decisions, resume, bounded retry, and a separate
+  `.research/research-v1.sqlite3` operational database.
+- Metadata-only YouTube discovery after explicit refresh authorization. Each
+  cycle presents at most ten candidates and accepts only one to five exact IDs
+  through a separate approval before acquisition.
+- Batch acquisition outcomes per video, one atomic catalogue and FTS refresh,
+  failure recovery, and automatic reassessment followed by the same mandatory
+  sufficiency question. Session status exposes structured attempts and
+  per-video status, error code, and source SHA-256. Retrying a partial batch
+  preserves completed items instead of reacquiring them.
+- Deterministic research dossiers with `dossier.md` and `manifest.json`, safe
+  absolute destinations, source hashes, timestamped evidence, coverage limits,
+  and no generated-dossier ingestion into source indexes.
+- Fourth portable assistant skill, `youtube-cumulative-research`, with English
+  prompts for the three pilot topics, resume, refresh, exact-ID approval,
+  dossier export, and current-project copy.
+- `setup assistants --assets-only` for atomic skill and agent upgrades without
+  inspecting or mutating existing MCP registrations.
+- Replayable cumulative-research gate artifacts. Discovery passed for three
+  subjects with ten candidates each; five full refreshes passed with p95
+  `47.122951 s`, 3,332 documents, and 184,636 passages. Human relevance and
+  live client canaries remain `UNKNOWN`, so global activation remains false.
 - Explicit LLM backend selection through `--backend` and
   `YT_INSIGHTS_BACKEND` for Ollama, MLX, cc-bridge, Anthropic, OpenAI-compatible
   endpoints, or automatic local-first detection. Local backends use one worker;
   MLX loads its model and tokenizer lazily.
-- Three portable assistant skills, `youtube-acquire`, `youtube-research`, and
-  `youtube-export`, plus read-only Claude Code and Codex corpus researchers.
+- Three original portable assistant skills, `youtube-acquire`,
+  `youtube-research`, and `youtube-export`, plus read-only Claude Code and Codex
+  corpus researchers. The cumulative workflow adds the fourth skill described
+  above.
 - Safe `yt-insights setup assistants` workflow for Claude Code and Codex. It
   provides no-write preview, explicit user-level apply, independent verify,
   conflict refusal, atomic asset writes, MCP registration and rollback after a

@@ -1,0 +1,16 @@
+flowchart LR
+    U[Research question] --> A[Local assessment]
+    VTT[VTT and metadata] --> CAT[catalog.sqlite3]
+    VTT --> FTS[search-v1.sqlite3]
+    CAT --> A
+    FTS --> A
+    A --> R[research-v1.sqlite3]
+    A --> Q{Evidence sufficient?}
+    Q -->|Yes| D[Deterministic dossier]
+    Q -->|Refresh requested| C[Up to 10 candidates]
+    C --> P{Approve 1 to 5 exact IDs?}
+    P -->|Cancel| X[Cancelled or resumable session]
+    P -->|Approved| ACQ[Acquire exact IDs]
+    ACQ --> I[Reindex once]
+    I --> A
+    D --> E[Explicit current-project copy]

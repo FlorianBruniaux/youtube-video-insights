@@ -44,12 +44,14 @@ courant. Placez donc un chemin absolu dans
 
 ```toml
 data_root = "/Users/vous/Library/Application Support/yt-insights/corpus"
+research_output_root = "/Users/vous/Documents/yt-insights-research"
 ```
 
 Une variable convient aussi à une session ou un service :
 
 ```bash
 export YT_INSIGHTS_DATA_ROOT="/chemin/absolu/vers/le/corpus"
+export YT_INSIGHTS_RESEARCH_OUTPUT_ROOT="/chemin/absolu/vers/les/dossiers"
 ```
 
 La priorité est la suivante : option CLI lorsqu’elle existe, variable
@@ -65,6 +67,10 @@ uv run yt-insights doctor --json
 
 `--probe-backends` ajoute uniquement deux requêtes de santé vers cc-bridge et
 Ollama sur localhost. Il n’envoie aucune complétion et n’affiche aucune clé.
+
+`research_output_root` est optionnel, mais doit être absolu. Sans lui,
+`research export` exige un `--output` absolu. Le répertoire courant n'est jamais
+utilisé implicitement comme racine de publication.
 
 ## Acquérir et exporter pour un agent
 
@@ -159,6 +165,74 @@ uv run yt-insights search "context engineering" --channel ma-chaine --lang fr
 uv run yt-insights search "context engineering" --limit 5 --json
 ```
 
+## Lancer une recherche cumulative
+
+Cette section suppose que `catalog.sqlite3` et `search-v1.sqlite3` existent.
+Pour un corpus déjà présent, exécutez d'abord `catalog import-corpus` puis
+`index --all`. Une erreur `local_index_unavailable` signifie que cette étape
+manque ou que les chemins configurés ne ciblent pas la même racine.
+
+Une session commence toujours par une évaluation locale sans réseau :
+
+```bash
+uv run yt-insights research start \
+  "AI workflows in product and engineering teams" \
+  --query "AI product engineering team workflows" \
+  --freshness-profile standard \
+  --json
+```
+
+La réponse attendue contient `session_id`, `revision`, la couverture, la
+fraîcheur et `required_user_action=confirm_sufficiency_or_refresh`.
+
+Conservez le `session_id` et la dernière `revision` retournée. La commande
+`research status SESSION_ID --json` expose aussi l'historique des tentatives et
+résultats par vidéo, avec `attempt_id`, statut, `error_code` et `source_sha256`
+quand ils existent. Chaque cycle demande si les preuves sont suffisantes. Si
+la réponse est non, `refresh` autorise uniquement la découverte :
+
+```bash
+uv run yt-insights research decide SESSION_ID refresh \
+  --revision CURRENT_REVISION \
+  --idempotency-key UNIQUE_KEY \
+  --json
+uv run yt-insights research discover SESSION_ID \
+  --revision DECISION_REVISION \
+  --json
+uv run yt-insights research candidates SESSION_ID --json
+```
+
+La découverte présente au maximum dix candidats. Après choix humain, approuvez
+un à cinq IDs exacts, puis utilisez la nouvelle révision pour l'acquisition :
+
+```bash
+uv run yt-insights research approve SESSION_ID VIDEO_ID_A VIDEO_ID_B \
+  --revision CANDIDATE_REVISION \
+  --idempotency-key APPROVAL_KEY \
+  --json
+uv run yt-insights research acquire SESSION_ID \
+  --revision APPROVAL_REVISION \
+  --idempotency-key ACQUISITION_KEY \
+  --json
+```
+
+Le workflow reconstruit et publie le catalogue et l'index une seule fois par
+lot, réévalue les preuves, puis repose la question de suffisance. `retry`
+reprend seulement le stage retryable enregistré. Après un lot partiel, il
+conserve les succès et ne télécharge de nouveau que les éléments retryables.
+
+Exporter le dossier déterministe n'appelle aucun LLM :
+
+```bash
+uv run yt-insights research export SESSION_ID --json
+uv run yt-insights research export SESSION_ID \
+  --output "/chemin/absolu/vers/un-projet/research/SESSION_ID" \
+  --json
+```
+
+Le dossier contient `dossier.md` et `manifest.json`. Il reste séparé des VTT,
+du catalogue et de l'index FTS5.
+
 ## Connecter un client MCP
 
 Le serveur MCP donne un accès local et en lecture seule aux outils
@@ -166,7 +240,7 @@ Le serveur MCP donne un accès local et en lecture seule aux outils
 ordre. Configurez deux chemins absolus pour éviter qu’un client lancé depuis un
 autre répertoire lise les mauvaises bases.
 
-La commande recommandée installe les trois skills, le chercheur natif de chaque
+La commande recommandée installe les quatre skills, le chercheur natif de chaque
 client et les deux entrées MCP. Sans option de mode, elle produit seulement un
 aperçu JSON ou texte et n’écrit rien :
 
@@ -197,7 +271,21 @@ clé de fournisseur et n’installe aucun hook de routage implicite.
 
 Pour un seul client, remplacez `both` par `claude` ou `codex`. Les
 [prompts prêts à copier](examples/agent-prompts.md) couvrent l’acquisition, la
-recherche sourcée et l’export.
+recherche sourcée, le workflow cumulatif et l’export.
+
+Pour installer ou mettre à jour uniquement les quatre skills et les agents,
+sans inspecter ni modifier les entrées MCP existantes :
+
+```bash
+uv run yt-insights setup assistants --client both --assets-only --dry-run
+uv run yt-insights setup assistants --client both --assets-only --apply
+uv run yt-insights setup assistants --client both --assets-only --verify
+```
+
+Ces commandes restent des écritures utilisateur explicites avec `--apply`.
+Elles ne constituent pas une activation globale approuvée. Le quatrième skill
+et les canaris Claude Code et Codex frais restent non installés ou `UNKNOWN` à
+ce checkpoint.
 
 La configuration manuelle ci-dessous reste disponible pour les clients qui ne
 peuvent pas exécuter la commande de setup.
@@ -354,7 +442,10 @@ scénarios de tranche 50 VTT, corpus complet, benchmark et MCP.
 Le smoke wheel crée deux environnements temporaires hors checkout. L’installation
 minimale exécute `doctor`, `acquire --dry-run`, `export`, `index` et `search`.
 L’installation avec l’extra MCP vérifie l’ordre exact des quatre outils et les
-appelle sur un petit corpus. En mode `--offline`, uv ne télécharge rien et le
+appelle sur un petit corpus. Le smoke vérifie aussi les dix commandes
+`research`, installe les quatre skills sous un HOME temporaire avec
+`--assets-only`, et échoue si les clients factices Claude ou Codex sont
+invoqués. En mode `--offline`, uv ne télécharge rien et le
 test exige que les wheels nécessaires à la version Python active soient déjà
 dans son cache. Retirez `--offline` pour remplir ce cache lors d’une première
 exécution autorisée à accéder au registre Python.

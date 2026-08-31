@@ -1,176 +1,153 @@
 # État d'implémentation
 
-- **Mise à jour :** 2026-08-30
-- **Socle fonctionnel :** branche `main`; setup assistants ajouté dans le lot courant
-- **Validation locale :** 567 tests et 10 sous-tests réussis
-- **Wheel :** installation minimale et extra MCP validés hors checkout, offline
-- **Source globale :** fast-forward approuvé de `e760a81` vers `62aa9ca`, puis 144 tests réussis
-- **Release partagée :** `60cbcac…` active via la transaction `shared-cbd58f0a09d9-64a8fa11-a6a4-4d3f-a114-f87e188e1153`; check live `issues: []`
-- **Canaris assistants :** Codex frais voit les trois skills YouTube; Claude reste `UNKNOWN` car son CLI local n'est pas connecté
-- **Routage implicite :** `FAIL`; le meilleur candidat disjoint atteint 30/30 positifs et 0 confusion, mais déclenche encore 5/15 requêtes interdites
+**Mise à jour :** 2026-08-31
 
-YT Insights sait maintenant collecter des sous-titres YouTube, produire des
-analyses avec un LLM, indexer tous les passages horodatés dans SQLite et rendre
-cet index interrogeable depuis la CLI ou un client MCP.
+**Workflow cumulatif :** implémenté localement, vérification finale en cours
+
+**Activation globale :** `false`
+
+**GitHub CI :** absente
+
+Le dernier résultat combiné connu avant la finalisation Task 10 est
+`799 passed, 10 subtests passed`. Ce nombre est intermédiaire. Le coordinateur
+doit publier le résultat au SHA final.
 
 ## Vue d'ensemble
 
-Les blocs pleins sont implémentés. Les blocs en pointillés restent
-conditionnels ou non commencés.
-
 ```mermaid
-flowchart LR
-    YT[Chaîne, playlist ou vidéo YouTube] --> ACQ[acquire<br/>preview + confirmation]
-    ACQ --> DL[yt-dlp]
-    DL --> VTT[VTT horodatés + métadonnées]
-
-    VTT --> LLM[Insights et Shorts via LLM<br/>Ollama, MLX, bridge ou cloud explicite]
-    VTT --> CAT[catalog.sqlite3<br/>inventaire et erreurs d'import]
-    VTT --> IDX[search-v1.sqlite3<br/>passages FTS5 horodatés]
-
-    VTT --> EXP[export<br/>VTT, TXT, Markdown]
-    IDX --> CLI[Recherche CLI]
-    CAT --> MCP[MCP read-only<br/>corpus + vidéos]
-    IDX --> MCP[MCP read-only<br/>passages]
-    CLI --> AGENTS[3 skills portables<br/>chercheur Claude + Codex]
-    MCP --> AGENTS
-    SETUP[setup assistants<br/>dry-run, apply, verify] --> AGENTS
-    SETUP --> MCP
-    AGENTS --> ARTICLE[Recherche et rédaction d'articles]
-
-    ARTICLE -. besoin observé .-> UI[UI locale]
-    ARTICLE -. partage distant .-> HOST[API hébergée + extension]
-    IDX -. échecs lexicaux mesurés .-> HYBRID[Embeddings + recherche hybride]
-    HYBRID -. limites SQLite mesurées .-> QDRANT[Qdrant]
-    IDX -. questions multi-hop réelles .-> GRAPH[Base graphe]
-
-    classDef done fill:#d9f2e6,stroke:#287a4d,color:#10251a;
-    classDef later fill:#f4f4f5,stroke:#71717a,color:#27272a,stroke-dasharray: 5 5;
-    class YT,ACQ,DL,VTT,LLM,CAT,IDX,EXP,CLI,MCP,AGENTS,ARTICLE done;
-    class UI,HOST,HYBRID,QDRANT,GRAPH later;
+flowchart TD
+    U[Question de recherche] --> A[Évaluation locale]
+    VTT[VTT + métadonnées] --> CAT[catalog.sqlite3]
+    VTT --> FTS[search-v1.sqlite3]
+    CAT --> A
+    FTS --> A
+    A --> R[research-v1.sqlite3]
+    A --> Q1{Preuves suffisantes ?}
+    Q1 -->|Oui| OUT[Dossier déterministe optionnel]
+    Q1 -->|Refresh demandé| DISC[Découverte, max 10 candidats]
+    DISC --> Q2{IDs approuvés ?}
+    Q2 -->|Annuler| STOP[Session annulée]
+    Q2 -->|1 à 5 IDs exacts| ACQ[Acquisition]
+    ACQ --> IDX[Publication atomique catalogue + index]
+    IDX --> A
+    OUT --> COPY[Copie explicite vers le projet courant]
+    MCP[MCP, 4 outils read-only] --> CAT
+    MCP --> FTS
+    SKILL[4 skills portables] --> CLI[CLI commune]
+    CLI --> A
 ```
 
-## Ce qui est utilisable maintenant
+Source reproductible :
+[`docs/assets/cumulative-research-workflow.mmd`](assets/cumulative-research-workflow.mmd).
+Le JPG du README reste inchangé car sa source de génération n'est pas suivie.
 
-| Surface | Usage | État vérifié |
+## Ce qui fonctionne
+
+| Surface | Comportement implémenté | Limite |
 |---|---|---|
-| Collecte | Prévisualiser puis acquérir une vidéo, chaîne ou playlist | `acquire`; confirmation obligatoire pour les lots |
-| Analyse | Produire insights, conseils, outils, citations et rapport agrégé | Choix explicite ou automatique entre cc-bridge, Ollama, MLX, Anthropic et endpoint compatible |
-| Shorts | Identifier trois passages et télécharger le segment choisi | Implémenté |
-| Catalogue | Inventorier vidéos, sources, artefacts et erreurs d'import | Schéma portable v2, lecteurs immuables et writer copy-on-write dans `catalog.sqlite3` |
-| Recherche de passages | Retrouver un extrait VTT, son timestamp et son lien YouTube | Implémenté dans `search-v1.sqlite3` |
-| Préparation de revue | Produire un packet déterministe de résultats sourcés sans inventer de jugement | Script et template versionnés; statut maintenu à `UNKNOWN` jusqu'à revue humaine |
-| Export | Produire un VTT, TXT ou Markdown sourcé sans LLM | `export video`, publication atomique |
-| Diagnostic | Vérifier dépendances, chemins et backends locaux sans secret ni écriture | `doctor --json` |
-| Accès LLM | Interroger catalogue et passages depuis un client MCP | Quatre outils read-only implémentés |
-| Corpus complet | Construire l'index de tous les VTT après contrôle disque | Candidat temporaire v2: 3 270 documents, 183 789 passages, corpus réel inchangé |
-| Installation | Installer le checkout, l'extra MCP et les assistants | Wheel 0.2.0 testé hors checkout; setup transactionnel testé avec HOME et clients factices |
-| Assistants | Acquérir, rechercher et exporter depuis Claude Code ou Codex | Trois skills globaux découverts par un canari Codex frais; projection Claude présente, canari bloqué par l'authentification locale |
+| Acquisition | VTT et métadonnées, preview et confirmation des lots | Pas de transcription audio |
+| Évaluation locale | Couverture, dates inconnues et fraîcheur par fingerprint exact | Aucun accès réseau, ne décide jamais que le corpus suffit |
+| Sessions | État, révisions, événements, tentatives et résultats par vidéo dans `research-v1.sqlite3` | `status --json` expose `attempt_id`, statut, `error_code` et `source_sha256`, sans transcript |
+| Découverte | Recherche YouTube par métadonnées après `refresh` | Maximum 10 candidats, aucune acquisition implicite |
+| Approbation | IDs vérifiés contre le dernier snapshot | 1 à 5 IDs exacts |
+| Acquisition cumulative | Résultats par vidéo, refresh unique, réévaluation | Les sources acquises restent en cas d'échec de publication |
+| Retry | Reprend seulement le stage retryable enregistré | Un lot partiel ne réacquiert pas les vidéos déjà réussies |
+| Dossier | `dossier.md` et `manifest.json` déterministes | Destination absolue, pas de prose LLM ni de réindexation |
+| MCP | `list_corpora`, `search_videos`, `search_passages`, `get_passage` | Lecture seule |
+| Assistants | Quatre skills projet et assets wheel Claude Code/Codex | Quatrième skill non installé globalement |
+| Setup | `--dry-run`, `--apply`, `--verify`, plus `--assets-only` | Une écriture globale demande toujours une transaction approuvée |
 
-`catalog.sqlite3` et `search-v1.sqlite3` répondent à deux besoins différents.
-Le catalogue conserve l'inventaire opérationnel. L'index de recherche dérive
-directement des VTT et conserve les passages horodatés. Aucun des deux ne doit
-être utilisé comme substitut aux fichiers source.
+## Cycle utilisateur
 
-## Ce qui reste à décider ou implémenter
+```text
+start -> awaiting_sufficiency_confirmation
+  -> sufficient -> completed -> optional export
+  -> refresh -> discovering -> discover -> awaiting_candidate_approval
+     -> cancel
+     -> approve exact IDs -> acquire -> reindex -> reassess
+        -> awaiting_sufficiency_confirmation
+```
 
-| Évolution | Pourquoi elle n'est pas active | Gate avant développement |
+Chaque cycle d'évaluation se termine par la question de suffisance. `refresh`
+autorise uniquement la découverte. L'utilisateur choisit ensuite séparément
+les candidats à acquérir.
+
+## Les quatre couches
+
+| Donnée | Source ou dérivé | Ne doit jamais contenir |
 |---|---|---|
-| Revue humaine de la pertinence | Le packet peut être préparé, mais la qualité éditoriale n'est pas jugée | Remplacer les placeholders par des sujets réels, préparer le packet puis enregistrer les jugements humains |
-| Routage implicite Claude Code/Codex | Les calibrations disjointes conservent des faux positifs ou perdent des requêtes légitimes | Nouveau mécanisme seulement si un besoin d'invocation implicite est démontré; les skills explicites sont utilisables maintenant |
-| Application globale | La source `62aa9ca`, la release partagée `60cbcac…` et le setup local sont prêts | Capturer les préimages live, approuver le digest, appliquer le runtime puis `setup assistants --apply`; reconnecter Claude avant son canari |
-| Découpage LLM des longs transcripts | Insights et Shorts utilisent actuellement les 10 000 premiers caractères | Mesurer les pertes sur des articles réels, puis définir chunking et fusion |
-| Canari MLX réel | Le routage et le chargement paresseux sont testés sans allocation de modèle | Exécuter une génération courte avec un modèle MLX installé sur la machine cible |
-| UI locale | CLI et MCP couvrent déjà la recherche locale | Documenter une friction répétée lors de recherches réelles |
-| Extension YouTube | Elle ajoute maintenance, permissions navigateur et sécurité | Confirmer qu'un envoi manuel par CLI ou MCP ralentit l'usage |
-| Version hébergée | Elle impose authentification, isolation des corpus et exploitation | Besoin explicite de partage distant ou multi-utilisateur |
-| Embeddings et recherche hybride | FTS5 suffit techniquement au corpus actuel | Mesurer des échecs sur synonymes, paraphrases ou recherche bilingue |
-| Base graphe | Aucun besoin multi-hop n'est encore décrit par un cas réel | Nommer les questions impossibles à résoudre par passages et filtres |
-| Qdrant | SQLite reste sous les budgets actuels | Adopter d'abord les embeddings, puis mesurer une limite de SQLite |
+| VTT et métadonnées | Source YouTube locale | Dossier généré |
+| `catalog.sqlite3` | Inventaire dérivé | Passages de preuve comme source de recherche |
+| `.search/search-v1.sqlite3` | FTS5 dérivé des VTT | Texte de dossier ou article |
+| `.research/research-v1.sqlite3` | Historique opérationnel | Transcript complet, cookie ou secret |
+
+## Gates observées
+
+| Gate | Statut | Preuve |
+|---|---|---|
+| Pertinence | `UNKNOWN` | Le packet représentatif a retourné 0 résultat, donc aucun des 20 jugements requis |
+| Découverte | `PASS` | 3 sujets sur 3, 10 candidats par sujet, corpus et bases inchangés |
+| Refresh | `PASS` | 5 builds, p95 `47.122951 s`, 3 332 documents, 184 636 passages |
+| YouTube live final | `UNKNOWN` | Pas de canari live dans la vérification hermétique |
+| Claude Code frais | `UNKNOWN` | Chargement statique seulement |
+| Codex frais | `UNKNOWN` | Chargement statique seulement |
+| Activation globale | `false` | Pas de promotion du quatrième skill ou du runtime |
+
+Les statuts `UNKNOWN` bloquent les affirmations de qualité et l'activation
+globale. Ils ne bloquent pas une acquisition locale explicitement approuvée.
 
 ## Comment tester
 
-### 1. Suite automatisée
-
-Cette vérification ne contacte ni YouTube ni un LLM.
+### Suite locale
 
 ```bash
 uv sync --extra mcp --extra dev
 uv run --extra mcp --extra dev pytest -q
+uv run --extra dev ruff check src tests scripts
+uv run --extra dev mypy src
 uv lock --check
 git diff --check
 ```
 
-Résultat observé le 30 août 2026 sur la branche de travail : `567 passed, 10 subtests passed`.
+Ces commandes ne prouvent ni YouTube live ni le chargement effectif dans une
+session Claude Code ou Codex fraîche.
 
-### 2. Tranche locale de 50 VTT
+### Contrat de recherche
 
 ```bash
-uv run yt-insights index --dry-run
-uv run yt-insights index \
-  --selection representative \
-  --database /tmp/yt-insights-slice.sqlite3
-uv run yt-insights search "context engineering" \
-  --database /tmp/yt-insights-slice.sqlite3 \
-  --limit 5
+uv run pytest -q \
+  tests/research \
+  tests/test_cli_research.py \
+  tests/test_cumulative_research_gates.py \
+  tests/test_agent_assets.py \
+  tests/test_assistant_setup.py
 ```
 
-La première commande ne crée aucun fichier. Les deux suivantes construisent un
-index dérivé dans `/tmp`, puis affichent des passages avec timestamps et liens
-YouTube.
-
-### 3. Corpus complet et benchmark
+### Gates et wheel installable
 
 ```bash
-uv run yt-insights index \
-  --corpus-root output \
-  --database /tmp/yt-insights-full.sqlite3 \
-  --all
-uv run yt-insights index \
-  --database /tmp/yt-insights-full.sqlite3 \
-  --status
-uv run python scripts/benchmark_search.py \
-  --database /tmp/yt-insights-full.sqlite3 \
-  --warmup 1 \
-  --repeats 20 \
-  --limit 10
-```
-
-La mesure de référence sur la machine de développement est un build en 48,75 s
-et un p95 chaud de 13,81 ms. La pertinence humaine reste `UNKNOWN` malgré ces
-résultats techniques.
-
-Le candidat v2 reconstruit pendant l'intégration conserve les mêmes 3 270
-documents et 183 789 passages. Les manifests des 10 240 fichiers source sont
-identiques avant et après. Le catalogue contient 3 130 vidéos, 6 487 artefacts
-et cinq erreurs persistées. Il reste temporaire et n'a pas remplacé les bases
-actives.
-
-### 4. MCP et packaging
-
-```bash
-uv run --extra mcp pytest -q tests/test_mcp_server.py
+uv run python scripts/validate_cumulative_research_gates.py \
+  plans/evidence/2026-08-31-cumulative-research-gates.json
 .venv/bin/python scripts/smoke_wheel.py --offline
 ```
 
-Le premier test ouvre un vrai client MCP en mémoire. Le smoke construit un
-wheel depuis une copie propre, vérifie les assets d'assistants, teste
-l'installation sans MCP, puis avec l'extra MCP. Il exécute `doctor`,
-`acquire --dry-run`, `export`, `index`, `search`, l'entrypoint stdio et
-exactement quatre outils MCP. Les tests de setup couvrent séparément le
-dry-run, les conflits, l'installation, le rollback et la vérification avec deux
-clients factices. Aucun appel réel à YouTube, Ollama, MLX ou un fournisseur
-cloud n'est inclus dans ces gates.
+Le smoke construit le wheel depuis une copie propre, installe le quatrième
+skill dans un HOME temporaire, vérifie les dix sous-commandes `research`, puis
+teste les quatre outils MCP read-only. Les exécutables Claude et Codex factices
+ne doivent pas être invoqués par `--assets-only`.
+
+## Non livré
+
+Interface web, extension navigateur, API hébergée, MCP writable, recherche
+vectorielle ou hybride, base graphe et acquisition automatique restent hors du
+produit actuel. Leurs déclencheurs sont définis dans la
+[roadmap](../ROADMAP.md).
 
 ## Documents associés
 
-- [Installation locale](../INSTALL.md)
-- [Roadmap produit](../ROADMAP.md)
-- [Plan consolidé](../plans/2026-08-27-CONSOLIDATED-v2.md)
-- [Architecture Claude Code et Codex](../plans/specs/AGENT-PLATFORM.md)
-- [Plan runtime agentique](../plans/2026-08-28-09-agent-ready-runtime.md)
-- [Plan intégration globale](../plans/2026-08-28-10-claude-codex-global-integration.md)
-- [Plan hébergé et extension](../plans/2026-08-28-11-hosted-extension.md)
-- [Preuve du corpus complet](../plans/evidence/2026-08-28-full-corpus-benchmark.md)
-- [Preuve de l'intégration finale](../plans/evidence/2026-08-28-final-integration.md)
-- [Artefact de revue humaine P2](../plans/evidence/2026-08-28-p2-50-vtt-evaluation.md)
+- [Installation](../INSTALL.md)
+- [Roadmap](../ROADMAP.md)
+- [Guide Claude Code et Codex](claude-code.md)
+- [Gates mesurées](../plans/evidence/2026-08-31-cumulative-research-gates.md)
+- [Spécification](superpowers/specs/2026-08-31-cumulative-research-workflow-design.md)
+- [Plan d'implémentation](superpowers/plans/2026-08-31-cumulative-research-workflow.md)

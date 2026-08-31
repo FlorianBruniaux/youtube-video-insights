@@ -1,106 +1,122 @@
 # Claude Code and Codex integration
 
-YT Insights exposes one product through three explicit surfaces: the packaged CLI, a four-tool read-only MCP server, and portable skills. The skills describe workflows and delegate execution to the CLI or MCP instead of duplicating product logic.
+YT Insights exposes one product through a packaged CLI, a four-tool read-only
+MCP server, and four portable skills. Product state transitions remain in the
+CLI. Skills explain the workflow and never reproduce its SQL, acquisition, or
+index-publication logic.
 
-See [Implementation status](IMPLEMENTATION-STATUS.md) for the detailed verification matrix.
+## Current boundary
 
-## Current status
+| Surface | Repository | Live workstation |
+|---|---|---|
+| Portable skills | Four: acquire, read-only research, export, cumulative research | Older shared release has three; cumulative skill not globally installed |
+| Native researchers | Claude Code and Codex read-only agents are versioned | Global installation not verified |
+| Runtime | Wheel and offline smoke are versioned | Managed global runtime not verified |
+| MCP | Exactly four read-only tools | Global client registrations not verified |
+| Fresh clients | Static assets and routing fixtures are tested | Claude Code `UNKNOWN`, Codex `UNKNOWN` |
+| Global activation | Candidate workflow exists | `false` |
 
-| Surface | Repository state | Development workstation state |
-| --- | --- | --- |
-| Portable skills | `.agents/skills/youtube-*` contains acquire, research and export | Shared release `60cbcac...` is active; a fresh Codex session sees all three skills |
-| Claude researcher | `.claude/agents/youtube-corpus-researcher.md` is versioned | Global agent not installed; fresh Claude validation is blocked because the CLI is not connected |
-| Codex researcher | `.codex/agents/youtube-corpus-researcher.toml` is versioned | Global agent not installed |
-| Runtime | Package and wheel smoke tests are versioned | Managed global `uv` runtime not installed |
-| Setup | `yt-insights setup assistants` packages skills, agents and MCP registration | Dry-run and fake-client transaction tests pass; no new live transaction applied |
-| MCP | `yt-insights-mcp` exposes four read-only tools | Global Claude/Codex MCP entries not installed |
-| Implicit routing | A rejection fixture protects against accidental auto-routing | Explicit skill, agent or MCP invocation is required |
+Cloning, installing the project, and the default setup preview do not change
+global Claude Code or Codex configuration.
 
-Cloning and the default setup preview never change global Claude or Codex configuration. The shared skills release was installed through a separate, approved transaction. The new `--apply` mode is the explicit user-level transaction for native agents and MCP registration; it has not been run on the development workstation.
+## Four portable skills
 
-## Install the assistant surfaces
+| Skill | Purpose | Writes? |
+|---|---|---|
+| `youtube-acquire` | Preview and acquire a video, playlist, channel, or batch | Yes, after the CLI confirmation boundary |
+| `youtube-research` | Search the existing catalogue and timestamped passages | No |
+| `youtube-export` | Export an existing transcript as VTT, text, or Markdown | Only the requested destination |
+| `youtube-cumulative-research` | Assess, ask, discover, ask again, acquire exact IDs, reassess, and optionally export a dossier | Yes, only after explicit decisions |
 
-Use one absolute corpus path from every project:
+The cumulative skill runs in the main session. It never uses the read-only MCP
+for mutation and never approves candidates on behalf of the user.
+
+## Mandatory cumulative workflow
+
+1. Run `yt-insights research start ... --json` or resume with `status`.
+2. Present coverage, freshness, newest source date, last discovery date, and
+   coverage limits.
+3. Ask whether the evidence is sufficient whenever
+   `required_user_action=confirm_sufficiency_or_refresh`.
+4. If the user requests a refresh, record `decide ... refresh`, then run
+   `discover`. Present at most ten candidates.
+5. Ask the user to choose one to five exact IDs or cancel.
+6. Run `approve` with unchanged IDs, then `acquire`. Reassess and ask the
+   sufficiency question again.
+7. After sufficiency is confirmed, ask whether the user wants a dossier, an
+   article draft, a corpus export, both, or nothing else.
+
+Every mutation uses the latest returned revision and a fresh idempotency key.
+`status --json` exposes structured attempts and per-video outcomes so the
+assistant can report `attempt_id`, status, `error_code`, and `source_sha256`
+without parsing diagnostics. Retry keeps successful items and never reacquires
+them after a partial batch. An invalid JSON response, stale revision,
+unavailable network, or unknown session fails closed.
+
+English prompts for the three pilot topics, resume, refresh, exact candidate
+approval, dossier export, and current-project copy are in
+[examples/agent-prompts.md](../examples/agent-prompts.md).
+
+## Install assistant assets
+
+Preview the complete skills, native agents, and MCP transaction:
 
 ```bash
 uv run --extra mcp yt-insights setup assistants \
   --client both \
   --data-root "$YT_INSIGHTS_DATA_ROOT" \
   --dry-run
-
-uv run --extra mcp yt-insights setup assistants \
-  --client both \
-  --data-root "$YT_INSIGHTS_DATA_ROOT" \
-  --apply
-
-uv run --extra mcp yt-insights setup assistants \
-  --client both \
-  --data-root "$YT_INSIGHTS_DATA_ROOT" \
-  --verify --json
 ```
 
-The installer copies the three portable skills to `~/.agents/skills`, installs
-one read-only native researcher per selected client, and registers the same
-absolute MCP executable and databases in Claude Code and Codex. A conflict
-stops before any write. A failed registration rolls back the state created by
-that execution. Existing different files or MCP entries require manual review.
+`--apply` is an explicit user-level write. `--verify` checks the managed files
+and registrations. Different existing files or MCP entries block the
+transaction instead of being overwritten.
 
-See [assistant prompt examples](../examples/agent-prompts.md) for explicit
-acquisition, research, article dossier, comparison and export requests.
-
-## Supported portable skills
-
-| Skill | Purpose | Writes data? |
-| --- | --- | --- |
-| `youtube-acquire` | Acquire a video or channel after source confirmation | Yes, through the packaged CLI |
-| `youtube-research` | Search and compare the local corpus with citations | No |
-| `youtube-export` | Export an existing corpus item to a requested format | Yes, only to the requested export target |
-
-Invoke these skills explicitly. No global hook silently routes general YouTube requests to YT Insights.
-
-## Local use from the repository
+To install or upgrade only the four skills and native agent assets without
+reading or changing MCP registrations:
 
 ```bash
-uv sync --extra mcp --extra dev
-uv run yt-insights doctor --json
-uv run yt-insights acquire "https://www.youtube.com/watch?v=VIDEO_ID" --dry-run --json
-uv run yt-insights index --all
-uv run yt-insights search "context engineering" --limit 5
-uv run yt-insights-mcp
+uv run yt-insights setup assistants --client both --assets-only --dry-run
+uv run yt-insights setup assistants --client both --assets-only --apply
+uv run yt-insights setup assistants --client both --assets-only --verify
 ```
 
-Until the managed global runtime is installed, prefer `uv run`. A bare `yt-insights` command may resolve to an older pyenv shim that does not expose the current command set.
+No global apply is authorized by this documentation. A live change requires an
+inert candidate, preimage hashes, an exact redacted diff, a digest-bound
+approval, a preimage recheck, rollback, and fresh-client canaries.
 
-## Read-only researcher surface
-
-The MCP server exposes exactly four tools:
+## Read-only MCP
 
 | Tool | Result |
-| --- | --- |
-| `list_corpora` | Available local corpora and their bounded metadata |
-| `search_videos` | Indexed videos matching a metadata query |
+|---|---|
+| `list_corpora` | Available local corpora and bounded metadata |
+| `search_videos` | Catalogue videos matching a metadata query |
 | `search_passages` | Ranked transcript passages with timestamps and provenance |
-| `get_passage` | One indexed passage and its source metadata |
+| `get_passage` | One passage and its source metadata |
 
-Research answers must preserve the source video, timestamp and distinction between direct evidence, adjacent evidence and inference. Repository assets prove that the integration can be packaged and tested. They do not prove that a global agent or MCP entry is installed on a workstation.
-
-## Historical Claude commands
-
-The project-specific commands remain compatibility shortcuts. They are not an implicit dispatcher.
-
-| Command | Purpose |
-| --- | --- |
-| `/yt-process` | Run the processing pipeline for a known source |
-| `/yt-ask` | Ask a question against existing local outputs |
-| `/yt-analyze-video` | Analyze one processed video |
-| `/yt-analyze-channel` | Analyze one processed channel |
-| `/yt-shorts` | Generate Shorts candidates from existing insights |
+The MCP does not discover YouTube candidates, acquire videos, rebuild indexes,
+write dossiers, expose SQL, or run a shell.
 
 ## Verification boundary
 
 ```bash
-.venv/bin/python -m pytest -q
-UV_CACHE_DIR=/tmp/yt-insights-uv-cache bash scripts/smoke_wheel.sh
+uv run --extra mcp --extra dev pytest -q
+.venv/bin/python scripts/smoke_wheel.py --offline
+git diff --check
 ```
 
-Automated checks cover package structure, CLI contracts, MCP schemas, packaged assets, dry-run, conflicts, rollback and verification against fake clients. Fresh client sessions are still required to prove discovery and effective loading. At the current checkpoint, only the fresh Codex portable-skill canary is confirmed. Fresh Claude loading, global native agents and global MCP registration remain `UNKNOWN` because the new transaction has not been applied.
+The wheel smoke installs assets under a temporary HOME, checks all ten
+`research` commands, and fails if fake Claude or Codex executables are invoked
+by assets-only setup. It does not prove a fresh real client loads the skill.
+
+Observed external gates at this checkpoint:
+
+- relevance: `UNKNOWN`;
+- discovery probe: `PASS`, 3 subjects with 10 candidates each;
+- refresh performance: `PASS`, 5 builds, p95 `47.122951 s`;
+- live YouTube cumulative flow: `UNKNOWN`;
+- fresh Claude Code and Codex sessions: `UNKNOWN`;
+- global activation: `false`.
+
+The repository has no GitHub CI. All reported checks are local unless a future
+workflow is added and observed.

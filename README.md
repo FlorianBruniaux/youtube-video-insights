@@ -3,16 +3,23 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Turn YouTube channels into a local research corpus: transcripts, structured
-insights, SQLite/FTS5 search, timestamped exports, reports, Shorts, and
-read-only MCP access for Claude Code or Codex.
+Turn YouTube into a cumulative local research corpus: transcripts, structured
+insights, SQLite/FTS5 search, resumable research sessions, deterministic
+evidence dossiers, reports, Shorts, and read-only MCP access for Claude Code or
+Codex.
 
-The current implementation can acquire YouTube subtitles, export sourced text,
-index every timestamped VTT passage, and expose the corpus through the CLI or
-four read-only MCP tools. See the
+The current implementation checks local evidence first, reports coverage and
+freshness, asks whether it is sufficient, and can discover new YouTube sources
+only after that answer. Acquisition remains a second explicit decision: at
+most ten candidates are presented and only one to five exact approved IDs can
+be acquired. See the
 [implementation status, diagram, and test guide](docs/IMPLEMENTATION-STATUS.md).
 
 ![yt-insights workflow: preview and acquire YouTube VTT sources, then branch into SQLite/FTS5 timestamped search without an LLM, optional analysis, source-backed exports, and read-only MCP access from Claude Code or Codex.](docs/assets/yt-insights-workflow.jpg)
+
+The image is retained as the stable acquisition overview. The current
+cumulative-research architecture is also available as a reproducible
+[Mermaid source](docs/assets/cumulative-research-workflow.mmd).
 
 ---
 
@@ -28,11 +35,20 @@ four read-only MCP tools. See the
 | Index an existing corpus | `uv run yt-insights catalog import-corpus ./output` | One deduplicated SQLite catalog with durable import errors |
 | Build the timestamped search index | `uv run yt-insights index --all` | A derived FTS5 index over every VTT passage |
 | Find a sourced passage | `uv run yt-insights search "AI product discovery"` | Ranked excerpts, timestamps, and direct YouTube links |
+| Start cumulative research | `uv run yt-insights research start "AI product engineering workflows" --json` | A durable local assessment and a mandatory sufficiency question |
+| Resume research | `uv run yt-insights research status SESSION_ID --json` | Revision, evidence, candidates, attempts, per-video outcomes, and required user action |
+| Export an evidence dossier | `uv run yt-insights research export SESSION_ID --output /absolute/path --json` | Deterministic `dossier.md` and `manifest.json`, kept outside source indexes |
 | Query from an LLM client | `uv run --extra mcp yt-insights-mcp` | Four read-only corpus, video, and passage tools |
 
 Analysis uses a local or cloud LLM. Catalog import, transcript indexing, and
 both search commands do not. Repeated runs reuse analysis caches and avoid
 duplicating unchanged catalog artifacts.
+
+Before the first cumulative session, acquire at least one source or import an
+existing corpus, then build the timestamped index. A successful
+`research start ... --json` returns a `session_id`, a `revision`, coverage and freshness,
+plus `required_user_action=confirm_sufficiency_or_refresh`. It never contacts
+YouTube.
 
 ---
 
@@ -61,20 +77,33 @@ source without a demonstrated missing-subtitle use case.
 
 ## How it works
 
-### Local knowledge path
+### Four local data layers
+
+| Layer | Purpose | Mutation boundary |
+|---|---|---|
+| VTT and metadata files | Immutable source text, timestamps, and YouTube identity | Added only by explicit acquisition |
+| `catalog.sqlite3` | Inventory, memberships, artifacts, import runs, and durable errors | Rebuilt and atomically published from source files |
+| `.search/search-v1.sqlite3` | Derived FTS5 passages with timestamped YouTube URLs | Rebuilt and atomically published from VTT files |
+| `.research/research-v1.sqlite3` | Sessions, assessments, decisions, candidates, attempts, and events | Updated by the `research` state machine |
+
+`dossier.md` and `manifest.json` are deterministic publications, not a fifth
+source layer. They never enter the catalogue or FTS index.
 
 ```mermaid
 flowchart LR
-    A[YouTube source] --> B[VTT + metadata]
-    B --> C[search-v1.sqlite3]
-    C --> D[yt-insights search]
-    C --> E[Read-only MCP]
-    D --> F[Sourced article research]
-    E --> F
+    U[Research question] --> A[Local assessment]
+    VTT[VTT + metadata] --> CAT[catalog.sqlite3]
+    VTT --> FTS[search-v1.sqlite3]
+    CAT --> A
+    FTS --> A
+    A --> R[research-v1.sqlite3]
+    A --> Q{Evidence sufficient?}
+    Q -->|Yes| D[Deterministic dossier]
+    Q -->|Refresh requested| C[Up to 10 candidates]
+    C --> P{Approve 1 to 5 exact IDs?}
+    P -->|Yes| X[Acquire, reindex once, reassess]
+    X --> A
 ```
-
-The local catalog remains a separate inventory database. The timestamped search
-index derives directly from VTT files and can be rebuilt without changing them.
 
 <details>
 <summary>Insight pipeline</summary>
@@ -252,6 +281,10 @@ relative to the current directory. Configure an absolute TOML or environment
 path for use from Claude Code, Codex, cron, or unrelated repositories. Explicit
 `--corpus-root` and `--database` values on index/search commands override the
 derived paths for that invocation.
+
+Set an optional absolute `research_output_root` in the same TOML file, or use
+`YT_INSIGHTS_RESEARCH_OUTPUT_ROOT`, to publish canonical dossiers. Without it,
+`research export` requires an explicit absolute `--output`.
 
 `acquire` downloads subtitles and metadata. It calls no LLM unless `--analyze`
 is present. A channel, playlist, or batch file exits with code 3 before download
@@ -549,6 +582,31 @@ yt-insights index [--dry-run|--status|--all]
 yt-insights search QUERY [--channel ID] [--lang CODE] [--limit 1..20] [--json]
 
   Search timestamped passages in the derived transcript index.
+
+yt-insights research start TOPIC [--query QUERY]... [--freshness-profile PROFILE] [--json]
+yt-insights research status SESSION_ID [--json]
+yt-insights research decide SESSION_ID sufficient|refresh --revision N --idempotency-key KEY [--json]
+
+  Assess local evidence, resume a durable session with structured acquisition
+  history, and record the mandatory sufficiency decision. Status includes
+  attempt ID, status, per-video error code, and source SHA-256 when available.
+  `refresh` authorizes discovery, not acquisition.
+
+yt-insights research discover SESSION_ID --revision N [--json]
+yt-insights research candidates SESSION_ID [--json]
+yt-insights research approve SESSION_ID VIDEO_ID... --revision N --idempotency-key KEY [--json]
+yt-insights research acquire SESSION_ID --revision N --idempotency-key KEY [--json]
+
+  Present at most ten candidates, then acquire only one to five exact IDs
+  selected by the user. Refresh the indexes once and assess the corpus again.
+
+yt-insights research retry SESSION_ID --revision N --idempotency-key KEY [--json]
+yt-insights research cancel SESSION_ID --revision N --idempotency-key KEY [--json]
+yt-insights research export SESSION_ID [--output DIRECTORY] [--force] [--json]
+
+  Retry only the recorded failed stage, preserve successful per-video outcomes
+  without reacquiring them, cancel candidate review, or publish a deterministic
+  evidence dossier.
 ```
 
 </details>
@@ -580,7 +638,13 @@ output/
     VIDEO_ID.en.md                            # sourced, timestamped transcript export
   catalog.sqlite3                             # inventory database
   .search/search-v1.sqlite3                   # timestamped passage index
+  .research/research-v1.sqlite3               # durable research sessions
 ```
+
+When `research_output_root` is configured, dossiers use
+`<root>/<topic-slug>/<YYYY-MM-DD>-<session-id>/`. An explicit `--output`
+supports a safe copy into another project. Dossiers are never indexed as
+YouTube evidence.
 
 Full-channel automation may place the same `transcripts/`, `insights/`, and
 `shorts/` subdirectories under `output/<channel-slug>/`. The corpus scanner
@@ -696,6 +760,10 @@ All keys are optional. CLI flags and `YT_INSIGHTS_*` env vars take precedence ov
 | Deterministic export | VTT, cleaned text, or sourced Markdown without an LLM |
 | Runtime doctor | Secret-safe, no-write diagnostics with optional localhost-only probes |
 | MCP access | Exactly four read-only corpus, video, search, and passage tools |
+| Cumulative research | Catalogue-first coverage and freshness assessment with durable resume |
+| Human approval boundaries | Mandatory sufficiency question, then a separate exact-ID acquisition decision |
+| Research limits | At most 10 candidates and 5 approved acquisitions per cycle |
+| Evidence dossier | Deterministic Markdown and JSON manifest, separate from source indexes |
 | Index integrity | Generation receipt bound to the database SHA-256; cached validation invalidated by file identity and `ctime` |
 | Backend identity | CLI reports the resolved backend, endpoint, and exact model without exposing URL credentials |
 | LLM input visibility | CLI reports used and total transcript characters before each real generation call |
@@ -713,22 +781,25 @@ features, conditional work, and reproducible validation commands.
 
 ### Portable agent integration status
 
-The repository includes three portable skills, `youtube-acquire`,
-`youtube-research`, and `youtube-export`, plus a read-only corpus researcher for
-Claude Code and Codex. They call the packaged CLI or the four-tool MCP instead
-of reimplementing acquisition and search.
+The repository includes four portable skills, `youtube-acquire`,
+`youtube-research`, `youtube-export`, and `youtube-cumulative-research`, plus a
+read-only corpus researcher for Claude Code and Codex. The cumulative skill
+runs in the main session because discovery and approved acquisition may use the
+network and write source files. All four delegate to the packaged CLI or
+read-only MCP.
 
 Invoke the skills explicitly. The disjoint routing evaluation rejected the
 implicit BM25 hook because every generalizable calibration left either missed
 requests or forbidden activations.
 
-On the development workstation, the digest-approved shared release `60cbcac…`
-is active and a fresh Codex session discovers all three skills. This shared
-installation does not install the packaged `yt-insights` runtime, the native
-researcher agents, or the MCP client entries. The repository now includes a
-safe setup command for those remaining assistant assets. It previews by
-default, refuses different existing files, and rolls back newly created state
-if one client registration fails:
+On the development workstation, the older digest-approved shared release
+`60cbcac…` contains three skills. The fourth cumulative skill exists in this
+repository and in the wheel candidate, but it has not been installed globally.
+Fresh Claude Code and Codex canaries for this workflow remain `UNKNOWN` and
+`global_activation_ready` is `false`.
+
+The setup command previews by default, refuses different existing files, and
+rolls back newly created state if one client registration fails:
 
 ```bash
 uv run --extra mcp yt-insights setup assistants \
@@ -747,10 +818,20 @@ uv run --extra mcp yt-insights setup assistants \
   --verify
 ```
 
+Install or upgrade only repository skills and native agent files without
+reading or changing existing MCP registrations with:
+
+```bash
+uv run yt-insights setup assistants --client both --assets-only --dry-run
+uv run yt-insights setup assistants --client both --assets-only --apply
+uv run yt-insights setup assistants --client both --assets-only --verify
+```
+
 `--apply` changes the user-level Claude Code and Codex configuration. Cloning,
 installing, or running the default preview changes nothing globally. The
-development workstation has not applied this new transaction yet. Claude
-discovery remains `UNKNOWN` because its local CLI is not connected.
+development workstation has not applied this new four-skill transaction. Live
+YouTube research and fresh Claude Code and Codex workflow canaries remain
+`UNKNOWN`.
 
 | Document | Purpose |
 |---|---|
@@ -793,6 +874,7 @@ dispatcher.
 | `youtube-acquire` | Previews and acquires one video, playlist, or channel through the packaged CLI |
 | `youtube-research` | Searches the local catalogue and timestamped passage index without writes |
 | `youtube-export` | Exports an existing video as VTT, text, or sourced Markdown |
+| `youtube-cumulative-research` | Assesses local evidence, asks before discovery and exact-ID acquisition, reassesses, then optionally exports a dossier |
 
 Historical explicit-only compatibility commands:
 
@@ -806,11 +888,12 @@ Historical explicit-only compatibility commands:
 
 ### How it works
 
-1. Invoke `youtube-acquire`, `youtube-research`, or `youtube-export` explicitly.
+1. Invoke one of the four portable skills explicitly.
 2. Acquisition runs `doctor`, then a dry-run preview before any multi-video write.
 3. Research uses the four read-only MCP tools and returns timestamped sources.
-4. Export uses existing corpus artifacts and performs no LLM call.
-5. Historical Shorts commands remain explicit and download a clip only after confirmation.
+4. Cumulative research asks whether local evidence is sufficient and keeps discovery separate from candidate approval.
+5. Export uses existing corpus artifacts and performs no LLM call.
+6. Historical Shorts commands remain explicit and download a clip only after confirmation.
 
 Each skill respects the same idempotence as the CLI: a VTT already on disk is not re-downloaded, a cached insight JSON triggers no LLM call.
 

@@ -1,195 +1,100 @@
 # Roadmap produit YT Insights
 
-**Mise à jour :** 2026-08-30
-**Statut du socle livré :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**Statut du runtime pour Claude Code et Codex :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**Statut des skills et agents projet :** `IMPLÉMENTÉ ET VALIDÉ LOCALEMENT`.
-**Statut de la source globale :** `INTÉGRÉE`, commit `62aa9ca`, 144 tests réussis.
-**Statut de la release partagée :** `ACTIVE`, release `60cbcac…`, huit opérations journalisées.
-**Statut du routage implicite :** `REJETÉ`, aucun candidat disjoint ne passe tous les gates.
-**Statut de l'installation globale :** `PRÊTE À APPLIQUER`, setup transactionnel livré; skills actifs, runtime, agents et MCP live non installés.
-**Readiness éditoriale :** `UNKNOWN` ; ce statut bloque la promotion produit, pas l'implémentation autorisée.
+**Mise à jour :** 2026-08-31
 
-La CLI, l'index complet et le MCP sont utilisables localement. Le statut
-`UNKNOWN` porte uniquement sur la pertinence éditoriale des classements, qui
-n'a pas encore reçu de jugement humain. Le [diagramme d'implémentation et guide
-de test](docs/IMPLEMENTATION-STATUS.md) donnent la vue opérationnelle actuelle.
+**Workflow cumulatif local :** `IMPLÉMENTÉ`, validation finale en cours
 
-## État historique avant ce lot
+**Activation globale du nouveau workflow :** `false`
 
-- Baseline historique : **121 tests `PASS`** au snapshot `aebd6a474244bdf000544a076675ba43481f90f5`, avec `PYTHONPATH=src pytest -q`.
-- Cette commande n'est pas rejouée par cette mise à jour documentaire. Le coordinateur consigne séparément tout résultat post-lot.
-- [Évidence historique de la tranche VTT](plans/evidence/2026-08-27-search-vertical-slice.md) : contexte, worktree et commandes de vérification antérieures. Elle doit être lue avec le snapshot Git ci-dessus, sans confondre ses résultats avec une nouvelle exécution à 121 tests.
-- La tranche technique de **50 VTT** est livrée, mais l'échantillon n'est pas représentatif et sa pertinence éditoriale reste `UNKNOWN`.
+**Pertinence humaine :** `UNKNOWN`
 
-## Vérité des données
+YT Insights est maintenant un corpus YouTube local qui peut grandir par cycles
+contrôlés. Une recherche commence toujours dans les données existantes. Le
+produit mesure couverture et fraîcheur, demande si le résultat suffit, puis ne
+cherche sur YouTube et n'acquiert des sources qu'après deux décisions humaines
+distinctes.
 
-YT Insights récupère les **sous-titres VTT publiés par YouTube**. Le pipeline actuel ne traite pas l'audio.
+## Ce qui est livré
 
-| Élément | Rôle | Règle |
+| Capacité | État | Limite explicite |
 |---|---|---|
-| Fichiers VTT YouTube | Source de vérité du texte et des timestamps | Les passages en dérivent directement |
-| `catalog.sqlite3` | Inventaire, import et repli pour retrouver une vidéo | Ne fournit ni texte, ni passages, ni timestamps à l'index de recherche |
-| `search-v1.sqlite3` | Index dérivé des passages et timestamps VTT | Existe et se reconstruit indépendamment ; sa promotion full-corpus comme référence produit reste bloquée tant que la pertinence est `UNKNOWN` |
+| Acquisition VTT et métadonnées | Implémentée | Confirmation pour les lots, aucune transcription audio |
+| Catalogue local | Implémenté | Inventaire dans `catalog.sqlite3`, aucun passage source |
+| Recherche horodatée | Implémentée | FTS5 dans `search-v1.sqlite3`, pertinence humaine encore `UNKNOWN` |
+| Sessions de recherche | Implémentées | État durable dans `.research/research-v1.sqlite3` |
+| Couverture et fraîcheur | Implémentées | Profils déterministes, aucune décision automatique de suffisance |
+| Découverte YouTube | Implémentée | Maximum 10 candidats, métadonnées seulement |
+| Approbation et acquisition | Implémentées | 1 à 5 IDs exacts, décision séparée de `refresh` |
+| Reprise et retry | Implémentés | Historique structuré; un lot partiel ne réacquiert pas les succès |
+| Dossier de preuves | Implémenté | `dossier.md` et `manifest.json`, jamais réindexés comme sources |
+| Assistants Claude Code et Codex | Assets projet implémentés | Quatrième skill non installé globalement, canaris frais `UNKNOWN` |
+| MCP | Quatre outils read-only | Aucun outil de mutation ou d'orchestration |
 
-Les métadonnées vidéo servent à relier les résultats à YouTube. Elles ne remplacent jamais le VTT comme preuve textuelle.
+## Les quatre couches de données
 
-## Séquence et droits d'exécution
-
-| Ordre | Phase | Implémentation et tests | Promotion, exposition ou readiness produit |
-|---:|---|---|---|
-| P0 | Documentation de vérité | `TERMINÉE` | Aucune promotion de gate humaine |
-| P1 | Corriger le resolver Ollama | `TERMINÉE`, tests et revue passés | Correctif technique prêt, sans génération LLM réelle dans ce lot |
-| P2 | Recherche utile et performance sur 50 VTT | `TERMINÉE TECHNIQUEMENT` | `UNKNOWN` tant que l'artefact P2 ne contient pas de jugement humain |
-| P3 | Corpus complet | `TERMINÉE TECHNIQUEMENT` | Promotion comme référence produit full-corpus bloquée par P2 `UNKNOWN` |
-| P4 | MCP minimal | `TERMINÉE TECHNIQUEMENT` | Exposition comme accès produit prêt bloquée par P2 `UNKNOWN` |
-| P5 | Installation | `TERMINÉE TECHNIQUEMENT` | Installation promue ou recommandée aux usages produit bloquée par P2 `UNKNOWN` |
-
-L'[artefact P2](plans/evidence/2026-08-28-p2-50-vtt-evaluation.md) et son
-[template de requêtes](plans/evidence/2026-08-30-p2-query-template.json) sont
-suivis dans le repo. Le script `scripts/prepare_search_relevance_evaluation.py`
-fige le commit déclaré, les hashes des sources chargées observées, du snapshot
-d'index capturé et des requêtes, ainsi que les résultats sourcés, sans produire
-de jugement. Le pilote historique porte sur
-20 résultats issus d'un index représentatif de 50 VTT. Le gate complet porte
-sur 60 à 100 cas avec oracle humain. L'absence de jugement conserve `UNKNOWN` :
-elle interdit la promotion, jamais le développement autorisé de P3 à P5.
-
-La [preuve full-corpus](plans/evidence/2026-08-28-full-corpus-benchmark.md)
-atteste 3 270 documents, 183 789 passages, un build en 48,75 s, un p95
-chaud de 13,806 ms et une recherche dans un nouveau processus en 0,32 s.
-Cette dernière mesure conserve le cache disque du système. Ces résultats
-valident la capacité technique, pas la pertinence éditoriale.
-
-La [preuve d'intégration finale](plans/evidence/2026-08-28-final-integration.md)
-ajoute un candidat catalogue v2 portable: 3 130 vidéos, 6 487 artefacts, cinq
-erreurs persistées et un manifeste identique des 10 240 fichiers source avant
-et après. Aucun remplacement des bases actives n'a eu lieu.
-
-## Flux cible : deux branches indépendantes
-
-```text
-VTT YouTube + métadonnées vidéo
-        ├──► catalog.sqlite3 : inventaire/import/repli vidéo
-        │
-        └──► P2 : échantillon, recherche, pertinence et performance
-                    ↓
-              search-v1.sqlite3 : index dérivé des passages/timestamps
-                    ↓
-              P3 corpus complet, P4 MCP minimal, P5 installation
-                    ↓
-              promotion produit seulement si P2 est jugée explicitement
-```
-
-`catalog.sqlite3` ne précède pas et n'alimente pas `search-v1.sqlite3`.
-
-## Cible Claude Code et Codex
-
-Le produit doit devenir un service local de corpus, utilisable depuis n'importe
-quel projet. Claude Code et Codex ne réimplémentent pas YouTube, l'indexation ou
-l'export. Ils découvrent trois skills communs, interrogent un MCP en lecture
-seule et délèguent toute mutation à la CLI empaquetée.
-
-```text
-YouTube URL
-    │
-    ▼
-yt-insights acquire
-preview obligatoire pour channel/playlist
-    │
-    ├──► VTT + métadonnées ──► catalog.sqlite3
-    │                    └────► search-v1.sqlite3
-    │
-    ├──► yt-insights export ──► VTT, TXT ou Markdown sourcé
-    │
-    └──► MCP read-only
-             ├── list_corpora
-             ├── search_videos
-             ├── search_passages
-             └── get_passage
-                      │
-              ┌───────┴────────┐
-              ▼                ▼
-        Claude Code          Codex
-        3 skills + agent     3 skills + agent
-```
-
-### Suivi des lots
-
-| Vague | Statut | Apport concret | Gate |
-|---|---|---|---|
-| A1 | `TERMINÉ` | Un `data_root` absolu et stable, utilisable hors du repo | Même corpus depuis deux répertoires différents |
-| A2 | `TERMINÉ` | `doctor --json` secret-safe | Aucun secret affiché, aucune écriture, diagnostics locaux |
-| A3 | `TERMINÉ` | `acquire` unifié avec preview et confirmation des volumes | Aucun channel, playlist ou batch sans confirmation explicite |
-| A4 | `TERMINÉ` | `export video` en VTT, TXT et Markdown sans LLM | Sortie déterministe avec URL, identité source et timestamps |
-| B1 | `TERMINÉ` | MCP étendu de deux à quatre outils read-only | Smoke réel sur les quatre outils, aucun outil de mutation |
-| B2 | `TERMINÉ` | Skills portables `youtube-acquire`, `youtube-research`, `youtube-export` | Trois validateurs officiels et tests de portabilité au vert |
-| B3 | `REJETÉ` | Skills et agents natifs terminés; candidat disjoint à 30/30 positifs et 0 confusion, mais 5/15 activations interdites | Conserver l'invocation explicite; rouvrir seulement avec un mécanisme différent et un besoin observé |
-| C1 | `TERMINÉ` | Fast-forward approuvé de `e760a81` vers `62aa9ca`; 144/144 tests et check de la release `60cbcac…` au vert après intégration | Source globale intégrée le 30 août 2026; aucune activation de release dans cette étape |
-| C2 | `TERMINÉ` | Release `60cbcac…`, index privé et projections de skills activés par huit opérations journalisées; check live au vert et trois skills visibles dans un Codex frais | Transaction `shared-cbd58f0a09d9-64a8fa11-a6a4-4d3f-a114-f87e188e1153`; canari Claude encore `UNKNOWN` faute de connexion |
-| C3 | `TERMINÉ LOCALEMENT` | `setup assistants` empaquette skills et agents, prévisualise sans écrire, inscrit le MCP dans les deux clients, vérifie les empreintes et rollback sur échec partiel | Tests avec HOME et clients factices; application live encore soumise à une approbation liée au digest |
-| D1 | `TERMINÉ` | Choix explicite Ollama, MLX, cc-bridge, Anthropic ou endpoint compatible | Canari MLX et Ollama réels séparés des tests sans réseau |
-
-Les détails exécutables sont dans le [plan runtime](plans/2026-08-28-09-agent-ready-runtime.md), le [plan d'intégration globale](plans/2026-08-28-10-claude-codex-global-integration.md) et le [suivi parallèle](plans/PARALLEL-SESSIONS.md).
-
-### Politique de backends
-
-| Besoin | Backend par défaut | Pourquoi |
+| Couche | Rôle | Reconstruction |
 |---|---|---|
-| Récupérer les sous-titres | Aucun LLM | YouTube fournit déjà les VTT |
-| Rechercher et exporter | Aucun LLM | FTS5 et transformations déterministes suffisent |
-| Produire des insights en volume | Ollama ou MLX explicite, ou cc-bridge | Coût maîtrisé et modèle interchangeable |
-| Analyse exigeant plus de qualité | Backend distant explicite | Choix volontaire, jamais un fallback silencieux |
-| MLX direct | `--backend mlx --model MODEL` | Chargement paresseux; concurrence locale forcée à 1 |
+| VTT et métadonnées | Sources de vérité textuelles et horodatées | Jamais dérivées d'un dossier généré |
+| `catalog.sqlite3` | Inventaire, provenance, artefacts et erreurs | Depuis les sources locales |
+| `.search/search-v1.sqlite3` | Passages FTS5 et liens horodatés | Depuis les VTT |
+| `.research/research-v1.sqlite3` | Sessions, évaluations, décisions et tentatives | Historique opérationnel versionné par schéma |
 
-La transcription audio n'entre pas dans ce lot. Elle ne devient pertinente que
-si une vidéo ne fournit aucun sous-titre exploitable et qu'un cas réel justifie
-le coût de téléchargement et de transcription.
+Les dossiers exportés sont des publications déterministes. Ils restent séparés
+des quatre couches et du corpus source.
 
-## Déclenchement à la demande d'article
+## Gates observées
 
-Les packs et exports ne sont pas une phase active. Ils démarrent seulement lorsqu'un article réel nécessite une sélection sourcée et nomme son angle ainsi que les passages à conserver.
+| Gate | Statut | Mesure et portée |
+|---|---|---|
+| Pertinence | `UNKNOWN` | 0 résultat dans le packet représentatif, donc aucun des 20 jugements humains requis |
+| Découverte | `PASS` | 3 sujets, 10 candidats distincts par sujet, état local inchangé |
+| Refresh complet | `PASS` | 5 builds validés, p95 `47.122951 s`, 3 332 documents et 184 636 passages |
+| YouTube live dans le workflow final | `UNKNOWN` | Aucun canari d'acquisition réel dans ce lot |
+| Claude Code frais | `UNKNOWN` | Asset statique validé, pas de session fraîche probante |
+| Codex frais | `UNKNOWN` | Asset statique validé, pas de session fraîche probante |
+| Activation globale | `false` | Aucune installation globale du quatrième skill ou du runtime |
+| GitHub CI | Absente | Les vérifications disponibles sont locales |
+
+Un `UNKNOWN` ne bloque pas une acquisition locale de 1 à 5 IDs explicitement
+approuvés. Il bloque toute affirmation de qualité validée ou d'activation
+globale.
+
+## Ordre de travail restant
+
+| Priorité | Action | Critère de sortie |
+|---:|---|---|
+| 1 | Terminer la vérification locale du lot | Suite complète, Ruff, mypy, wheel offline et diff-check au SHA final |
+| 2 | Faire la revue humaine de pertinence | Exactement 20 résultats jugés, seuil de passage 16/20 |
+| 3 | Exécuter les canaris clients frais | Claude Code et Codex découvrent le quatrième skill et respectent les deux confirmations |
+| 4 | Préparer un candidat global inerte | Préimages, diff expurgé, digest, rollback et approbation exacte |
+| 5 | Tester des sessions de recherche réelles | Dossiers utiles, limites de couverture et frictions consignées |
+
+Le dernier résultat combiné connu avant la finalisation Task 10 est
+`799 passed, 10 subtests passed`. Le coordinateur doit remplacer ce nombre par
+le résultat au SHA final. Ce dépôt ne possède pas de GitHub CI.
 
 ## Évolutions conditionnelles
 
-| Évolution | Déclencheur mesuré obligatoire |
+| Évolution non livrée | Déclencheur avant conception |
 |---|---|
-| UI locale | Friction répétée et documentée dans des usages réels |
-| Extension navigateur | Besoin récurrent non couvert par la CLI/MCP local pour des articles réels |
-| Produit hébergé, API, multi-utilisateur | Besoin explicite de partage ou d'accès distant, avec décision sécurité/exploitation séparée |
-| Embeddings et recherche hybride | Échecs lexicaux mesurés, notamment sur synonymes et paraphrases |
-| Graphe | Questions multi-hop nommées non résolues par passages et filtres |
-| Qdrant | Embeddings adoptés et budget SQLite non tenu après profilage |
+| API YouTube officielle | Usage hébergé ou plus de 10 % d'échecs sur 30 découvertes locales |
+| Indexation incrémentale | p95 du refresh complet supérieur à 60 secondes |
+| MCP writable | Friction CLI documentée dans au moins 5 sessions réelles |
+| Interface web | Au moins 10 sessions réussies et besoin de partage distant confirmé |
+| Extension navigateur | Envoi manuel bloquant au moins 10 usages consignés |
+| Recherche vectorielle ou hybride | Pertinence sous 80 % après réglage lexical sur un jeu gelé |
+| Base graphe | Au moins 3 questions relationnelles impossibles avec passages et métadonnées |
+| Acquisition automatique | 20 cycles assistés sans mauvaise approbation et nouveau design opt-in |
 
-Ces pistes restent conditionnelles et n'ouvrent aucune promotion sans leur déclencheur.
-
-Le [plan service hébergé et extension](plans/2026-08-28-11-hosted-extension.md)
-précise quatre déclencheurs vérifiables. La première version hébergée conserve
-SQLite sur un volume persistant. PostgreSQL n'arrive qu'avec un second utilisateur
-ou des écritures concurrentes. Les embeddings et une base graphe restent des
-index dérivés, ouverts uniquement par un corpus de questions en échec.
-
-## Prochaines décisions, dans l'ordre
-
-| Priorité | Décision | Critère de sortie |
-|---:|---|---|
-| 1 | Construire et vérifier le wheel contenant le setup | Assets présents dans le wheel et smoke offline au vert |
-| 2 | Préparer un candidat d'installation live | Dry-run, préimages globales et diff exact liés à un digest courant |
-| 3 | Appliquer le runtime, les agents et le MCP après approbation exacte | `doctor`, agents natifs et deux clients reliés aux mêmes bases absolues |
-| 4 | Terminer les canaris Claude Code et Codex | Trois skills, agent et MCP vérifiés dans deux sessions neuves; Claude reconnecté |
-| 5 | Revoir humainement l'artefact P2 sur un article réel | Statut `PASS` ou `FAIL`, passages conservés et frictions consignées |
-| 6 | Exécuter les canaris Ollama et MLX | Une génération courte par backend, modèle et identité runtime consignés |
-| 7 | Activer extension, hybride, graphe ou Qdrant seulement sur leur déclencheur | Friction ou échec mesuré consigné avant développement |
+Ces déclencheurs ouvrent une discussion. Ils n'autorisent aucune activation
+silencieuse.
 
 ## Documents de référence
 
-- [Plan consolidé V2](plans/2026-08-27-CONSOLIDATED-v2.md)
-- [Index et suivi](plans/README.md)
-- [Sessions parallèles](plans/PARALLEL-SESSIONS.md)
-- [État d'implémentation et tests](docs/IMPLEMENTATION-STATUS.md)
-- [Changelog](CHANGELOG.md)
+- [État d'implémentation](docs/IMPLEMENTATION-STATUS.md)
+- [Spécification du workflow cumulatif](docs/superpowers/specs/2026-08-31-cumulative-research-workflow-design.md)
+- [Plan d'implémentation](docs/superpowers/plans/2026-08-31-cumulative-research-workflow.md)
+- [Gates mesurées](plans/evidence/2026-08-31-cumulative-research-gates.md)
 - [Architecture Claude Code et Codex](plans/specs/AGENT-PLATFORM.md)
-- [Plan runtime agentique](plans/2026-08-28-09-agent-ready-runtime.md)
-- [Plan intégration globale](plans/2026-08-28-10-claude-codex-global-integration.md)
-- [Plan hébergé et extension](plans/2026-08-28-11-hosted-extension.md)
-- [Preuve d'intégration finale](plans/evidence/2026-08-28-final-integration.md)
+- [Suivi des sessions parallèles](plans/PARALLEL-SESSIONS.md)
+- [Plan conditionnel hébergé et extension](plans/2026-08-28-11-hosted-extension.md)
