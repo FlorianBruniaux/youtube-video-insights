@@ -26,7 +26,7 @@ Interpret `required_user_action` literally:
 
 After approval, acquire only the exact approved video IDs with `yt-insights research acquire SESSION_ID --revision REVISION --idempotency-key KEY --json`. Do not substitute a missing video, expand to a playlist or channel, or add related videos. Present per-video outcomes, the refreshed assessment, and the sufficiency question again.
 
-Use `yt-insights research retry SESSION_ID --revision REVISION --idempotency-key KEY --json` only for the retryable transition reported by the session. Never replay a committed decision or a successful acquisition.
+When `acquisition_history` reports a latest attempt as `failed_retryable`, present the successful and failed video outcomes, then ask the sufficiency question. Offer `yt-insights research retry SESSION_ID --revision REVISION --idempotency-key KEY --json` as an explicit alternative that retries only failed video IDs. Do not retry automatically: the user may instead accept the partial evidence with `decide ... sufficient` or request fresh discovery with `decide ... refresh`. For every other retryable stage, use `research retry` only for the transition reported by the session. Never replay a committed decision or a successful acquisition.
 
 ## Output choice
 
