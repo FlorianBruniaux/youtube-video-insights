@@ -22,6 +22,7 @@ Mode = Literal["dry-run", "apply", "verify"]
 MCP_NAME = "yt-insights"
 OWNERSHIP_MANIFEST_RELATIVE = Path(".agents/.yt-insights-assistant-assets-v1.json")
 OWNERSHIP_SCHEMA_VERSION = 1
+RECOVERY_DIRECTORY_NAME = ".yt-insights-assistant-recovery-v1"
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 _DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 _READ_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW
@@ -93,6 +94,7 @@ class BoundRoot:
     inode: int
     created_home: bool
     created_directories: list[CreatedDirectory]
+    recovery_paths: list[str]
 
 
 @dataclass
@@ -105,6 +107,7 @@ class AssetTransaction:
 @dataclass(frozen=True)
 class QuarantinedFile:
     name: str
+    original_name: str
     snapshot: FileSnapshot
 
 
@@ -399,7 +402,10 @@ def _open_absolute_directory(path: Path) -> int:
 
 def _open_bound_root(home: Path) -> BoundRoot:
     parent_fd = _open_absolute_directory(home.parent)
+    descriptor: int | None = None
     created = False
+    created_identity: tuple[int, int] | None = None
+    recovery_paths: list[str] = []
     try:
         try:
             descriptor = os.open(home.name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
@@ -414,27 +420,33 @@ def _open_bound_root(home: Path) -> BoundRoot:
             try:
                 _rename_no_replace_at(parent_fd, temporary, home.name)
             except FileExistsError:
-                _remove_owned_temporary_directory(
+                retained = _retain_owned_temporary_directory(
                     parent_fd,
                     temporary,
                     device=owned.st_dev,
                     inode=owned.st_ino,
                 )
+                recovery_paths.append(str(home.parent / retained))
                 os.close(descriptor)
+                descriptor = None
                 descriptor = os.open(
                     home.name,
                     _DIRECTORY_FLAGS,
                     dir_fd=parent_fd,
                 )
-            except Exception:
-                _remove_owned_temporary_directory(
+            except Exception as error:
+                retained = _retain_owned_temporary_directory(
                     parent_fd,
                     temporary,
                     device=owned.st_dev,
                     inode=owned.st_ino,
                 )
                 os.close(descriptor)
-                raise
+                descriptor = None
+                raise PublicationConflict(
+                    str(error),
+                    recovery_paths=(str(home.parent / retained),),
+                ) from error
             else:
                 if not _directory_entry_matches(
                     parent_fd,
@@ -443,10 +455,14 @@ def _open_bound_root(home: Path) -> BoundRoot:
                     inode=owned.st_ino,
                 ):
                     os.close(descriptor)
+                    descriptor = None
                     raise PublicationConflict(
                         "published assistant home does not match owned inode"
                     )
                 created = True
+                created_identity = (owned.st_dev, owned.st_ino)
+        if descriptor is None:
+            raise PublicationConflict("assistant home descriptor was not established")
         current = os.fstat(descriptor)
         return BoundRoot(
             home=home,
@@ -457,14 +473,22 @@ def _open_bound_root(home: Path) -> BoundRoot:
             inode=current.st_ino,
             created_home=created,
             created_directories=[],
+            recovery_paths=recovery_paths,
         )
-    except Exception:
-        if created:
+    except Exception as error:
+        if created and created_identity is not None:
+            recovery_paths.append(str(home))
+        if descriptor is not None:
             try:
-                os.rmdir(home.name, dir_fd=parent_fd)
+                os.close(descriptor)
             except OSError:
                 pass
         os.close(parent_fd)
+        if recovery_paths:
+            raise PublicationConflict(
+                str(error),
+                recovery_paths=tuple(sorted(set(recovery_paths))),
+            ) from error
         raise
 
 
@@ -477,7 +501,12 @@ def _assert_root_current(root: BoundRoot) -> None:
         raise ValueError("assistant home changed during publication")
 
 
-def _rename_no_replace_at(parent_fd: int, source_name: str, target_name: str) -> None:
+def _rename_no_replace_between(
+    source_fd: int,
+    source_name: str,
+    target_fd: int,
+    target_name: str,
+) -> None:
     library = ctypes.CDLL(None, use_errno=True)
     source = os.fsencode(source_name)
     target = os.fsencode(target_name)
@@ -491,7 +520,7 @@ def _rename_no_replace_at(parent_fd: int, source_name: str, target_name: str) ->
             ctypes.c_uint,
         ]
         rename.restype = ctypes.c_int
-        result = rename(parent_fd, source, parent_fd, target, 0x00000004)
+        result = rename(source_fd, source, target_fd, target, 0x00000004)
     elif hasattr(library, "renameat2"):
         rename = library.renameat2
         rename.argtypes = [
@@ -502,7 +531,7 @@ def _rename_no_replace_at(parent_fd: int, source_name: str, target_name: str) ->
             ctypes.c_uint,
         ]
         rename.restype = ctypes.c_int
-        result = rename(parent_fd, source, parent_fd, target, 0x00000001)
+        result = rename(source_fd, source, target_fd, target, 0x00000001)
     else:
         raise OSError(
             errno.ENOTSUP,
@@ -513,6 +542,15 @@ def _rename_no_replace_at(parent_fd: int, source_name: str, target_name: str) ->
         if error in {errno.EEXIST, errno.ENOTEMPTY}:
             raise FileExistsError(error, os.strerror(error), target_name)
         raise OSError(error, os.strerror(error), target_name)
+
+
+def _rename_no_replace_at(parent_fd: int, source_name: str, target_name: str) -> None:
+    _rename_no_replace_between(
+        parent_fd,
+        source_name,
+        parent_fd,
+        target_name,
+    )
 
 
 def _directory_entry_matches(
@@ -532,50 +570,36 @@ def _directory_entry_matches(
     )
 
 
-def _remove_owned_temporary_directory(
+def _retain_owned_temporary_directory(
     parent_fd: int,
     name: str,
     *,
     device: int,
     inode: int,
-) -> None:
+) -> str:
     if not _directory_entry_matches(
         parent_fd,
         name,
         device=device,
         inode=inode,
     ):
-        return
-    quarantine = _unique_entry_name(parent_fd, f"{name}.directory-quarantine")
-    _rename_no_replace_at(parent_fd, name, quarantine)
+        raise PublicationConflict(
+            "owned temporary directory changed before recovery",
+            recovery_paths=(name,),
+        )
+    recovery = _unique_entry_name(parent_fd, f"{name}.directory-recovery")
+    _rename_no_replace_at(parent_fd, name, recovery)
     if not _directory_entry_matches(
         parent_fd,
-        quarantine,
+        recovery,
         device=device,
         inode=inode,
     ):
-        recovery = _unique_entry_name(parent_fd, f"{name}.conflict-recovery")
-        _rename_no_replace_at(parent_fd, quarantine, recovery)
         raise PublicationConflict(
-            "temporary directory changed before cleanup",
+            "temporary directory changed during recovery",
             recovery_paths=(recovery,),
         )
-    try:
-        os.rmdir(quarantine, dir_fd=parent_fd)
-    except OSError as error:
-        try:
-            _rename_no_replace_at(parent_fd, quarantine, name)
-        except FileExistsError:
-            recovery = _unique_entry_name(
-                parent_fd,
-                f"{name}.conflict-recovery",
-            )
-            _rename_no_replace_at(parent_fd, quarantine, recovery)
-            raise PublicationConflict(
-                "non-empty owned directory was preserved for recovery",
-                recovery_paths=(recovery,),
-            ) from error
-        raise
+    return recovery
 
 
 def _record_created_directory(
@@ -598,6 +622,7 @@ def _record_created_directory(
 def _open_parent_at(root: BoundRoot, target: Path, *, create: bool) -> int:
     relative_parent = target.parent.relative_to(root.home)
     descriptor = os.dup(root.fd)
+    current_parent = root.home
     try:
         for part in relative_parent.parts:
             try:
@@ -615,23 +640,29 @@ def _open_parent_at(root: BoundRoot, target: Path, *, create: bool) -> int:
                 try:
                     _rename_no_replace_at(descriptor, temporary, part)
                 except FileExistsError:
-                    _remove_owned_temporary_directory(
+                    retained = _retain_owned_temporary_directory(
                         descriptor,
                         temporary,
                         device=owned.st_dev,
                         inode=owned.st_ino,
                     )
+                    root.recovery_paths.append(str(current_parent / retained))
                     os.close(child)
                     child = os.open(part, _DIRECTORY_FLAGS, dir_fd=descriptor)
-                except Exception:
-                    _remove_owned_temporary_directory(
+                except Exception as error:
+                    retained = _retain_owned_temporary_directory(
                         descriptor,
                         temporary,
                         device=owned.st_dev,
                         inode=owned.st_ino,
                     )
                     os.close(child)
-                    raise
+                    raise PublicationConflict(
+                        str(error),
+                        recovery_paths=(
+                            str(current_parent / retained),
+                        ),
+                    ) from error
                 else:
                     if not _directory_entry_matches(
                         descriptor,
@@ -646,6 +677,7 @@ def _open_parent_at(root: BoundRoot, target: Path, *, create: bool) -> int:
                     _record_created_directory(root, descriptor, part, child)
             os.close(descriptor)
             descriptor = child
+            current_parent /= part
         return descriptor
     except Exception:
         os.close(descriptor)
@@ -681,7 +713,7 @@ def _stage_bytes_at(
     stage_name = _unique_entry_name(parent_fd, f"{target_name}.new")
     descriptor = os.open(
         stage_name,
-        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
         0o600,
         dir_fd=parent_fd,
     )
@@ -700,24 +732,36 @@ def _stage_bytes_at(
             mtime_ns=current.st_mtime_ns,
             sha256=_sha256(content),
         )
-    except Exception:
+    except Exception as error:
         current = os.fstat(descriptor)
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
         partial = FileSnapshot(
             device=current.st_dev,
             inode=current.st_ino,
             size=current.st_size,
             mtime_ns=current.st_mtime_ns,
-            sha256="",
+            sha256=_sha256(b"".join(chunks)),
         )
         os.close(descriptor)
-        _remove_expected_entry(
-            parent_fd,
-            parent,
-            stage_name,
-            partial,
-            purpose="stage-write-failure",
-        )
-        raise
+        try:
+            recovery_paths = _remove_expected_entry(
+                parent_fd,
+                parent,
+                stage_name,
+                partial,
+                purpose="stage-write-failure",
+            )
+        except PublicationConflict as cleanup_error:
+            recovery_paths = list(cleanup_error.recovery_paths)
+        except OSError:
+            recovery_paths = [str(parent / stage_name)]
+        raise PublicationConflict(
+            str(error),
+            recovery_paths=tuple(recovery_paths),
+        ) from error
     finally:
         if staged is not None:
             os.close(descriptor)
@@ -726,16 +770,27 @@ def _stage_bytes_at(
         if not _same_snapshot(verified, staged):
             raise ValueError("staged file changed before publication")
         return stage_name, staged
-    except Exception:
+    except Exception as error:
+        recovery_paths: list[str] = []
         if staged is not None:
-            _remove_expected_entry(
-                parent_fd,
-                parent,
-                stage_name,
-                staged,
-                purpose="stage-verification-failure",
-            )
-        raise
+            try:
+                recovery_paths.extend(
+                    _remove_expected_entry(
+                        parent_fd,
+                        parent,
+                        stage_name,
+                        staged,
+                        purpose="stage-verification-failure",
+                    )
+                )
+            except PublicationConflict as cleanup_error:
+                recovery_paths.extend(cleanup_error.recovery_paths)
+            except OSError:
+                recovery_paths.append(str(parent / stage_name))
+        raise PublicationConflict(
+            str(error),
+            recovery_paths=tuple(recovery_paths),
+        ) from error
 
 
 def _entry_matches_snapshot(parent_fd: int, name: str, expected: FileSnapshot) -> bool:
@@ -763,14 +818,18 @@ def _quarantine_expected_entry(
     expected: FileSnapshot,
     *,
     purpose: str,
-) -> QuarantinedFile | None:
-    if not _entry_matches_snapshot(parent_fd, name, expected):
-        return None
+) -> QuarantinedFile:
     quarantine = _unique_entry_name(
         parent_fd,
         f"{name}.{purpose}.quarantine",
     )
-    _rename_no_replace_at(parent_fd, name, quarantine)
+    try:
+        _rename_no_replace_at(parent_fd, name, quarantine)
+    except FileNotFoundError as error:
+        raise PublicationConflict(
+            "expected transaction entry is missing during finalization",
+            recovery_paths=(str(parent / name),),
+        ) from error
     try:
         quarantined, _ = _snapshot_at(parent_fd, quarantine)
     except Exception as error:
@@ -779,7 +838,7 @@ def _quarantine_expected_entry(
             recovery_paths=(str(parent / quarantine),),
         ) from error
     if _same_snapshot(quarantined, expected):
-        return QuarantinedFile(quarantine, quarantined)
+        return QuarantinedFile(quarantine, name, quarantined)
 
     recovery = _unique_entry_name(parent_fd, f"{name}.conflict-recovery")
     try:
@@ -805,20 +864,119 @@ def _quarantine_expected_entry(
     )
 
 
-def _delete_quarantined_entry(
+def _open_recovery_directory(parent_fd: int, parent: Path) -> tuple[int, list[str]]:
+    try:
+        return (
+            os.open(
+                RECOVERY_DIRECTORY_NAME,
+                _DIRECTORY_FLAGS,
+                dir_fd=parent_fd,
+            ),
+            [],
+        )
+    except FileNotFoundError:
+        temporary = _unique_entry_name(
+            parent_fd,
+            f"{RECOVERY_DIRECTORY_NAME}.directory",
+        )
+        os.mkdir(temporary, 0o700, dir_fd=parent_fd)
+        descriptor = os.open(temporary, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+        owned = os.fstat(descriptor)
+        try:
+            _rename_no_replace_at(
+                parent_fd,
+                temporary,
+                RECOVERY_DIRECTORY_NAME,
+            )
+        except FileExistsError:
+            retained = _unique_entry_name(
+                parent_fd,
+                f"{RECOVERY_DIRECTORY_NAME}.directory-recovery",
+            )
+            _rename_no_replace_at(parent_fd, temporary, retained)
+            os.close(descriptor)
+            return (
+                os.open(
+                    RECOVERY_DIRECTORY_NAME,
+                    _DIRECTORY_FLAGS,
+                    dir_fd=parent_fd,
+                ),
+                [str(parent / retained)],
+            )
+        if not _directory_entry_matches(
+            parent_fd,
+            RECOVERY_DIRECTORY_NAME,
+            device=owned.st_dev,
+            inode=owned.st_ino,
+        ):
+            os.close(descriptor)
+            raise PublicationConflict(
+                "private recovery directory changed during publication",
+                recovery_paths=(str(parent / RECOVERY_DIRECTORY_NAME),),
+            )
+        return descriptor, []
+
+
+def _recovery_entry_name(
+    recovery_fd: int,
+    *,
+    name: str,
+    purpose: str,
+    snapshot: FileSnapshot,
+) -> str:
+    identity = _sha256(
+        f"{name}\0{purpose}\0{snapshot.sha256}".encode("utf-8")
+    )[:16]
+    for sequence in range(1, 10_000):
+        candidate = f"{identity}-{sequence:04d}-{purpose}-{name}"
+        if not _entry_exists(recovery_fd, candidate):
+            return candidate
+    raise RuntimeError("private recovery directory is exhausted")
+
+
+def _retain_quarantined_entry(
     parent_fd: int,
     parent: Path,
     quarantined: QuarantinedFile,
     *,
-    non_fatal: bool,
+    purpose: str,
 ) -> list[str]:
+    recovery_fd, retained = _open_recovery_directory(parent_fd, parent)
     try:
-        os.unlink(quarantined.name, dir_fd=parent_fd)
-    except OSError:
-        if non_fatal:
-            return [str(parent / quarantined.name)]
-        raise
-    return []
+        recovery_name = _recovery_entry_name(
+            recovery_fd,
+            name=quarantined.original_name,
+            purpose=purpose,
+            snapshot=quarantined.snapshot,
+        )
+        _rename_no_replace_between(
+            parent_fd,
+            quarantined.name,
+            recovery_fd,
+            recovery_name,
+        )
+        recovered, _ = _snapshot_at(recovery_fd, recovery_name)
+        recovery_path = parent / RECOVERY_DIRECTORY_NAME / recovery_name
+        retained.append(str(recovery_path))
+        if not _same_snapshot(recovered, quarantined.snapshot):
+            try:
+                os.link(
+                    recovery_name,
+                    quarantined.original_name,
+                    src_dir_fd=recovery_fd,
+                    dst_dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileExistsError:
+                pass
+            raise PublicationConflict(
+                "foreign content reached the private recovery directory",
+                recovery_paths=tuple(retained),
+            )
+        os.fsync(recovery_fd)
+        return retained
+    finally:
+        os.close(recovery_fd)
 
 
 def _remove_expected_entry(
@@ -828,7 +986,6 @@ def _remove_expected_entry(
     expected: FileSnapshot,
     *,
     purpose: str,
-    non_fatal: bool = False,
 ) -> list[str]:
     quarantined = _quarantine_expected_entry(
         parent_fd,
@@ -837,13 +994,11 @@ def _remove_expected_entry(
         expected,
         purpose=purpose,
     )
-    if quarantined is None:
-        return []
-    return _delete_quarantined_entry(
+    return _retain_quarantined_entry(
         parent_fd,
         parent,
         quarantined,
-        non_fatal=non_fatal,
+        purpose=purpose,
     )
 
 
@@ -862,28 +1017,34 @@ def _publish_staged_at(
     staged: FileSnapshot,
     target_name: str,
 ) -> FileSnapshot:
+    published = False
     try:
-        os.link(
-            stage_name,
-            target_name,
-            src_dir_fd=parent_fd,
-            dst_dir_fd=parent_fd,
-            follow_symlinks=False,
-        )
+        _rename_no_replace_at(parent_fd, stage_name, target_name)
+        published = True
         installed, _ = _snapshot_at(parent_fd, target_name)
         if not _same_snapshot(installed, staged):
             raise ValueError("published file does not match staged inode")
         _assert_parent_current(parent_fd, parent)
         return installed
-    except Exception:
-        _remove_expected_entry(
-            parent_fd,
-            parent,
-            target_name,
-            staged,
-            purpose="failed-publication",
-        )
-        raise
+    except Exception as error:
+        failed_name = target_name if published else stage_name
+        recovery_paths: list[str]
+        try:
+            recovery_paths = _remove_expected_entry(
+                parent_fd,
+                parent,
+                failed_name,
+                staged,
+                purpose="failed-publication",
+            )
+        except PublicationConflict as cleanup_error:
+            recovery_paths = list(cleanup_error.recovery_paths)
+        except OSError:
+            recovery_paths = [str(parent / failed_name)]
+        raise PublicationConflict(
+            str(error),
+            recovery_paths=tuple(recovery_paths),
+        ) from error
 
 
 def _write_asset(asset: Asset, root: BoundRoot) -> CreatedFile:
@@ -905,32 +1066,40 @@ def _write_bytes_exclusive(
             target.name,
             content,
         )
+        published_stage = stage_name
+        stage_name = ""
         installed = _publish_staged_at(
             parent_fd,
             target.parent,
-            stage_name,
+            published_stage,
             staged,
             target.name,
         )
-        _remove_expected_entry(
-            parent_fd,
-            target.parent,
-            stage_name,
-            staged,
-            purpose="published-stage",
-        )
         return CreatedFile(target, parent_fd, target.name, installed)
-    except Exception:
+    except Exception as error:
+        recovery_paths = list(getattr(error, "recovery_paths", ()))
         if stage_name and staged is not None:
-            _remove_expected_entry(
-                parent_fd,
-                target.parent,
-                stage_name,
-                staged,
-                purpose="failed-stage",
-            )
-        os.close(parent_fd)
-        raise
+            try:
+                recovery_paths.extend(
+                    _remove_expected_entry(
+                        parent_fd,
+                        target.parent,
+                        stage_name,
+                        staged,
+                        purpose="failed-stage",
+                    )
+                )
+            except PublicationConflict as cleanup_error:
+                recovery_paths.extend(cleanup_error.recovery_paths)
+            except OSError:
+                recovery_paths.append(str(target.parent / stage_name))
+        try:
+            os.close(parent_fd)
+        finally:
+            raise PublicationConflict(
+                str(error),
+                recovery_paths=tuple(sorted(set(recovery_paths))),
+            ) from error
 
 
 def _retire_backup_or_restore(
@@ -939,19 +1108,14 @@ def _retire_backup_or_restore(
     target_name: str,
     backup_name: str,
     backup: FileSnapshot,
-) -> None:
+) -> list[str]:
     if not _entry_exists(parent_fd, target_name):
         try:
-            os.link(
-                backup_name,
-                target_name,
-                src_dir_fd=parent_fd,
-                dst_dir_fd=parent_fd,
-                follow_symlinks=False,
-            )
+            _rename_no_replace_at(parent_fd, backup_name, target_name)
+            return []
         except FileExistsError:
             pass
-    _remove_expected_entry(
+    return _remove_expected_entry(
         parent_fd,
         parent,
         backup_name,
@@ -988,19 +1152,14 @@ def _replace_managed_file(
         backup, _ = _snapshot_at(parent_fd, backup_name)
         if not _same_snapshot(backup, expected):
             raise ValueError("managed file changed during upgrade")
+        published_stage = stage_name
+        stage_name = ""
         installed = _publish_staged_at(
             parent_fd,
             target.parent,
-            stage_name,
+            published_stage,
             staged,
             target.name,
-        )
-        _remove_expected_entry(
-            parent_fd,
-            target.parent,
-            stage_name,
-            staged,
-            purpose="published-stage",
         )
         return ReplacedFile(
             path=target,
@@ -1010,15 +1169,8 @@ def _replace_managed_file(
             backup_name=backup_name,
             backup=backup,
         )
-    except Exception:
-        if staged is not None:
-            _remove_expected_entry(
-                parent_fd,
-                target.parent,
-                target.name,
-                staged,
-                purpose="failed-publication",
-            )
+    except Exception as error:
+        recovery_paths = list(getattr(error, "recovery_paths", ()))
         if backup is None and backup_name and _entry_matches_snapshot(
             parent_fd,
             backup_name,
@@ -1027,50 +1179,80 @@ def _replace_managed_file(
             backup = expected
             moved = True
         if moved and backup is not None:
-            _retire_backup_or_restore(
-                parent_fd,
-                target.parent,
-                target.name,
-                backup_name,
-                backup,
-            )
+            try:
+                recovery_paths.extend(
+                    _retire_backup_or_restore(
+                        parent_fd,
+                        target.parent,
+                        target.name,
+                        backup_name,
+                        backup,
+                    )
+                )
+            except PublicationConflict as cleanup_error:
+                recovery_paths.extend(cleanup_error.recovery_paths)
+            except OSError:
+                recovery_paths.append(str(target.parent / backup_name))
         if stage_name and staged is not None:
-            _remove_expected_entry(
-                parent_fd,
-                target.parent,
-                stage_name,
-                staged,
-                purpose="failed-stage",
-            )
-        os.close(parent_fd)
-        raise
+            try:
+                recovery_paths.extend(
+                    _remove_expected_entry(
+                        parent_fd,
+                        target.parent,
+                        stage_name,
+                        staged,
+                        purpose="failed-stage",
+                    )
+                )
+            except PublicationConflict as cleanup_error:
+                recovery_paths.extend(cleanup_error.recovery_paths)
+            except OSError:
+                recovery_paths.append(str(target.parent / stage_name))
+        try:
+            os.close(parent_fd)
+        finally:
+            raise PublicationConflict(
+                str(error),
+                recovery_paths=tuple(sorted(set(recovery_paths))),
+            ) from error
 
 
 def _rollback_replaced_files(replaced: list[ReplacedFile]) -> list[str]:
     recovery_paths: list[str] = []
     for item in reversed(replaced):
         try:
-            _remove_expected_entry(
-                item.parent_fd,
-                item.path.parent,
-                item.name,
-                item.installed,
-                purpose="rollback-publication",
+            recovery_paths.extend(
+                _remove_expected_entry(
+                    item.parent_fd,
+                    item.path.parent,
+                    item.name,
+                    item.installed,
+                    purpose="rollback-publication",
+                )
             )
         except PublicationConflict as error:
             recovery_paths.extend(error.recovery_paths)
+        except OSError:
+            recovery_paths.append(str(item.path))
         try:
-            _retire_backup_or_restore(
-                item.parent_fd,
-                item.path.parent,
-                item.name,
-                item.backup_name,
-                item.backup,
+            recovery_paths.extend(
+                _retire_backup_or_restore(
+                    item.parent_fd,
+                    item.path.parent,
+                    item.name,
+                    item.backup_name,
+                    item.backup,
+                )
             )
         except PublicationConflict as error:
             recovery_paths.extend(error.recovery_paths)
+        except OSError:
+            recovery_paths.append(str(item.path.parent / item.backup_name))
         finally:
-            os.close(item.parent_fd)
+            try:
+                os.close(item.parent_fd)
+            except OSError:
+                recovery_paths.append(str(item.path.parent))
     return recovery_paths
 
 
@@ -1078,64 +1260,58 @@ def _remove_created_files(created: list[CreatedFile]) -> list[str]:
     recovery_paths: list[str] = []
     for item in reversed(created):
         try:
-            _remove_expected_entry(
-                item.parent_fd,
-                item.path.parent,
-                item.name,
-                item.installed,
-                purpose="rollback-created",
+            recovery_paths.extend(
+                _remove_expected_entry(
+                    item.parent_fd,
+                    item.path.parent,
+                    item.name,
+                    item.installed,
+                    purpose="rollback-created",
+                )
             )
         except PublicationConflict as error:
             recovery_paths.extend(error.recovery_paths)
+        except OSError:
+            recovery_paths.append(str(item.path))
         finally:
-            os.close(item.parent_fd)
+            try:
+                os.close(item.parent_fd)
+            except OSError:
+                recovery_paths.append(str(item.path.parent))
     return recovery_paths
-
-
-def _cleanup_created_directories(root: BoundRoot) -> None:
-    for item in reversed(root.created_directories):
-        try:
-            _remove_owned_temporary_directory(
-                item.parent_fd,
-                item.name,
-                device=item.device,
-                inode=item.inode,
-            )
-        except (OSError, PublicationConflict):
-            pass
-        finally:
-            os.close(item.parent_fd)
 
 
 def _close_bound_root(root: BoundRoot, *, rollback: bool) -> None:
-    if rollback:
-        _cleanup_created_directories(root)
-        if root.created_home:
-            try:
-                _remove_owned_temporary_directory(
-                    root.parent_fd,
-                    root.name,
-                    device=root.device,
-                    inode=root.inode,
-                )
-            except (OSError, PublicationConflict):
-                pass
-    else:
-        for item in root.created_directories:
+    for item in root.created_directories:
+        try:
             os.close(item.parent_fd)
-    os.close(root.fd)
-    os.close(root.parent_fd)
+        except OSError:
+            pass
+    try:
+        os.close(root.fd)
+    finally:
+        os.close(root.parent_fd)
 
 
 def _rollback_asset_transaction(transaction: AssetTransaction) -> list[str]:
-    recovery_paths = _rollback_replaced_files(transaction.replaced)
-    recovery_paths.extend(_remove_created_files(transaction.created))
-    _close_bound_root(transaction.root, rollback=True)
-    return recovery_paths
+    recovery_paths: list[str] = list(transaction.root.recovery_paths)
+    try:
+        recovery_paths.extend(_rollback_replaced_files(transaction.replaced))
+    except OSError:
+        recovery_paths.append(str(transaction.root.home))
+    try:
+        recovery_paths.extend(_remove_created_files(transaction.created))
+    except OSError:
+        recovery_paths.append(str(transaction.root.home))
+    try:
+        _close_bound_root(transaction.root, rollback=True)
+    except OSError:
+        recovery_paths.append(str(transaction.root.home))
+    return sorted(set(recovery_paths))
 
 
 def _finish_asset_transaction(transaction: AssetTransaction) -> list[str]:
-    cleanup_pending: list[str] = []
+    cleanup_pending: list[str] = list(transaction.root.recovery_paths)
     for item in transaction.replaced:
         try:
             cleanup_pending.extend(
@@ -1145,7 +1321,6 @@ def _finish_asset_transaction(transaction: AssetTransaction) -> list[str]:
                     item.backup_name,
                     item.backup,
                     purpose="cleanup-tombstone",
-                    non_fatal=True,
                 )
             )
         except PublicationConflict as error:
@@ -1153,11 +1328,20 @@ def _finish_asset_transaction(transaction: AssetTransaction) -> list[str]:
         except OSError:
             cleanup_pending.append(str(item.path.parent / item.backup_name))
         finally:
-            os.close(item.parent_fd)
+            try:
+                os.close(item.parent_fd)
+            except OSError:
+                pass
     for item in transaction.created:
-        os.close(item.parent_fd)
-    _close_bound_root(transaction.root, rollback=False)
-    return cleanup_pending
+        try:
+            os.close(item.parent_fd)
+        except OSError:
+            pass
+    try:
+        _close_bound_root(transaction.root, rollback=False)
+    except OSError:
+        cleanup_pending.append(str(transaction.root.home))
+    return _home_relative_paths(transaction.root.home, cleanup_pending)
 
 
 def _fsync_asset_transaction(transaction: AssetTransaction) -> None:
@@ -1170,6 +1354,17 @@ def _fsync_asset_transaction(transaction: AssetTransaction) -> None:
     descriptors.add(transaction.root.fd)
     for descriptor in descriptors:
         os.fsync(descriptor)
+
+
+def _home_relative_paths(home: Path, paths: list[str]) -> list[str]:
+    normalized: set[str] = set()
+    for value in paths:
+        path = Path(value)
+        try:
+            normalized.add(path.relative_to(home).as_posix())
+        except ValueError:
+            normalized.add(path.as_posix())
+    return sorted(normalized)
 
 
 def _manifest_bytes(assets: dict[str, str]) -> bytes:
@@ -1359,9 +1554,15 @@ def _apply_asset_changes(
         _recheck_published_manifest(ownership, desired_manifest, transaction)
         _assert_root_current(root)
         _fsync_asset_transaction(transaction)
-    except Exception:
-        _rollback_asset_transaction(transaction)
-        raise
+    except Exception as error:
+        recovery_paths = _rollback_asset_transaction(transaction)
+        if isinstance(error, PublicationConflict):
+            recovery_paths.extend(error.recovery_paths)
+        normalized = _home_relative_paths(home, recovery_paths)
+        raise PublicationConflict(
+            str(error),
+            recovery_paths=tuple(normalized),
+        ) from error
     return transaction
 
 
@@ -1452,7 +1653,15 @@ def _run_assets_only(
             home=home,
         )
     except Exception as error:
-        base.update(status="rolled_back", error=str(error))
+        recovery_paths = _home_relative_paths(
+            home,
+            list(getattr(error, "recovery_paths", ())),
+        )
+        base.update(
+            status="rolled_back",
+            error=str(error),
+            recovery_paths=recovery_paths,
+        )
         return base, 1
 
     cleanup_pending = _finish_asset_transaction(transaction)
@@ -1580,8 +1789,20 @@ def run_assistant_setup(
         for name in reversed(attempted):
             _remove_registration(name, executables[name])
         if transaction is not None:
-            _rollback_asset_transaction(transaction)
-        base.update(status="rolled_back", error=str(error))
+            recovery_paths = _home_relative_paths(
+                target_home,
+                _rollback_asset_transaction(transaction),
+            )
+        else:
+            recovery_paths = []
+        if isinstance(error, PublicationConflict):
+            recovery_paths.extend(error.recovery_paths)
+        recovery_paths = _home_relative_paths(target_home, recovery_paths)
+        base.update(
+            status="rolled_back",
+            error=str(error),
+            recovery_paths=sorted(set(recovery_paths)),
+        )
         return base, 1
 
     cleanup_pending = _finish_asset_transaction(transaction)

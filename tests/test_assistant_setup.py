@@ -6,6 +6,7 @@ from pathlib import Path
 import shutil
 
 from click.testing import CliRunner
+import pytest
 
 from yt_insights import assistant_setup
 from yt_insights.cli import cli
@@ -117,6 +118,24 @@ def _arguments(corpus: Path, server: Path, mode: str | None) -> list[str]:
 
 def _assets_only_arguments(mode: str) -> list[str]:
     return ["setup", "assistants", "--client", "both", "--assets-only", mode, "--json"]
+
+
+def _recovery_files(home: Path) -> set[str]:
+    return {
+        path.relative_to(home).as_posix()
+        for path in home.rglob("*")
+        if path.is_file()
+        and assistant_setup.RECOVERY_DIRECTORY_NAME in path.parts
+    }
+
+
+def _visible_files(home: Path) -> dict[Path, bytes]:
+    return {
+        path: path.read_bytes()
+        for path in home.rglob("*")
+        if path.is_file()
+        and assistant_setup.RECOVERY_DIRECTORY_NAME not in path.parts
+    }
 
 
 def _changed_asset_root(tmp_path: Path, relative: str, content: str) -> Path:
@@ -274,9 +293,12 @@ def test_failed_second_registration_rolls_back_new_state(tmp_path: Path) -> None
     assert result.exit_code != 0
     payload = json.loads(result.output)
     assert payload["status"] == "rolled_back"
-    assert not (home / ".agents").exists()
-    assert not (home / ".claude").exists()
-    assert not (home / ".codex").exists()
+    assert payload["recovery_paths"]
+    assert set(payload["recovery_paths"]) == _recovery_files(home)
+    assert not tuple(home.rglob("SKILL.md"))
+    assert not tuple(home.rglob("openai.yaml"))
+    assert not tuple(home.rglob("youtube-corpus-researcher.*"))
+    assert not (home / OWNERSHIP_MANIFEST).exists()
     assert not (state / "claude.json").exists()
     operations = [
         json.loads(line)
@@ -499,7 +521,7 @@ def test_assets_only_corrupt_manifest_blocks_all_writes(tmp_path: Path) -> None:
     assert installed.exit_code == 0, installed.output
     manifest = home / OWNERSHIP_MANIFEST
     manifest.write_bytes(b"not-json\n")
-    before = {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
+    before = _visible_files(home)
 
     result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
 
@@ -674,9 +696,10 @@ def test_assets_only_mid_upgrade_failure_restores_assets_and_manifest(
     result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
 
     assert result.exit_code != 0
-    assert json.loads(result.output)["status"] == "rolled_back"
-    assert before == {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
-    assert not tuple(home.rglob("*.backup.*"))
+    payload = json.loads(result.output)
+    assert payload["status"] == "rolled_back"
+    assert before == _visible_files(home)
+    assert set(payload["recovery_paths"]) == _recovery_files(home)
 
 
 def test_assets_only_publication_failure_restores_preimage_without_backup_leak(
@@ -691,28 +714,27 @@ def test_assets_only_publication_failure_restores_preimage_without_backup_leak(
     target = home / ".agents" / relative
     changed_root = _changed_asset_root(tmp_path, relative, "packaged upgrade\n")
     monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
-    before = {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
-    original_link = assistant_setup.os.link
+    before = _visible_files(home)
+    original_rename = assistant_setup._rename_no_replace_at
 
     def fail_new_publication(
-        source: Path | str,
-        destination: Path | str,
-        *args: object,
-        **kwargs: object,
+        parent_fd: int,
+        source: str,
+        destination: str,
     ) -> None:
-        source_path = Path(source)
-        if Path(destination) == Path(target.name) and f".{target.name}.new." in source_path.name:
+        if destination == target.name and f".{target.name}.new." in source:
             raise OSError("synthetic publication failure")
-        original_link(source, destination, *args, **kwargs)
+        original_rename(parent_fd, source, destination)
 
-    monkeypatch.setattr(assistant_setup.os, "link", fail_new_publication)
+    monkeypatch.setattr(assistant_setup, "_rename_no_replace_at", fail_new_publication)
 
     result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
 
     assert result.exit_code != 0
-    assert json.loads(result.output)["status"] == "rolled_back"
-    assert before == {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
-    assert not tuple(home.rglob("*.backup.*"))
+    payload = json.loads(result.output)
+    assert payload["status"] == "rolled_back"
+    assert before == _visible_files(home)
+    assert set(payload["recovery_paths"]) == _recovery_files(home)
 
 
 def test_assets_only_substitution_between_link_and_snapshot_preserves_concurrent_file(
@@ -728,24 +750,22 @@ def test_assets_only_substitution_between_link_and_snapshot_preserves_concurrent
     changed_root = _changed_asset_root(tmp_path, relative, "packaged upgrade\n")
     monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
     manifest_before = (home / OWNERSHIP_MANIFEST).read_bytes()
-    original_link = assistant_setup.os.link
+    original_rename = assistant_setup._rename_no_replace_at
     substituted = False
 
-    def substitute_after_link(
-        source: Path | str,
-        destination: Path | str,
-        *args: object,
-        **kwargs: object,
+    def substitute_after_publication(
+        parent_fd: int,
+        source: str,
+        destination: str,
     ) -> None:
         nonlocal substituted
-        original_link(source, destination, *args, **kwargs)
+        original_rename(parent_fd, source, destination)
         if (
             not substituted
-            and Path(destination) == Path(target.name)
-            and f".{target.name}.new." in Path(source).name
+            and destination == target.name
+            and f".{target.name}.new." in source
         ):
             substituted = True
-            parent_fd = int(kwargs["dst_dir_fd"])
             os.unlink(target.name, dir_fd=parent_fd)
             descriptor = os.open(
                 target.name,
@@ -759,16 +779,21 @@ def test_assets_only_substitution_between_link_and_snapshot_preserves_concurrent
             finally:
                 os.close(descriptor)
 
-    monkeypatch.setattr(assistant_setup.os, "link", substitute_after_link)
+    monkeypatch.setattr(
+        assistant_setup,
+        "_rename_no_replace_at",
+        substitute_after_publication,
+    )
 
     result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
 
     assert result.exit_code != 0
-    assert json.loads(result.output)["status"] == "rolled_back"
+    payload = json.loads(result.output)
+    assert payload["status"] == "rolled_back"
     assert target.read_text(encoding="utf-8") == "concurrent replacement\n"
     assert (home / OWNERSHIP_MANIFEST).read_bytes() == manifest_before
-    assert not tuple(target.parent.glob(f".{target.name}.new.*"))
-    assert not tuple(target.parent.glob(f".{target.name}.backup.*"))
+    assert _recovery_files(home) <= set(payload["recovery_paths"])
+    assert all((home / path).is_file() for path in payload["recovery_paths"])
 
 
 def test_assets_only_snapshot_failure_after_link_restores_exact_preimage(
@@ -783,40 +808,39 @@ def test_assets_only_snapshot_failure_after_link_restores_exact_preimage(
     target = home / ".agents" / relative
     changed_root = _changed_asset_root(tmp_path, relative, "packaged upgrade\n")
     monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
-    before = {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
-    original_link = assistant_setup.os.link
+    before = _visible_files(home)
+    original_rename = assistant_setup._rename_no_replace_at
     original_snapshot = assistant_setup._snapshot_at
-    publication_linked = False
+    publication_moved = False
 
     def mark_publication(
-        source: Path | str,
-        destination: Path | str,
-        *args: object,
-        **kwargs: object,
+        parent_fd: int,
+        source: str,
+        destination: str,
     ) -> None:
-        nonlocal publication_linked
-        original_link(source, destination, *args, **kwargs)
+        nonlocal publication_moved
+        original_rename(parent_fd, source, destination)
         if (
-            Path(destination) == Path(target.name)
-            and f".{target.name}.new." in Path(source).name
+            destination == target.name
+            and f".{target.name}.new." in source
         ):
-            publication_linked = True
+            publication_moved = True
 
     def fail_target_snapshot(parent_fd: int, name: str):
-        if publication_linked and name == target.name:
-            raise OSError("synthetic post-link snapshot failure")
+        if publication_moved and name == target.name:
+            raise OSError("synthetic post-publication snapshot failure")
         return original_snapshot(parent_fd, name)
 
-    monkeypatch.setattr(assistant_setup.os, "link", mark_publication)
+    monkeypatch.setattr(assistant_setup, "_rename_no_replace_at", mark_publication)
     monkeypatch.setattr(assistant_setup, "_snapshot_at", fail_target_snapshot)
 
     result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
 
     assert result.exit_code != 0
-    assert json.loads(result.output)["status"] == "rolled_back"
-    assert before == {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
-    assert not tuple(target.parent.glob(f".{target.name}.new.*"))
-    assert not tuple(target.parent.glob(f".{target.name}.backup.*"))
+    payload = json.loads(result.output)
+    assert payload["status"] == "rolled_back"
+    assert before == _visible_files(home)
+    assert set(payload["recovery_paths"]) == _recovery_files(home)
 
 
 def test_assets_only_parent_symlink_swap_never_redirects_publication(
@@ -835,36 +859,39 @@ def test_assets_only_parent_symlink_swap_never_redirects_publication(
     moved_parent = target.parent.with_name(f"{target.parent.name}.moved")
     redirected = tmp_path / "redirected-parent"
     redirected.mkdir()
-    original_link = assistant_setup.os.link
+    original_rename = assistant_setup._rename_no_replace_at
     swapped = False
 
-    def swap_parent_before_link(
-        source: Path | str,
-        destination: Path | str,
-        *args: object,
-        **kwargs: object,
+    def swap_parent_before_publication(
+        parent_fd: int,
+        source: str,
+        destination: str,
     ) -> None:
         nonlocal swapped
         if (
             not swapped
-            and Path(destination) == Path(target.name)
-            and f".{target.name}.new." in Path(source).name
+            and destination == target.name
+            and f".{target.name}.new." in source
         ):
             swapped = True
             target.parent.rename(moved_parent)
             target.parent.symlink_to(redirected, target_is_directory=True)
-        original_link(source, destination, *args, **kwargs)
+        original_rename(parent_fd, source, destination)
 
-    monkeypatch.setattr(assistant_setup.os, "link", swap_parent_before_link)
+    monkeypatch.setattr(
+        assistant_setup,
+        "_rename_no_replace_at",
+        swap_parent_before_publication,
+    )
 
     result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
 
     assert result.exit_code != 0
-    assert json.loads(result.output)["status"] == "rolled_back"
+    payload = json.loads(result.output)
+    assert payload["status"] == "rolled_back"
     assert not tuple(redirected.iterdir())
     assert (moved_parent / target.name).read_bytes() == original_bytes
-    assert not tuple(moved_parent.glob(f".{target.name}.new.*"))
-    assert not tuple(moved_parent.glob(f".{target.name}.backup.*"))
+    assert payload["recovery_paths"]
 
 
 def test_assets_only_rollback_preserves_concurrent_replacement_and_retires_backup(
@@ -992,12 +1019,132 @@ def test_assets_only_quarantine_preserves_swap_between_verification_and_removal(
     result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
 
     assert result.exit_code != 0
+    payload = json.loads(result.output)
+    assert payload["status"] == "rolled_back"
     assert swapped is True
     assert first_target.read_text(encoding="utf-8") == "foreign concurrent content\n"
     recoveries = tuple(first_target.parent.glob(f".{first_target.name}.conflict-recovery.*"))
     assert len(recoveries) == 1
     assert recoveries[0].read_text(encoding="utf-8") == "foreign concurrent content\n"
+    assert recoveries[0].relative_to(home).as_posix() in payload["recovery_paths"]
+    assert all((home / path).exists() for path in payload["recovery_paths"])
     assert not tuple(first_target.parent.glob(f".{first_target.name}.backup.*"))
+
+
+def test_substitution_after_quarantine_preserves_expected_and_foreign_inodes(
+    tmp_path: Path, monkeypatch
+) -> None:
+    parent = tmp_path / "home" / ".agents" / "skills"
+    parent.mkdir(parents=True)
+    target = parent / "SKILL.md"
+    target.write_text("expected transaction bytes\n", encoding="utf-8")
+    parent_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+    expected, _ = assistant_setup._snapshot_at(parent_fd, target.name)
+    original_rename = assistant_setup._rename_no_replace_between
+    held_name = ".expected-held-by-concurrent-writer"
+    substituted = False
+
+    def substitute_quarantine(
+        source_fd: int,
+        source_name: str,
+        target_fd: int,
+        target_name: str,
+    ) -> None:
+        nonlocal substituted
+        if not substituted and source_fd == parent_fd and ".quarantine." in source_name:
+            substituted = True
+            os.rename(
+                source_name,
+                held_name,
+                src_dir_fd=source_fd,
+                dst_dir_fd=source_fd,
+            )
+            descriptor = os.open(
+                source_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o644,
+                dir_fd=source_fd,
+            )
+            try:
+                os.write(descriptor, b"foreign concurrent bytes\n")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        original_rename(source_fd, source_name, target_fd, target_name)
+
+    monkeypatch.setattr(
+        assistant_setup,
+        "_rename_no_replace_between",
+        substitute_quarantine,
+    )
+    try:
+        with pytest.raises(assistant_setup.PublicationConflict) as raised:
+            assistant_setup._remove_expected_entry(
+                parent_fd,
+                parent,
+                target.name,
+                expected,
+                purpose="adversarial-finalization",
+            )
+    finally:
+        os.close(parent_fd)
+
+    assert substituted is True
+    assert target.read_bytes() == b"foreign concurrent bytes\n"
+    assert (parent / held_name).read_bytes() == b"expected transaction bytes\n"
+    retained = tuple(Path(path) for path in raised.value.recovery_paths)
+    assert len(retained) == 1
+    assert retained[0].read_bytes() == b"foreign concurrent bytes\n"
+
+
+def test_rollback_continues_after_oserror_and_closes_every_bound_descriptor(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, corpus = _environment(tmp_path)
+    env["FAKE_FAIL_CLIENT"] = "codex"
+    original_remove = assistant_setup._remove_expected_entry
+    observed_fds: list[int] = []
+
+    def fail_first_rollback_entry(
+        parent_fd: int,
+        parent: Path,
+        name: str,
+        expected: assistant_setup.FileSnapshot,
+        *,
+        purpose: str,
+    ) -> list[str]:
+        observed_fds.append(parent_fd)
+        if len(observed_fds) == 1:
+            raise OSError("synthetic mid-rollback failure")
+        return original_remove(
+            parent_fd,
+            parent,
+            name,
+            expected,
+            purpose=purpose,
+        )
+
+    monkeypatch.setattr(
+        assistant_setup,
+        "_remove_expected_entry",
+        fail_first_rollback_entry,
+    )
+    result = CliRunner().invoke(
+        cli,
+        _arguments(corpus, tmp_path / "bin" / "yt-insights-mcp", "--apply"),
+        env=env,
+        catch_exceptions=False,
+    )
+
+    payload = json.loads(result.output)
+    assert result.exit_code != 0
+    assert payload["status"] == "rolled_back"
+    assert len(observed_fds) > 1
+    assert all((home / path).exists() for path in payload["recovery_paths"])
+    assert _recovery_files(home) <= set(payload["recovery_paths"])
+    for descriptor in set(observed_fds):
+        with pytest.raises(OSError):
+            os.fstat(descriptor)
 
 
 def test_assets_only_directory_substitution_after_mkdir_is_never_descended(
@@ -1063,7 +1210,7 @@ def test_assets_only_directory_substitution_after_mkdir_is_never_descended(
     assert not (home / ".agents" / "skills").exists()
 
 
-def test_default_setup_cleanup_failure_after_commit_is_non_fatal(
+def test_default_setup_retains_preimages_after_commit_without_rollback(
     tmp_path: Path, monkeypatch
 ) -> None:
     env, home, state, corpus = _environment(tmp_path)
@@ -1076,19 +1223,6 @@ def test_default_setup_cleanup_failure_after_commit_is_non_fatal(
     previous = target.read_bytes()
     changed_root = _changed_asset_root(tmp_path, relative, "committed upgrade\n")
     monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
-    original_unlink = assistant_setup.os.unlink
-
-    def fail_tombstone_cleanup(
-        path: Path | str,
-        *args: object,
-        **kwargs: object,
-    ) -> None:
-        if ".cleanup-tombstone." in Path(path).name:
-            raise OSError("synthetic post-commit cleanup failure")
-        original_unlink(path, *args, **kwargs)
-
-    monkeypatch.setattr(assistant_setup.os, "unlink", fail_tombstone_cleanup)
-
     result = runner.invoke(
         cli,
         _arguments(corpus, tmp_path / "bin" / "yt-insights-mcp", "--apply"),
@@ -1100,9 +1234,10 @@ def test_default_setup_cleanup_failure_after_commit_is_non_fatal(
     payload = json.loads(result.output)
     assert payload["status"] == "installed"
     assert len(payload["cleanup_pending"]) == 2
-    tombstones = tuple(Path(path) for path in payload["cleanup_pending"])
+    tombstones = tuple(home / path for path in payload["cleanup_pending"])
     assert all(path.is_file() for path in tombstones)
     assert previous in {path.read_bytes() for path in tombstones}
+    assert set(payload["cleanup_pending"]) == _recovery_files(home)
     assert target.read_text(encoding="utf-8") == "committed upgrade\n"
     assert (state / "claude.json").is_file()
     assert (state / "codex.json").is_file()
@@ -1211,10 +1346,14 @@ def test_assets_only_write_failure_rolls_back_only_files_it_created(
     )
 
     assert result.exit_code != 0
-    assert json.loads(result.output)["status"] == "rolled_back"
-    assert not (home / ".agents").exists()
-    assert not (home / ".claude").exists()
-    assert not (home / ".codex").exists()
+    payload = json.loads(result.output)
+    assert payload["status"] == "rolled_back"
+    assert payload["recovery_paths"]
+    assert set(payload["recovery_paths"]) == _recovery_files(home)
+    assert not tuple(home.rglob("SKILL.md"))
+    assert not tuple(home.rglob("openai.yaml"))
+    assert not tuple(home.rglob("youtube-corpus-researcher.*"))
+    assert not (home / OWNERSHIP_MANIFEST).exists()
     assert not state.exists()
 
 
