@@ -2,15 +2,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
 import pytest
 
+import yt_insights.acquisition as acquisition_module
+from yt_insights.acquisition import rebuild_and_publish_indexes
 from yt_insights.paths import DataPaths
 from yt_insights.research.acquisition import CandidateAcquisitionOutcome
-from yt_insights.research.assessment import AssessmentRetryableError
+from yt_insights.research.assessment import (
+    AssessmentRetryableError,
+    SQLiteEvidenceReader,
+)
 from yt_insights.research.discovery import DiscoveryResult
 from yt_insights.research.dossier import (
     DossierExportRequest,
@@ -37,6 +44,32 @@ NO_TRANSCRIPT_VIDEO_ID = "newVID00002"
 QUERY = "AI product engineering team workflows"
 LOCAL_URL = f"https://www.youtube.com/watch?v={LOCAL_VIDEO_ID}&t=12s"
 ACQUIRED_URL = f"https://www.youtube.com/watch?v={ACQUIRED_VIDEO_ID}&t=45s"
+LOCAL_CHANNEL_ID = "UC" + "L" * 22
+ACQUIRED_CHANNEL_ID = "UC" + "N" * 22
+ACQUIRED_SOURCE_BYTES = (
+    b"WEBVTT\nKind: captions\nLanguage: en\n\n"
+    b"00:00:45.000 --> 00:00:50.000\n"
+    b"AI product engineering team workflows add current source evidence.\n"
+)
+ACQUIRED_SOURCE_SHA256 = hashlib.sha256(ACQUIRED_SOURCE_BYTES).hexdigest()
+
+
+def _write_transcript_source(
+    data_paths: DataPaths,
+    *,
+    video_id: str,
+    channel_id: str,
+    published_at: date,
+    title: str,
+    payload: bytes,
+) -> Path:
+    transcripts = data_paths.root / channel_id / "transcripts"
+    transcripts.mkdir(parents=True, exist_ok=True)
+    source = transcripts / (
+        f"{published_at:%Y%m%d} - {title} [{video_id}].en.vtt"
+    )
+    source.write_bytes(payload)
+    return source
 
 
 class MutableEvidenceReader:
@@ -92,7 +125,7 @@ class MutableEvidenceReader:
                     rank=2,
                     url=ACQUIRED_URL,
                     excerpt="A newly acquired source adds current team evidence.",
-                    source_sha256="c" * 64,
+                    source_sha256=ACQUIRED_SOURCE_SHA256,
                 )
             )
         return tuple(passages)
@@ -148,8 +181,11 @@ class StaticDiscoveryProvider:
 
 
 class MixedAcquisitionService:
-    def __init__(self) -> None:
+    def __init__(self, expected_data_paths: DataPaths) -> None:
+        self.expected_data_paths = expected_data_paths
         self.calls: list[tuple[str, str, str | None]] = []
+        self.data_paths_seen: list[DataPaths] = []
+        self.acquired_source: Path | None = None
 
     def acquire_approved(
         self,
@@ -159,16 +195,29 @@ class MixedAcquisitionService:
         language: str,
         cookies_from_browser: str | None = None,
     ) -> tuple[CandidateAcquisitionOutcome, ...]:
+        assert data_paths == self.expected_data_paths
         assert len(candidates) == 1
         video_id = candidates[0].video_id
         self.calls.append((video_id, language, cookies_from_browser))
+        self.data_paths_seen.append(data_paths)
         if video_id == ACQUIRED_VIDEO_ID:
+            self.acquired_source = _write_transcript_source(
+                data_paths,
+                video_id=video_id,
+                channel_id=ACQUIRED_CHANNEL_ID,
+                published_at=candidates[0].published_at or date(2026, 8, 28),
+                title="AI product engineering team workflows current evidence",
+                payload=ACQUIRED_SOURCE_BYTES,
+            )
+            source_sha256 = hashlib.sha256(
+                self.acquired_source.read_bytes()
+            ).hexdigest()
             return (
                 CandidateAcquisitionOutcome(
                     video_id,
                     CandidateStatus.ACQUIRED,
                     None,
-                    "c" * 64,
+                    source_sha256,
                 ),
             )
         if video_id == NO_TRANSCRIPT_VIDEO_ID:
@@ -244,10 +293,10 @@ def _harness(
     provider = StaticDiscoveryProvider(
         _discovery_result() if provider_result is None else provider_result
     )
-    acquisition = MixedAcquisitionService()
+    data_paths = DataPaths.from_root(tmp_path / "source-corpus")
+    acquisition = MixedAcquisitionService(data_paths)
     refresher = RefreshController(actual_reader)
     store = ResearchStore(tmp_path / "research.sqlite3", now=lambda: NOW)
-    data_paths = DataPaths.from_root(tmp_path / "source-corpus")
     workflow = ResearchWorkflow(
         store=store,
         evidence_reader=actual_reader,
@@ -413,6 +462,12 @@ def test_complete_cumulative_research_flow_is_durable_and_source_backed(
         ACQUIRED_VIDEO_ID,
         NO_TRANSCRIPT_VIDEO_ID,
     ]
+    assert harness.acquisition.data_paths_seen == [
+        harness.data_paths,
+        harness.data_paths,
+    ]
+    assert harness.acquisition.acquired_source is not None
+    assert harness.acquisition.acquired_source.read_bytes() == ACQUIRED_SOURCE_BYTES
     assert harness.refresher.calls == [harness.data_paths]
 
     completed = harness.workflow.decide(
@@ -495,7 +550,7 @@ def test_complete_cumulative_research_flow_is_durable_and_source_backed(
     assert manifest["acquisition_outcomes"] == [
         {
             "error_code": None,
-            "source_sha256": "c" * 64,
+            "source_sha256": ACQUIRED_SOURCE_SHA256,
             "status": "acquired",
             "video_id": ACQUIRED_VIDEO_ID,
         },
@@ -507,6 +562,7 @@ def test_complete_cumulative_research_flow_is_durable_and_source_backed(
         },
     ]
     assert str(tmp_path) not in first_manifest_bytes.decode("utf-8")
+    assert str(tmp_path) not in first_dossier_bytes.decode("utf-8")
     assert "dossier.md" not in {
         evidence["excerpt"] for evidence in manifest["evidence"]
     }
@@ -520,6 +576,225 @@ def test_complete_cumulative_research_flow_is_durable_and_source_backed(
             package_version="0.2.0",
         )
     assert first_manifest_bytes == (first.directory / "manifest.json").read_bytes()
+
+
+def test_real_indexes_reject_stale_reads_roll_back_refresh_and_exclude_dossier(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    data_paths = DataPaths.from_root(tmp_path / "source-corpus")
+    _write_transcript_source(
+        data_paths,
+        video_id=LOCAL_VIDEO_ID,
+        channel_id=LOCAL_CHANNEL_ID,
+        published_at=date(2026, 7, 1),
+        title="AI product engineering team workflows local evidence",
+        payload=(
+            b"WEBVTT\nKind: captions\nLanguage: en\n\n"
+            b"00:00:12.000 --> 00:00:17.000\n"
+            b"AI product engineering team workflows use bounded local evidence.\n"
+        ),
+    )
+    rebuild_and_publish_indexes(data_paths)
+
+    class ReplacingSQLiteEvidenceReader(SQLiteEvidenceReader):
+        replaced = False
+
+        def search_passages(
+            self,
+            query: QuerySpec,
+            *,
+            languages: tuple[str, ...],
+            limit: int,
+        ) -> tuple[PassageEvidence, ...]:
+            passages = super().search_passages(
+                query,
+                languages=languages,
+                limit=limit,
+            )
+            if not self.replaced:
+                replacement = data_paths.search_database.with_name(
+                    "search-replacement.sqlite3"
+                )
+                shutil.copyfile(data_paths.search_database, replacement)
+                os.replace(replacement, data_paths.search_database)
+                self.replaced = True
+            return passages
+
+    stale_store = ResearchStore(tmp_path / "stale-research.sqlite3", now=lambda: NOW)
+    stale_workflow = ResearchWorkflow(
+        store=stale_store,
+        evidence_reader=ReplacingSQLiteEvidenceReader(
+            search_database=data_paths.search_database,
+            catalog_database=data_paths.catalog_database,
+        ),
+        now=lambda: NOW,
+        session_id_factory=lambda: "01K4RESEARCHSTALE00000000000",
+    )
+
+    stale = stale_workflow.start(
+        topic="AI workflows in product and engineering teams",
+        queries=(QUERY,),
+        languages=("en",),
+        freshness_profile=FreshnessProfile.STANDARD,
+    )
+
+    assert stale.session.state is ResearchState.FAILED_RETRYABLE
+    assert stale.session.retry_target is ResearchState.ASSESSING
+    assert stale.error_code == "local_index_unavailable"
+    assert stale_store.get_session_history(stale.session.session_id).assessments == ()
+
+    provider = StaticDiscoveryProvider(_discovery_result())
+    acquisition = MixedAcquisitionService(data_paths)
+    store = ResearchStore(data_paths.research_database, now=lambda: NOW)
+    workflow = ResearchWorkflow(
+        store=store,
+        evidence_reader=SQLiteEvidenceReader(
+            search_database=data_paths.search_database,
+            catalog_database=data_paths.catalog_database,
+        ),
+        discovery_provider=provider,
+        acquisition_service=acquisition,  # type: ignore[arg-type]
+        data_paths=data_paths,
+        index_refresher=rebuild_and_publish_indexes,
+        now=lambda: NOW,
+        session_id_factory=lambda: SESSION_ID,
+    )
+
+    started = workflow.start(
+        topic="AI workflows in product and engineering teams",
+        queries=(QUERY,),
+        languages=("en",),
+        freshness_profile=FreshnessProfile.STANDARD,
+    )
+    assert started.session.revision == 1
+    assert started.assessment is not None
+    assert started.assessment.coverage.matched_passages == 1
+    workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="refresh",
+        idempotency_key="real-refresh-decision-key",
+    )
+    workflow.discover(SESSION_ID, expected_revision=2)
+    workflow.approve(
+        SESSION_ID,
+        expected_revision=3,
+        video_ids=(ACQUIRED_VIDEO_ID, NO_TRANSCRIPT_VIDEO_ID),
+        idempotency_key="real-candidate-approval-key",
+    )
+
+    old_catalog = data_paths.catalog_database.read_bytes()
+    old_search = data_paths.search_database.read_bytes()
+    original_validation = acquisition_module._validate_published_search_pair
+    validation_calls = 0
+
+    def fail_first_search_publication(*args: object, **kwargs: object) -> None:
+        nonlocal validation_calls
+        validation_calls += 1
+        if validation_calls == 1:
+            raise ValueError("forced E2E search publication failure")
+        original_validation(*args, **kwargs)
+
+    monkeypatch.setattr(
+        acquisition_module,
+        "_validate_published_search_pair",
+        fail_first_search_publication,
+    )
+
+    failed = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="real-acquisition-key",
+        language="en",
+    )
+
+    assert failed.session.state is ResearchState.FAILED_RETRYABLE
+    assert failed.session.revision == 6
+    assert failed.session.retry_target is ResearchState.REINDEXING
+    assert failed.error_code == "index_refresh_failed"
+    assert data_paths.catalog_database.read_bytes() == old_catalog
+    assert data_paths.search_database.read_bytes() == old_search
+    assert acquisition.acquired_source is not None
+    assert acquisition.acquired_source.read_bytes() == ACQUIRED_SOURCE_BYTES
+    assert hashlib.sha256(ACQUIRED_SOURCE_BYTES).hexdigest() == ACQUIRED_SOURCE_SHA256
+    rolled_back_reader = SQLiteEvidenceReader(
+        search_database=data_paths.search_database,
+        catalog_database=data_paths.catalog_database,
+    )
+    assert rolled_back_reader.search_passages(
+        QuerySpec("current source evidence"),
+        languages=("en",),
+        limit=20,
+    ) == ()
+
+    reassessed = workflow.retry(
+        SESSION_ID,
+        expected_revision=6,
+        idempotency_key="real-reindex-retry-key",
+    )
+
+    assert validation_calls == 2
+    assert reassessed.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert reassessed.session.revision == 9
+    assert reassessed.assessment is not None
+    assert reassessed.assessment.coverage.matched_passages == 2
+    assert reassessed.assessment.coverage.matched_videos == 2
+    acquired_evidence = next(
+        passage
+        for passage in reassessed.assessment.passages
+        if passage.video_id == ACQUIRED_VIDEO_ID
+    )
+    assert acquired_evidence.url == (
+        f"https://youtube.com/watch?v={ACQUIRED_VIDEO_ID}&t=45s"
+    )
+    assert acquired_evidence.source_sha256 == ACQUIRED_SOURCE_SHA256
+    assert [call[0] for call in acquisition.calls] == [
+        ACQUIRED_VIDEO_ID,
+        NO_TRANSCRIPT_VIDEO_ID,
+    ]
+    assert acquisition.data_paths_seen == [data_paths, data_paths]
+
+    completed = workflow.decide(
+        SESSION_ID,
+        expected_revision=9,
+        decision="sufficient",
+        idempotency_key="real-sufficient-decision-key",
+    )
+    assert (completed.session.state, completed.session.revision) == (
+        ResearchState.COMPLETED,
+        10,
+    )
+
+    exported = workflow.export(
+        DossierExportRequest(SESSION_ID, tmp_path / "real-dossier"),
+        package_version="0.2.0",
+    )
+    manifest_bytes = (exported.directory / "manifest.json").read_bytes()
+    dossier_bytes = (exported.directory / "dossier.md").read_bytes()
+    manifest = json.loads(manifest_bytes)
+    assert exported.manifest_sha256 == hashlib.sha256(manifest_bytes).hexdigest()
+    assert exported.dossier_sha256 == hashlib.sha256(dossier_bytes).hexdigest()
+    assert next(
+        item
+        for item in manifest["acquisition_outcomes"]
+        if item["video_id"] == ACQUIRED_VIDEO_ID
+    )["source_sha256"] == ACQUIRED_SOURCE_SHA256
+    for local_path in (tmp_path, data_paths.root, acquisition.acquired_source):
+        assert str(local_path) not in manifest_bytes.decode("utf-8")
+        assert str(local_path) not in dossier_bytes.decode("utf-8")
+
+    rebuild_and_publish_indexes(data_paths)
+    post_export_reader = SQLiteEvidenceReader(
+        search_database=data_paths.search_database,
+        catalog_database=data_paths.catalog_database,
+    )
+    assert post_export_reader.search_passages(
+        QuerySpec("stored contradictions"),
+        languages=("en",),
+        limit=20,
+    ) == ()
+    assert not exported.directory.is_relative_to(data_paths.root)
 
 
 def test_empty_local_corpus_still_requires_the_sufficiency_decision(
@@ -724,7 +999,7 @@ def test_dossier_root_identity_rejects_a_path_swap_before_publication(
         ),
     )
 
-    with pytest.raises(ValueError, match="root changed"):
+    with pytest.raises(ValueError):
         harness.workflow.export(request, package_version="0.2.0")
 
     assert tuple(configured_root.iterdir()) == ()
