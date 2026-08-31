@@ -1332,3 +1332,216 @@ def test_discovery_retry_lock_replays_live_and_recovers_after_crash(tmp_path) ->
 
     assert retry_replays[0].error_code == "retry_in_progress"
     assert recovered.session.state is ResearchState.AWAITING_CANDIDATES
+
+
+def test_acquisition_retry_resumes_reindex_substage_without_redownload(
+    tmp_path,
+) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+
+    class FailThenAcquire:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def acquire_approved(
+            self,
+            candidates: tuple[ResearchCandidate, ...],
+            *,
+            data_paths: DataPaths,
+            language: str,
+            cookies_from_browser: str | None = None,
+        ) -> tuple[CandidateAcquisitionOutcome, ...]:
+            self.calls += 1
+            if self.calls == 1:
+                raise LookupError("bounded first acquisition failure")
+            return (
+                CandidateAcquisitionOutcome(
+                    candidate.video_id,
+                    CandidateStatus.ACQUIRED,
+                    None,
+                    "b" * 64,
+                ),
+            )
+
+    acquisition = FailThenAcquire()
+    refresh_calls = 0
+
+    def crash_once(paths: DataPaths) -> None:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        if refresh_calls == 1:
+            raise SystemExit("simulated refresh crash after retry download")
+
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=crash_once,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+    failed = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="acquire-key",
+        language="fr",
+    )
+
+    with pytest.raises(SystemExit, match="refresh crash after retry download"):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=failed.session.revision,
+            idempotency_key="retry-key",
+        )
+    crashed = workflow.status(SESSION_ID)
+    recovered = workflow.retry(
+        SESSION_ID,
+        expected_revision=failed.session.revision,
+        idempotency_key="retry-key",
+    )
+
+    assert crashed.session.state is ResearchState.REINDEXING
+    assert recovered.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert acquisition.calls == 2
+    assert refresh_calls == 2
+    history = workflow._store.get_session_history(SESSION_ID)  # type: ignore[attr-defined]
+    assert history.acquisition_attempts[0].status == "completed"
+
+
+def test_initial_acquire_reindex_crash_retries_completed_attempt_without_download(
+    tmp_path,
+) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                candidate.video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+    refresh_calls = 0
+
+    def crash_once(paths: DataPaths) -> None:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        if refresh_calls == 1:
+            raise SystemExit("simulated initial refresh crash")
+
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=crash_once,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+    with pytest.raises(SystemExit, match="simulated initial refresh crash"):
+        workflow.acquire(
+            SESSION_ID,
+            expected_revision=4,
+            idempotency_key="acquire-key",
+            language="fr",
+        )
+    crashed = workflow.status(SESSION_ID)
+    attempt = workflow._store.get_session_history(SESSION_ID).acquisition_attempts[0]  # type: ignore[attr-defined]
+
+    with workflow._store.acquisition_execution_lock(attempt.attempt_id) as claimed:  # type: ignore[attr-defined]
+        assert claimed is True
+        blocked = workflow.retry(
+            SESSION_ID,
+            expected_revision=crashed.session.revision,
+            idempotency_key="retry-key",
+        )
+    recovered = workflow.retry(
+        SESSION_ID,
+        expected_revision=crashed.session.revision,
+        idempotency_key="retry-key",
+    )
+
+    assert crashed.session.state is ResearchState.REINDEXING
+    assert attempt.status == "completed"
+    assert blocked.error_code == "acquisition_in_progress"
+    assert recovered.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert len(acquisition.calls) == 1
+    assert refresh_calls == 2
+
+
+def test_initial_acquire_assessment_crash_retries_without_download_or_reindex(
+    tmp_path,
+) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                candidate.video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+
+    class CrashOnceAssessment(FakeEvidenceReader):
+        def __init__(self) -> None:
+            super().__init__()
+            self.crash = False
+
+        def capture_snapshot(self) -> DatabaseSnapshot:
+            if self.crash:
+                self.crash = False
+                raise SystemExit("simulated initial assessment crash")
+            return super().capture_snapshot()
+
+    reader = CrashOnceAssessment()
+    refresh_calls: list[DataPaths] = []
+    workflow = _workflow(
+        tmp_path,
+        reader,
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: refresh_calls.append(paths),
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+    reader.crash = True
+    with pytest.raises(SystemExit, match="simulated initial assessment crash"):
+        workflow.acquire(
+            SESSION_ID,
+            expected_revision=4,
+            idempotency_key="acquire-key",
+            language="fr",
+        )
+    crashed = workflow.status(SESSION_ID)
+    recovered = workflow.retry(
+        SESSION_ID,
+        expected_revision=crashed.session.revision,
+        idempotency_key="retry-key",
+    )
+
+    assert crashed.session.state is ResearchState.ASSESSING
+    assert recovered.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert len(acquisition.calls) == 1
+    assert len(refresh_calls) == 1

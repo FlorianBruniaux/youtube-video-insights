@@ -621,12 +621,18 @@ class ResearchStore:
                     raise ValueError("idempotency key payload differs")
                 if stored.get("result") is not None:
                     return None
-                if stored.get("retry_target") != ResearchState.ACQUIRING.value:
+                if stored.get("retry_target") not in {
+                    ResearchState.ACQUIRING.value,
+                    ResearchState.REINDEXING.value,
+                    ResearchState.ASSESSING.value,
+                }:
                     return None
                 session = self._session(connection, session_id)
                 if session.state not in {
                     ResearchState.ACQUIRING,
                     ResearchState.FAILED_RETRYABLE,
+                    ResearchState.REINDEXING,
+                    ResearchState.ASSESSING,
                 }:
                     raise ValueError("retry reservation is not recoverable")
             else:
@@ -634,8 +640,30 @@ class ResearchStore:
                     connection,
                     session_id,
                     expected_revision,
-                    {ResearchState.ACQUIRING, ResearchState.FAILED_RETRYABLE},
+                    {
+                        ResearchState.ACQUIRING,
+                        ResearchState.FAILED_RETRYABLE,
+                        ResearchState.REINDEXING,
+                        ResearchState.ASSESSING,
+                    },
                 )
+                if session.state in {
+                    ResearchState.REINDEXING,
+                    ResearchState.ASSESSING,
+                }:
+                    for row in connection.execute(
+                        """SELECT payload_json FROM research_decisions
+                        WHERE session_id = ? AND action = 'retry'""",
+                        (session_id,),
+                    ):
+                        stored = json.loads(row["payload_json"])
+                        if isinstance(stored, dict) and stored.get("result") is None:
+                            raise ValueError("another retry reservation is incomplete")
+            if session.state in {
+                ResearchState.REINDEXING,
+                ResearchState.ASSESSING,
+            }:
+                return self._completed_attempt_for_pipeline(connection, session_id)
             if (
                 session.state is ResearchState.FAILED_RETRYABLE
                 and session.retry_target is not ResearchState.ACQUIRING
@@ -688,14 +716,24 @@ class ResearchStore:
                 session_id,
                 expected_revision,
                 (
-                    {ResearchState.FAILED_RETRYABLE, ResearchState.ACQUIRING}
+                    {
+                        ResearchState.FAILED_RETRYABLE,
+                        ResearchState.ACQUIRING,
+                        ResearchState.REINDEXING,
+                        ResearchState.ASSESSING,
+                    }
                     if acquisition_attempt_id is not None
                     else {ResearchState.FAILED_RETRYABLE}
                 ),
             )
             target = (
-                ResearchState.ACQUIRING
-                if session.state is ResearchState.ACQUIRING
+                session.state
+                if session.state
+                in {
+                    ResearchState.ACQUIRING,
+                    ResearchState.REINDEXING,
+                    ResearchState.ASSESSING,
+                }
                 else session.retry_target
             )
             if target not in set(_FAILURE_RETRY_TARGETS.values()):
@@ -734,6 +772,19 @@ class ResearchStore:
                         status="running",
                         updated_at=_datetime(now),
                     )
+            elif (
+                target in {ResearchState.REINDEXING, ResearchState.ASSESSING}
+                and acquisition_attempt_id is not None
+            ):
+                attempt = self._completed_attempt_for_pipeline(
+                    connection,
+                    session_id,
+                )
+                if (
+                    attempt is None
+                    or attempt.attempt_id != acquisition_attempt_id
+                ):
+                    raise ValueError("retry acquisition attempt differs")
 
             resumed = self._transition(
                 connection,
@@ -991,6 +1042,32 @@ class ResearchStore:
             raise ValueError("session has no candidates")
         return row[0]
 
+    def _completed_attempt_for_pipeline(
+        self,
+        connection: sqlite3.Connection,
+        session_id: str,
+    ) -> AcquisitionAttempt | None:
+        event = connection.execute(
+            """SELECT payload_json FROM research_events
+            WHERE session_id = ? AND event_code = 'acquisition_batch_recorded'
+            ORDER BY event_id DESC LIMIT 1""",
+            (session_id,),
+        ).fetchone()
+        if event is None:
+            return None
+        payload = json.loads(event["payload_json"])
+        attempt_id = payload.get("attempt_id") if isinstance(payload, dict) else None
+        if not isinstance(attempt_id, str):
+            raise ValueError("acquisition pipeline event is invalid")
+        row = connection.execute(
+            """SELECT * FROM research_acquisition_attempts
+            WHERE attempt_id = ? AND session_id = ? AND status = 'completed'""",
+            (attempt_id, session_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("acquisition pipeline attempt is not completed")
+        return self._attempt_from_row(row)
+
     def _active_attempt(
         self,
         connection: sqlite3.Connection,
@@ -1159,18 +1236,53 @@ class ResearchStore:
             result_payload is None
             and reclaim_incomplete
             and acquisition_attempt_id is not None
-            and target_value == ResearchState.ACQUIRING.value
+            and target_value
+            in {
+                ResearchState.ACQUIRING.value,
+                ResearchState.REINDEXING.value,
+                ResearchState.ASSESSING.value,
+            }
         ):
             attempt_row = connection.execute(
                 """SELECT * FROM research_acquisition_attempts
                 WHERE attempt_id = ? AND session_id = ?
-                AND status IN ('running', 'failed_retryable')""",
+                AND status IN ('running', 'failed_retryable', 'completed')""",
                 (acquisition_attempt_id, session_id),
             ).fetchone()
             if attempt_row is None:
                 raise ValueError("retry acquisition attempt differs")
             attempt = self._attempt_from_row(attempt_row)
             session = self._session(connection, session_id)
+            if attempt.status == "completed":
+                if session.state not in {
+                    ResearchState.REINDEXING,
+                    ResearchState.ASSESSING,
+                }:
+                    raise ValueError("retry reservation is not recoverable")
+                lineage_attempt = self._completed_attempt_for_pipeline(
+                    connection,
+                    session_id,
+                )
+                if (
+                    lineage_attempt is None
+                    or lineage_attempt.attempt_id != attempt.attempt_id
+                ):
+                    raise ValueError("retry acquisition attempt differs")
+                stored["claim"] = _session_payload(session)
+                stored["retry_target"] = session.state.value
+                stored["error_code"] = None
+                connection.execute(
+                    """UPDATE research_decisions SET payload_json = ?
+                    WHERE idempotency_key = ?""",
+                    (_canonical_json(stored), row["idempotency_key"]),
+                )
+                return RetryReservation(
+                    session,
+                    session.state,
+                    True,
+                    attempt,
+                    None,
+                )
             if attempt.status == "failed_retryable":
                 if (
                     session.state is not ResearchState.FAILED_RETRYABLE
