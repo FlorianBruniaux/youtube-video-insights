@@ -7,6 +7,7 @@ import os
 import re
 import sqlite3
 import stat
+from contextlib import suppress
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -214,12 +215,18 @@ class ExportReader:
                 return self._response([], limit=limit, inventory=inventory)
             items: list[dict[str, object]] = []
             for topic_name in inventory.names(root_fd):
-                topic_fd = self._open_directory(root_fd, topic_name)
+                topic_fd, topic_unavailable = self._open_directory(root_fd, topic_name)
+                if topic_unavailable:
+                    inventory.complete = False
                 if topic_fd is None:
                     continue
                 try:
                     for dossier_name in inventory.names(topic_fd):
-                        item = self._export_item(topic_fd, dossier_name)
+                        item, dossier_unavailable = self._export_item(
+                            topic_fd, dossier_name
+                        )
+                        if dossier_unavailable:
+                            inventory.complete = False
                         if item is not None:
                             items.append(item)
                 finally:
@@ -252,41 +259,55 @@ class ExportReader:
         }
 
     @staticmethod
-    def _open_directory(parent_fd: int, name: str) -> int | None:
+    def _open_directory(parent_fd: int, name: str) -> tuple[int | None, bool]:
+        """Open a candidate directory or report whether its safety is unknown."""
         if Path(name).name != name or name in {"", ".", ".."} or "\x00" in name:
-            return None
+            return (None, False)
         try:
             details = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
         except OSError:
-            return None
+            return (None, True)
         if stat.S_ISLNK(details.st_mode) or not stat.S_ISDIR(details.st_mode):
-            return None
+            return (None, False)
         try:
             directory_fd = os.open(name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
         except OSError:
-            return None
-        opened = os.fstat(directory_fd)
+            return (None, True)
+        try:
+            opened = os.fstat(directory_fd)
+        except OSError:
+            with suppress(OSError):
+                os.close(directory_fd)
+            return (None, True)
         if (opened.st_dev, opened.st_ino) != (details.st_dev, details.st_ino):
-            os.close(directory_fd)
-            return None
-        return directory_fd
+            with suppress(OSError):
+                os.close(directory_fd)
+            return (None, True)
+        return (directory_fd, False)
 
     @staticmethod
-    def _export_item(parent_fd: int, name: str) -> dict[str, object] | None:
-        directory_fd = ExportReader._open_directory(parent_fd, name)
+    def _export_item(
+        parent_fd: int, name: str
+    ) -> tuple[dict[str, object] | None, bool]:
+        directory_fd, directory_unavailable = ExportReader._open_directory(
+            parent_fd, name
+        )
         if directory_fd is None:
-            return None
+            return (None, directory_unavailable)
         try:
             session_id, created_at = ExportReader._manifest_summary(directory_fd)
         finally:
             os.close(directory_fd)
         manifest_valid = session_id is not None and created_at is not None
-        return {
-            "name": name,
-            "session_id": session_id if manifest_valid else None,
-            "created_at": created_at if manifest_valid else None,
-            "manifest_valid": manifest_valid,
-        }
+        return (
+            {
+                "name": name,
+                "session_id": session_id if manifest_valid else None,
+                "created_at": created_at if manifest_valid else None,
+                "manifest_valid": manifest_valid,
+            },
+            False,
+        )
 
     @staticmethod
     def _manifest_summary(directory_fd: int) -> tuple[str | None, str | None]:

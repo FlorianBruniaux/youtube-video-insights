@@ -231,3 +231,43 @@ def test_export_reader_stably_sorts_examined_dossiers(tmp_path: Path) -> None:
         "2026-08-31-z",
     ]
     assert payload["inventory_complete"] is True
+
+
+@pytest.mark.parametrize(
+    ("blocked_name", "inventory_examined"),
+    (("topic", 1), ("2026-08-31-dossier", 2)),
+)
+def test_export_reader_marks_unopenable_candidate_directories_incomplete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    blocked_name: str,
+    inventory_examined: int,
+) -> None:
+    """A candidate lost between scan and no-follow open must not look complete."""
+    exports = tmp_path / "exports"
+    dossier = exports / "topic" / "2026-08-31-dossier"
+    dossier.mkdir(parents=True)
+    (dossier / "manifest.json").write_text(json.dumps(_manifest()), encoding="utf-8")
+    original_open = os.open
+
+    def denied_open(
+        name: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if name == blocked_name and dir_fd is not None:
+            raise PermissionError("test candidate became unavailable")
+        return original_open(name, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(readers_module.os, "open", denied_open)
+
+    assert ExportReader(exports).list_exports(limit=10) == {
+        "items": [],
+        "limit": 10,
+        "truncated": True,
+        "inventory_complete": False,
+        "inventory_examined": inventory_examined,
+        "inventory_limit": 32,
+    }
