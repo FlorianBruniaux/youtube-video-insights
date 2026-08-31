@@ -621,13 +621,16 @@ class ResearchStore:
                     raise ValueError("idempotency key payload differs")
                 if stored.get("result") is not None:
                     return None
-                if stored.get("retry_target") not in {
+                target_value = stored.get("retry_target")
+                if target_value not in {
                     ResearchState.ACQUIRING.value,
                     ResearchState.REINDEXING.value,
                     ResearchState.ASSESSING.value,
                 }:
                     return None
                 session = self._session(connection, session_id)
+                if session.state is ResearchState.AWAITING_SUFFICIENCY:
+                    return None
                 if session.state not in {
                     ResearchState.ACQUIRING,
                     ResearchState.FAILED_RETRYABLE,
@@ -1232,6 +1235,24 @@ class ResearchStore:
         error_code = stored.get("error_code")
         if error_code is not None and not _is_error_code(error_code):
             raise ValueError("stored retry result is invalid")
+        if result_payload is None and reclaim_incomplete:
+            target = ResearchState(target_value)
+            session = self._session(connection, session_id)
+            terminal_state = {
+                ResearchState.ACQUIRING: ResearchState.AWAITING_SUFFICIENCY,
+                ResearchState.REINDEXING: ResearchState.AWAITING_SUFFICIENCY,
+                ResearchState.ASSESSING: ResearchState.AWAITING_SUFFICIENCY,
+                ResearchState.DISCOVERING: ResearchState.AWAITING_CANDIDATES,
+            }.get(target)
+            if terminal_state is not None and session.state is terminal_state:
+                return RetryReservation(
+                    session,
+                    target,
+                    True,
+                    None,
+                    None,
+                    finalize_only=True,
+                )
         if (
             result_payload is None
             and reclaim_incomplete

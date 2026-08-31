@@ -18,6 +18,7 @@ from yt_insights.research.models import (
     PassageEvidence,
     QuerySpec,
     ResearchCandidate,
+    ResearchSession,
     ResearchState,
     VideoEvidence,
 )
@@ -114,6 +115,7 @@ def _workflow(
     reader: FakeEvidenceReader,
     provider: FakeDiscoveryProvider | None = None,
     *,
+    store: ResearchStore | None = None,
     acquisition_service: object | None = None,
     index_refresher: object | None = None,
 ) -> ResearchWorkflow:
@@ -123,7 +125,8 @@ def _workflow(
     if index_refresher is not None:
         kwargs["index_refresher"] = index_refresher
     return ResearchWorkflow(
-        store=ResearchStore(tmp_path / "research.sqlite3", now=lambda: NOW),
+        store=store
+        or ResearchStore(tmp_path / "research.sqlite3", now=lambda: NOW),
         evidence_reader=reader,
         discovery_provider=provider,
         data_paths=DataPaths.from_root(tmp_path / "data"),
@@ -156,6 +159,30 @@ class FakeAcquisitionService:
             self.before_network()
         self.calls.append((candidates, language, cookies_from_browser))
         return self.outcomes
+
+
+class CrashBeforeCompleteRetryStore(ResearchStore):
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        super().__init__(*args, **kwargs)
+        self.crash_before_complete_retry = False
+        self.complete_retry_calls = 0
+
+    def complete_retry(
+        self,
+        idempotency_key: str,
+        *,
+        result: ResearchSession,
+        error_code: str | None,
+    ) -> ResearchSession:
+        self.complete_retry_calls += 1
+        if self.crash_before_complete_retry:
+            self.crash_before_complete_retry = False
+            raise SystemExit("simulated crash before retry finalization")
+        return super().complete_retry(
+            idempotency_key,
+            result=result,
+            error_code=error_code,
+        )
 
 
 def _prepare_approved_session(
@@ -1545,3 +1572,253 @@ def test_initial_acquire_assessment_crash_retries_without_download_or_reindex(
     assert recovered.session.state is ResearchState.AWAITING_SUFFICIENCY
     assert len(acquisition.calls) == 1
     assert len(refresh_calls) == 1
+
+
+def test_acquisition_retry_finalizes_after_target_commits_without_side_effect_replay(
+    tmp_path,
+) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                candidate.video_id,
+                CandidateStatus.FAILED_RETRYABLE,
+                "acquisition_unavailable",
+                None,
+            ),
+        )
+    )
+    reader = FakeEvidenceReader()
+    refresh_calls: list[DataPaths] = []
+    store = CrashBeforeCompleteRetryStore(
+        tmp_path / "research.sqlite3",
+        now=lambda: NOW,
+    )
+    workflow = _workflow(
+        tmp_path,
+        reader,
+        provider,
+        store=store,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: refresh_calls.append(paths),
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+    failed = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="acquire-key",
+        language="fr",
+    )
+    acquisition.outcomes = (
+        CandidateAcquisitionOutcome(
+            candidate.video_id,
+            CandidateStatus.ACQUIRED,
+            None,
+            "b" * 64,
+        ),
+    )
+    store.crash_before_complete_retry = True
+
+    with pytest.raises(SystemExit, match="before retry finalization"):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=failed.session.revision,
+            idempotency_key="retry-acquiring",
+        )
+    terminal = workflow.status(SESSION_ID)
+    calls_before_replay = (
+        len(acquisition.calls),
+        len(refresh_calls),
+        len(reader.passage_calls),
+    )
+    with pytest.raises(ValueError):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=terminal.session.revision,
+            idempotency_key="different-key",
+        )
+    replayed = workflow.retry(
+        SESSION_ID,
+        expected_revision=failed.session.revision,
+        idempotency_key="retry-acquiring",
+    )
+
+    assert terminal.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert replayed.to_dict() == terminal.to_dict()
+    assert (
+        len(acquisition.calls),
+        len(refresh_calls),
+        len(reader.passage_calls),
+    ) == calls_before_replay
+    assert store.complete_retry_calls == 2
+
+
+def test_reindex_retry_finalizes_after_target_commits_without_refresh_replay(
+    tmp_path,
+) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                candidate.video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+    reader = FakeEvidenceReader()
+    refresh_calls = 0
+
+    def fail_first_refresh(paths: DataPaths) -> None:
+        nonlocal refresh_calls
+        refresh_calls += 1
+        if refresh_calls == 1:
+            raise RuntimeError("bounded first refresh failure")
+
+    store = CrashBeforeCompleteRetryStore(
+        tmp_path / "research.sqlite3",
+        now=lambda: NOW,
+    )
+    workflow = _workflow(
+        tmp_path,
+        reader,
+        provider,
+        store=store,
+        acquisition_service=acquisition,
+        index_refresher=fail_first_refresh,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+    failed = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="acquire-key",
+        language="fr",
+    )
+    store.crash_before_complete_retry = True
+
+    with pytest.raises(SystemExit, match="before retry finalization"):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=failed.session.revision,
+            idempotency_key="retry-reindexing",
+        )
+    terminal = workflow.status(SESSION_ID)
+    calls_before_replay = (
+        len(acquisition.calls),
+        refresh_calls,
+        len(reader.passage_calls),
+    )
+    replayed = workflow.retry(
+        SESSION_ID,
+        expected_revision=failed.session.revision,
+        idempotency_key="retry-reindexing",
+    )
+
+    assert terminal.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert replayed.to_dict() == terminal.to_dict()
+    assert (
+        len(acquisition.calls),
+        refresh_calls,
+        len(reader.passage_calls),
+    ) == calls_before_replay
+    assert store.complete_retry_calls == 2
+
+
+def test_assessment_retry_finalizes_after_target_commits_without_assessment_replay(
+    tmp_path,
+) -> None:
+    reader = FakeEvidenceReader(fails=True)
+    store = CrashBeforeCompleteRetryStore(
+        tmp_path / "research.sqlite3",
+        now=lambda: NOW,
+    )
+    workflow = _workflow(tmp_path, reader, store=store)
+    failed = workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    reader.fails = False
+    store.crash_before_complete_retry = True
+
+    with pytest.raises(SystemExit, match="before retry finalization"):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=failed.session.revision,
+            idempotency_key="retry-assessing",
+        )
+    terminal = workflow.status(SESSION_ID)
+    calls_before_replay = len(reader.passage_calls)
+    replayed = workflow.retry(
+        SESSION_ID,
+        expected_revision=failed.session.revision,
+        idempotency_key="retry-assessing",
+    )
+
+    assert terminal.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert replayed.to_dict() == terminal.to_dict()
+    assert len(reader.passage_calls) == calls_before_replay
+    assert store.complete_retry_calls == 2
+
+
+def test_discovery_retry_finalizes_after_target_commits_without_provider_replay(
+    tmp_path,
+) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(RuntimeError("bounded discovery failure"))
+    reader = FakeEvidenceReader()
+    store = CrashBeforeCompleteRetryStore(
+        tmp_path / "research.sqlite3",
+        now=lambda: NOW,
+    )
+    workflow = _workflow(tmp_path, reader, provider, store=store)
+    workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="refresh",
+        idempotency_key="refresh-key",
+    )
+    failed = workflow.discover(SESSION_ID, expected_revision=2)
+    provider.result = DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    store.crash_before_complete_retry = True
+
+    with pytest.raises(SystemExit, match="before retry finalization"):
+        workflow.retry(
+            SESSION_ID,
+            expected_revision=failed.session.revision,
+            idempotency_key="retry-discovering",
+        )
+    terminal = workflow.status(SESSION_ID)
+    calls_before_replay = len(provider.calls)
+    replayed = workflow.retry(
+        SESSION_ID,
+        expected_revision=failed.session.revision,
+        idempotency_key="retry-discovering",
+    )
+
+    assert terminal.session.state is ResearchState.AWAITING_CANDIDATES
+    assert replayed.to_dict() == terminal.to_dict()
+    assert len(provider.calls) == calls_before_replay
+    assert store.complete_retry_calls == 2

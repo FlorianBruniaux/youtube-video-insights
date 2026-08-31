@@ -416,26 +416,33 @@ class ResearchWorkflow:
                 reservation.error_code,
             )
 
-        target = reservation.retry_target
-        if target is ResearchState.REINDEXING:
-            response = self._finish_reindexing(reservation.session, refresh=True)
-        elif target is ResearchState.ASSESSING:
-            response = self._assess_session(reservation.session)
-        elif target is ResearchState.DISCOVERING:
-            response = self.discover(
-                session_id,
-                expected_revision=reservation.session.revision,
-            )
-        elif target is ResearchState.ACQUIRING:
-            attempt = reservation.acquisition_attempt
-            if attempt is None:
-                raise ValueError("retry has no acquisition attempt")
-            response = self._continue_acquisition(
-                attempt,
-                session=reservation.session,
+        if reservation.finalize_only:
+            response = ResearchResponse(
+                reservation.session,
+                self._store.get_latest_assessment(session_id),
+                self._store.list_candidates(session_id) or None,
             )
         else:
-            raise ValueError("retry target is invalid")
+            target = reservation.retry_target
+            if target is ResearchState.REINDEXING:
+                response = self._finish_reindexing(reservation.session, refresh=True)
+            elif target is ResearchState.ASSESSING:
+                response = self._assess_session(reservation.session)
+            elif target is ResearchState.DISCOVERING:
+                response = self.discover(
+                    session_id,
+                    expected_revision=reservation.session.revision,
+                )
+            elif target is ResearchState.ACQUIRING:
+                attempt = reservation.acquisition_attempt
+                if attempt is None:
+                    raise ValueError("retry has no acquisition attempt")
+                response = self._continue_acquisition(
+                    attempt,
+                    session=reservation.session,
+                )
+            else:
+                raise ValueError("retry target is invalid")
 
         self._store.complete_retry(
             idempotency_key,

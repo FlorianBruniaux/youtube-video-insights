@@ -289,6 +289,7 @@ class RetryReservation:
     claimed: bool
     acquisition_attempt: AcquisitionAttempt | None
     error_code: str | None
+    finalize_only: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.session, ResearchSession):
@@ -297,6 +298,8 @@ class RetryReservation:
             raise TypeError("retry target must be a ResearchState")
         if not isinstance(self.claimed, bool):
             raise TypeError("claimed must be a boolean")
+        if not isinstance(self.finalize_only, bool):
+            raise TypeError("finalize_only must be a boolean")
 
 
 @dataclass(frozen=True, slots=True)
