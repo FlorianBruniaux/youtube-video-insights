@@ -31,6 +31,20 @@ PYTHONPATH=src /Users/florianbruniaux/Sites/perso/yt-insights/.venv/bin/python \
 
 The query JSON validated and contains no placeholder marker. Its SHA-256 is `246bc2b6157a886e7f21f87ca23447a1af8de36b98a9057f6d03e1e50e32c2e4`.
 
+The checked-in gate receipt is validated before use. The validator rejects unknown top-level and nested keys, malformed or missing fingerprints, invalid statuses, refresh sample counts other than five, discovery subject counts other than three, and a true global-activation flag unless every external gate passes.
+
+```bash
+/Users/florianbruniaux/Sites/perso/yt-insights/.venv/bin/python \
+  scripts/validate_cumulative_research_gates.py \
+  plans/evidence/2026-08-31-cumulative-research-gates.json
+```
+
+Output:
+
+```text
+gate evidence valid
+```
+
 The representative build selected 50 valid VTTs, generated 3,293 passages, and produced database SHA-256 `9e4d8ff3bc56be56f82416ad0c3c5ca67d72c274f2630a2852952ff4ead8be20` (10,940,416 bytes). The unreviewed packet is at `/private/tmp/yt-insights-task0.dOEsXX/pilot-evaluation-packet.json`, SHA-256 `2cefde38d43742849ce1e371557eff51f2f1ca7f7b199050432517f1fe7aee10`.
 
 The packet has four pilot queries and three subjects, but zero returned rank-1-to-5 results rather than the expected 20. Its evaluation status remains `UNKNOWN`; zero null judgments reflects zero result rows, not review completion.
