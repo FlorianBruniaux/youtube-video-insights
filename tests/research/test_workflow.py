@@ -1492,34 +1492,61 @@ def test_public_error_codes_use_a_closed_secret_free_vocabulary(tmp_path) -> Non
 
 
 def test_public_acquisition_history_is_bounded_and_reports_truncation(tmp_path) -> None:
-    workflow = _workflow(tmp_path, FakeEvidenceReader())
-    started = workflow.start(
+    store = ResearchStore(tmp_path / "research.sqlite3", now=lambda: NOW)
+    workflow = _workflow(tmp_path, FakeEvidenceReader(), store=store)
+    workflow.start(
         topic="Local evidence",
         queries=("Local query",),
         languages=("fr",),
         freshness_profile=FreshnessProfile.FAST,
     )
-    attempts = tuple(
-        PublicAcquisitionAttempt(
-            f"attempt-{index:03d}",
-            "completed",
-            (),
-        )
-        for index in range(101)
-    )
-    response = ResearchResponse(
-        started.session,
-        started.assessment,
-        None,
-        acquisition_history=attempts,
-    )
+    with sqlite3.connect(tmp_path / "research.sqlite3") as connection:
+        for index in range(102):
+            attempt_id = f"attempt-{index:03d}"
+            payload = (
+                "not-json-SECRET-TRUNCATED-CANARY"
+                if index == 0
+                else json.dumps(
+                    {
+                        "video_ids": [VIDEO_ID],
+                        "language": "fr",
+                        "browser_identifier": None,
+                    }
+                )
+            )
+            connection.execute(
+                "INSERT INTO research_acquisition_attempts VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    attempt_id,
+                    f"key-{index:03d}",
+                    SESSION_ID,
+                    1,
+                    payload,
+                    "completed",
+                    f"2026-08-31T12:{index // 60:02d}:{index % 60:02d}+00:00",
+                    f"2026-08-31T12:{index // 60:02d}:{index % 60:02d}+00:00",
+                ),
+            )
+            connection.execute(
+                "INSERT INTO research_acquisition_outcomes VALUES (?, ?, ?, ?, ?)",
+                (
+                    attempt_id,
+                    VIDEO_ID,
+                    "acquired",
+                    "SECRET-TRUNCATED-CANARY" if index == 0 else None,
+                    "b" * 64,
+                ),
+            )
 
+    response = workflow.status(SESSION_ID)
     payload = response.to_dict()
 
     assert len(payload["acquisition_history"]) == 100
-    assert payload["acquisition_history"][0]["attempt_id"] == "attempt-001"
-    assert payload["acquisition_history"][-1]["attempt_id"] == "attempt-100"
+    assert payload["acquisition_history"][0]["attempt_id"] == "attempt-002"
+    assert payload["acquisition_history"][-1]["attempt_id"] == "attempt-101"
     assert payload["acquisition_history_truncated"] is True
+    assert "SECRET-TRUNCATED-CANARY" not in json.dumps(payload)
+    assert "SECRET-TRUNCATED-CANARY" not in repr(response)
 
 
 def test_unexpected_index_database_error_is_bounded_and_retryable(tmp_path) -> None:

@@ -341,6 +341,25 @@ class SessionHistory:
         _require_tuple(self.events, label="events")
 
 
+@dataclass(frozen=True, slots=True)
+class ResearchPublicSnapshot:
+    """One revision-bound, bounded read model for public workflow responses."""
+
+    session: ResearchSession
+    assessment: ResearchAssessment | None
+    candidates: tuple[ResearchCandidate, ...]
+    acquisition_attempts: tuple[AcquisitionAttempt, ...]
+    acquisition_outcomes: tuple[ResearchAcquisitionOutcome, ...]
+    acquisition_history_truncated: bool
+
+    def __post_init__(self) -> None:
+        _require_tuple(self.candidates, label="candidates")
+        _require_tuple(self.acquisition_attempts, label="acquisition attempts")
+        _require_tuple(self.acquisition_outcomes, label="acquisition outcomes")
+        if len(self.acquisition_attempts) > 100:
+            raise ValueError("public acquisition attempts must be bounded")
+
+
 def _validate_research_text(value: object, *, label: str) -> None:
     if not isinstance(value, str):
         raise TypeError(f"{label} must be a string")

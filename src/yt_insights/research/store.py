@@ -32,6 +32,7 @@ from .models import (
     ResearchAcquisitionOutcome,
     ResearchAssessment,
     ResearchCandidate,
+    ResearchPublicSnapshot,
     ResearchSession,
     ResearchState,
     RetryReservation,
@@ -42,6 +43,10 @@ from .models import (
 
 
 _SCHEMA_VERSION = 1
+_ACQUISITION_HISTORY_INDEX = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS research_acquisition_attempts_history "
+    "ON research_acquisition_attempts(session_id, created_at, attempt_id)"
+)
 _ERROR_CODE = re.compile(r"[\x21-\x7e]{1,100}")
 _T = TypeVar("_T")
 
@@ -137,7 +142,11 @@ _SCHEMA_INDEXES = {
     "research_assessments": frozenset({("u", ("session_id", "session_revision"))}),
     "research_candidates": frozenset({("pk", ("session_id", "snapshot_revision", "video_id"))}),
     "research_decisions": frozenset({("pk", ("idempotency_key",))}),
-    "research_acquisition_attempts": frozenset({("pk", ("attempt_id",)), ("u", ("idempotency_key",))}),
+    "research_acquisition_attempts": frozenset({
+        ("pk", ("attempt_id",)),
+        ("u", ("idempotency_key",)),
+        ("c", ("session_id", "created_at", "attempt_id")),
+    }),
     "research_acquisition_outcomes": frozenset({("pk", ("attempt_id", "video_id"))}),
     "research_events": frozenset(),
 }
@@ -163,6 +172,11 @@ class ResearchStore:
             self._initialize()
         else:
             with self._open_unchecked() as connection:
+                self._validate_schema(
+                    connection,
+                    allow_missing_acquisition_history_index=True,
+                )
+                connection.execute(_ACQUISITION_HISTORY_INDEX)
                 self._validate_schema(connection)
         stat = self._path.stat()
         self._identity = (stat.st_dev, stat.st_ino)
@@ -638,6 +652,83 @@ class ResearchStore:
             events = tuple(EventRecord(row[0], None if row[1] is None else ResearchState(row[1]), ResearchState(row[2]), row[3], row[4], _datetime(row[5])) for row in connection.execute("SELECT event_id, from_state, to_state, event_code, payload_json, created_at FROM research_events WHERE session_id = ? ORDER BY event_id", (session_id,)))
             return SessionHistory(assessments, decisions, attempts, outcomes, events)
 
+    def get_public_snapshot(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> ResearchPublicSnapshot:
+        """Read one revision-bound response snapshot with bounded attempt history."""
+        with self._connection() as connection:
+            connection.execute("BEGIN")
+            session = self._session(connection, session_id)
+            if (
+                expected_revision is not None
+                and session.revision != expected_revision
+            ):
+                raise ValueError("session revision conflict")
+            assessment_row = connection.execute(
+                """SELECT payload_json FROM research_assessments
+                WHERE session_id = ? ORDER BY session_revision DESC LIMIT 1""",
+                (session_id,),
+            ).fetchone()
+            assessment = (
+                None
+                if assessment_row is None
+                else _assessment_from_json(assessment_row[0])
+            )
+            candidate_rows = connection.execute(
+                """SELECT payload_json FROM research_candidates
+                WHERE session_id = ? AND snapshot_revision = (
+                    SELECT MAX(snapshot_revision) FROM research_candidates
+                    WHERE session_id = ?
+                ) ORDER BY video_id""",
+                (session_id, session_id),
+            ).fetchall()
+            candidates = tuple(
+                _candidate_from_json(row[0]) for row in candidate_rows
+            )
+            attempt_rows = connection.execute(
+                """SELECT * FROM research_acquisition_attempts
+                WHERE session_id = ?
+                ORDER BY created_at DESC, attempt_id DESC LIMIT 101""",
+                (session_id,),
+            ).fetchall()
+            truncated = len(attempt_rows) > 100
+            selected_rows = attempt_rows[:100]
+            attempts = tuple(
+                self._attempt_from_row(row) for row in reversed(selected_rows)
+            )
+            attempt_ids = tuple(attempt.attempt_id for attempt in attempts)
+            outcomes: tuple[ResearchAcquisitionOutcome, ...] = ()
+            if attempt_ids:
+                placeholders = ",".join("?" for _ in attempt_ids)
+                outcome_rows = connection.execute(
+                    f"""SELECT attempt_id, video_id, status, error_code,
+                    source_sha256 FROM research_acquisition_outcomes
+                    WHERE attempt_id IN ({placeholders})
+                    ORDER BY attempt_id, video_id""",
+                    attempt_ids,
+                ).fetchall()
+                outcomes = tuple(
+                    ResearchAcquisitionOutcome(
+                        row[0],
+                        row[1],
+                        CandidateStatus(row[2]),
+                        row[3],
+                        row[4],
+                    )
+                    for row in outcome_rows
+                )
+            return ResearchPublicSnapshot(
+                session,
+                assessment,
+                candidates,
+                attempts,
+                outcomes,
+                truncated,
+            )
+
     def record_failure(self, session_id: str, *, expected_revision: int, retry_target: ResearchState, error_code: str) -> ResearchSession:
         if not _is_error_code(error_code):
             raise ValueError("error code must be 1 to 100 printable ASCII characters")
@@ -964,6 +1055,7 @@ class ResearchStore:
             try:
                 for statement in _SCHEMA:
                     connection.execute(statement)
+                connection.execute(_ACQUISITION_HISTORY_INDEX)
                 connection.execute("INSERT INTO schema_meta(version) VALUES (?)", (_SCHEMA_VERSION,))
                 self._validate_schema(connection)
                 connection.commit()
@@ -998,7 +1090,12 @@ class ResearchStore:
         if (stat.st_dev, stat.st_ino) != self._identity:
             raise RuntimeError("database identity changed; refusing replacement")
 
-    def _validate_schema(self, connection: sqlite3.Connection) -> None:
+    def _validate_schema(
+        self,
+        connection: sqlite3.Connection,
+        *,
+        allow_missing_acquisition_history_index: bool = False,
+    ) -> None:
         try:
             versions = [row[0] for row in connection.execute("SELECT version FROM schema_meta")]
             tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
@@ -1017,7 +1114,18 @@ class ResearchStore:
                     raise ValueError("database schema is unsupported")
                 index_columns = tuple(row[2] for row in connection.execute(f"PRAGMA index_info({index[1]})"))
                 indexes.add((index[3], index_columns))
-            if columns != expected_columns or indexes != _SCHEMA_INDEXES[table]:
+            expected_indexes = _SCHEMA_INDEXES[table]
+            if (
+                allow_missing_acquisition_history_index
+                and table == "research_acquisition_attempts"
+            ):
+                history_index = (
+                    "c",
+                    ("session_id", "created_at", "attempt_id"),
+                )
+                if indexes == expected_indexes - {history_index}:
+                    expected_indexes = indexes
+            if columns != expected_columns or indexes != expected_indexes:
                 raise ValueError("database schema is unsupported")
             foreign_keys = {
                 (row[2], row[3], row[4], row[5], row[6], row[7])
