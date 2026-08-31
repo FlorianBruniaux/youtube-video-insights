@@ -1,0 +1,31 @@
+src/yt_insights/web/security.py
+  s_0a442347250965::t_e8d0c69c52cc0f 1-55
+src/yt_insights/web/server.py
+  s_0a442347250965::t_0dd6ac27d18922 9,15,20,322-324
+  s_0a442347250965::t_e8d0c69c52cc0f 1-8,10-14,16-19,21-31,33-215,217-321,325-399
+  s_0a442347250965::t_6a8e5fba4e5071 32,216
+tests/web/test_server.py
+  s_0a442347250965::t_35157f094be4e9 28,36-41
+  s_0a442347250965::t_2de245db427e66 1-8,10-27,29-35,42-75,77-94,96-102,104-117,119-177,182-205,207-331,357-492
+  s_0a442347250965::t_3f7bfd18834335 179-181
+  s_0a442347250965::t_0dd6ac27d18922 9,76,95,103,118,178,206
+  s_0a442347250965::t_084b2f65b68320 332-356
+tests/web/test_security.py
+  s_0a442347250965::t_2de245db427e66 1-30
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "ae6e154bb3f542730e57484984676f074c0cdb6f",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
