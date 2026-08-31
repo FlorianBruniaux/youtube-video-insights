@@ -7,6 +7,7 @@ from datetime import UTC, date, datetime
 from typing import Callable, Literal
 
 from .assessment import AssessmentRetryableError, EvidenceReader, assess_local
+from .discovery import DiscoveryProvider, DiscoveryResult
 from .models import (
     FreshnessProfile,
     QuerySpec,
@@ -63,11 +64,13 @@ class ResearchWorkflow:
         *,
         store: ResearchStore,
         evidence_reader: EvidenceReader,
+        discovery_provider: DiscoveryProvider | None = None,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         session_id_factory: Callable[[], str],
     ) -> None:
         self._store = store
         self._evidence_reader = evidence_reader
+        self._discovery_provider = discovery_provider
         self._now = now
         self._session_id_factory = session_id_factory
 
@@ -158,7 +161,100 @@ class ResearchWorkflow:
             session,
             assessment,
             candidates or None,
-            "discovery_not_configured" if decision == "refresh" else None,
+        )
+
+    def discover(
+        self, session_id: str, *, expected_revision: int
+    ) -> ResearchResponse:
+        """Run the separately authorized metadata-only candidate discovery."""
+        session = self._store.get_session(session_id)
+        if session.revision != expected_revision:
+            raise ValueError("session revision is stale")
+        if session.state is not ResearchState.DISCOVERING:
+            raise ValueError("session is not awaiting discovery")
+        provider = self._discovery_provider
+        if provider is None:
+            return self._record_discovery_failure(session_id, expected_revision)
+        try:
+            result = provider.discover(session.queries, limit=10)
+        except Exception:
+            return self._record_discovery_failure(session_id, expected_revision)
+        if not _valid_discovery_result(result):
+            return self._record_discovery_failure(session_id, expected_revision)
+        if not result.candidates:
+            return self._record_discovery_failure(session_id, expected_revision)
+        stored = self._store.record_candidates(
+            session_id,
+            expected_revision=expected_revision,
+            candidates=result.candidates,
+            provider_name=result.provider_name,
+            provider_version=result.provider_version,
+            errors=result.errors,
+        )
+        return ResearchResponse(
+            stored,
+            self._store.get_latest_assessment(session_id),
+            self._store.list_candidates(session_id),
+        )
+
+    def candidates(self, session_id: str) -> ResearchResponse:
+        """Return the latest persisted candidate snapshot without discovery."""
+        return self.status(session_id)
+
+    def approve(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        video_ids: tuple[str, ...],
+        idempotency_key: str,
+    ) -> ResearchResponse:
+        """Persist the exact candidate IDs selected for a later acquisition."""
+        session = self._store.approve_candidates(
+            session_id,
+            expected_revision=expected_revision,
+            video_ids=video_ids,
+            idempotency_key=idempotency_key,
+        )
+        return ResearchResponse(
+            session,
+            self._store.get_latest_assessment(session_id),
+            self._store.list_candidates(session_id) or None,
+        )
+
+    def cancel(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+    ) -> ResearchResponse:
+        """Cancel a session only while it waits for a human choice."""
+        session = self._store.cancel(
+            session_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+        return ResearchResponse(
+            session,
+            self._store.get_latest_assessment(session_id),
+            self._store.list_candidates(session_id) or None,
+        )
+
+    def _record_discovery_failure(
+        self, session_id: str, expected_revision: int
+    ) -> ResearchResponse:
+        failed = self._store.record_failure(
+            session_id,
+            expected_revision=expected_revision,
+            retry_target=ResearchState.DISCOVERING,
+            error_code="discovery_unavailable",
+        )
+        return ResearchResponse(
+            failed,
+            self._store.get_latest_assessment(session_id),
+            None,
+            "discovery_unavailable",
         )
 
 
@@ -197,6 +293,23 @@ def _utc_now(clock: Callable[[], datetime]) -> datetime:
     if not isinstance(now, datetime) or now.tzinfo is not UTC:
         raise ValueError("workflow clock must return timezone-aware UTC")
     return now
+
+
+def _valid_discovery_result(value: object) -> bool:
+    """Reject malformed provider output before durable state is changed."""
+    return (
+        isinstance(value, DiscoveryResult)
+        and isinstance(value.provider_name, str)
+        and bool(value.provider_name)
+        and isinstance(value.provider_version, int)
+        and not isinstance(value.provider_version, bool)
+        and isinstance(value.candidates, tuple)
+        and 1 <= len(value.candidates) <= 10
+        and all(isinstance(candidate, ResearchCandidate) for candidate in value.candidates)
+        and isinstance(value.errors, tuple)
+        and all(isinstance(error, str) for error in value.errors)
+        and isinstance(value.completed, bool)
+    )
 
 
 def _session_payload(session: ResearchSession) -> dict[str, object]:

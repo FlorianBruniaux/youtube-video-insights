@@ -1,16 +1,21 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import hashlib
+import json
+from datetime import UTC, date, datetime
 
 import pytest
 
 from yt_insights.research.assessment import AssessmentRetryableError
+from yt_insights.research.discovery import DiscoveryResult
 from yt_insights.research.models import (
+    CandidateStatus,
     DatabaseSnapshot,
     FreshnessProfile,
     PassageEvidence,
     QuerySpec,
     VideoEvidence,
+    ResearchCandidate,
 )
 from yt_insights.research.store import ResearchStore
 from yt_insights.research.workflow import ResearchWorkflow
@@ -71,10 +76,45 @@ class GuardStore:
         raise AssertionError("store must not open for invalid input")
 
 
-def _workflow(tmp_path, reader: FakeEvidenceReader) -> ResearchWorkflow:
+class FakeDiscoveryProvider:
+    def __init__(
+        self, result: DiscoveryResult | Exception
+    ) -> None:
+        self.result = result
+        self.calls: list[tuple[tuple[QuerySpec, ...], int]] = []
+
+    def discover(
+        self, queries: tuple[QuerySpec, ...], *, limit: int = 10
+    ) -> DiscoveryResult:
+        self.calls.append((queries, limit))
+        if isinstance(self.result, Exception):
+            raise self.result
+        return self.result
+
+
+def _candidate(*, video_id: str = "zyx987WVUT0") -> ResearchCandidate:
+    return ResearchCandidate(
+        video_id=video_id,
+        title="Candidate title",
+        channel_id="UC12345678901234567890AB",
+        channel_title="Candidate channel",
+        published_at=date(2026, 8, 30),
+        watch_url=f"https://www.youtube.com/watch?v={video_id}",
+        matched_queries=("Local query",),
+        original_rank=1,
+        status=CandidateStatus.CANDIDATE,
+    )
+
+
+def _workflow(
+    tmp_path,
+    reader: FakeEvidenceReader,
+    provider: FakeDiscoveryProvider | None = None,
+) -> ResearchWorkflow:
     return ResearchWorkflow(
         store=ResearchStore(tmp_path / "research.sqlite3", now=lambda: NOW),
         evidence_reader=reader,
+        discovery_provider=provider,
         now=lambda: NOW,
         session_id_factory=lambda: SESSION_ID,
     )
@@ -137,7 +177,7 @@ def test_start_records_a_retryable_local_index_failure_without_an_assessment(tmp
     assert payload["error_code"] == "local_index_unavailable"
 
 
-def test_decide_refresh_persists_discovering_without_a_network_provider(tmp_path) -> None:
+def test_decide_refresh_persists_discovering_without_calling_the_network_provider(tmp_path) -> None:
     workflow = _workflow(tmp_path, FakeEvidenceReader())
     started = workflow.start(
         topic="Local evidence",
@@ -154,4 +194,137 @@ def test_decide_refresh_persists_discovering_without_a_network_provider(tmp_path
     )
 
     assert response.to_dict()["session"]["state"] == "discovering"
-    assert response.to_dict()["error_code"] == "discovery_not_configured"
+    assert response.to_dict()["error_code"] is None
+
+
+def test_discover_persists_exact_snapshot_only_after_explicit_refresh(tmp_path) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    workflow = _workflow(tmp_path, FakeEvidenceReader(), provider)
+    corpus_path = tmp_path / "corpus.vtt"
+    catalog_path = tmp_path / "catalog.sqlite3"
+    index_path = tmp_path / "search.sqlite3"
+    for path in (corpus_path, catalog_path, index_path):
+        path.write_bytes(b"immutable input")
+    original_hashes = {
+        path: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (corpus_path, catalog_path, index_path)
+    }
+    started = workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=(),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+
+    authorized = workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="refresh",
+        idempotency_key="refresh-key",
+    )
+    discovered = workflow.discover(SESSION_ID, expected_revision=2)
+
+    assert authorized.to_dict()["session"]["state"] == "discovering"
+    assert provider.calls == [((QuerySpec("Local query"),), 10)]
+    assert discovered.to_dict()["session"]["state"] == "awaiting_candidate_approval"
+    assert discovered.to_dict()["session"]["revision"] == 3
+    assert discovered.candidates == (candidate,)
+    assert {
+        path: hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in (corpus_path, catalog_path, index_path)
+    } == original_hashes
+
+
+def test_discover_records_retryable_failure_without_provider_details(tmp_path) -> None:
+    provider = FakeDiscoveryProvider(RuntimeError("private provider failure"))
+    workflow = _workflow(tmp_path, FakeEvidenceReader(), provider)
+    workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=(),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="refresh",
+        idempotency_key="refresh-key",
+    )
+
+    response = workflow.discover(SESSION_ID, expected_revision=2)
+
+    assert response.to_dict()["session"]["state"] == "failed_retryable"
+    assert response.to_dict()["session"]["retry_target"] == "discovering"
+    assert response.to_dict()["error_code"] == "discovery_unavailable"
+    assert "private provider failure" not in json.dumps(response.to_dict())
+
+
+def test_discover_keeps_partial_candidates_reviewable(tmp_path) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), ("partial_metadata",), False)
+    )
+    workflow = _workflow(tmp_path, FakeEvidenceReader(), provider)
+    workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=(),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="refresh",
+        idempotency_key="refresh-key",
+    )
+
+    response = workflow.discover(SESSION_ID, expected_revision=2)
+
+    assert response.to_dict()["session"]["state"] == "awaiting_candidate_approval"
+    assert response.candidates == (candidate,)
+    assert json.loads(workflow._store.get_session_history(SESSION_ID).events[-1].payload_json) == {  # type: ignore[attr-defined]
+        "errors": ["partial_metadata"],
+        "provider_name": "yt-dlp",
+        "provider_version": 1,
+    }
+
+
+def test_candidates_approve_and_cancel_use_current_snapshot_and_revision(tmp_path) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    workflow = _workflow(tmp_path, FakeEvidenceReader(), provider)
+    workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=(),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="refresh",
+        idempotency_key="refresh-key",
+    )
+    workflow.discover(SESSION_ID, expected_revision=2)
+
+    listed = workflow.candidates(SESSION_ID)
+    approved = workflow.approve(
+        SESSION_ID,
+        expected_revision=3,
+        video_ids=(candidate.video_id,),
+        idempotency_key="approve-key",
+    )
+
+    assert listed.candidates == (candidate,)
+    assert approved.to_dict()["session"]["state"] == "acquiring"
+    with pytest.raises(ValueError, match="transition"):
+        workflow.cancel(
+            SESSION_ID,
+            expected_revision=4,
+            idempotency_key="cancel-active",
+        )

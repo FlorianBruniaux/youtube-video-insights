@@ -7,8 +7,10 @@ from uuid import uuid4
 
 import click
 
+from .catalog import Catalog
 from .config import load_config
 from .research.assessment import SQLiteEvidenceReader
+from .research.discovery import YtDlpDiscoveryProvider
 from .research.models import FreshnessProfile
 from .research.store import ResearchStore
 from .research.workflow import ResearchResponse, ResearchWorkflow, validate_start_request
@@ -36,9 +38,15 @@ def _workflow() -> ResearchWorkflow:
         search_database=paths.search_database,
         catalog_database=paths.catalog_database,
     )
+
+    def existing_video_ids(video_ids: tuple[str, ...]) -> frozenset[str]:
+        with Catalog.open_read_only(paths.catalog_database) as catalog:
+            return catalog.existing_video_ids(video_ids)
+
     return ResearchWorkflow(
         store=store,
         evidence_reader=reader,
+        discovery_provider=YtDlpDiscoveryProvider(existing_ids=existing_video_ids),
         session_id_factory=lambda: uuid4().hex,
     )
 
@@ -50,6 +58,13 @@ def _emit(response: ResearchResponse, *, as_json: bool) -> None:
             as_json=as_json,
             code="local_index_unavailable",
             message="Local evidence is unavailable. Retry after rebuilding the local index.",
+        )
+        return
+    if payload["error_code"] == "discovery_unavailable":
+        _error(
+            as_json=as_json,
+            code="discovery_unavailable",
+            message="Candidate discovery is unavailable. Retry from the current session state.",
         )
         return
     if as_json:
@@ -76,9 +91,20 @@ def _emit(response: ResearchResponse, *, as_json: bool) -> None:
             "Freshness: "
             f"{freshness['reason']} ({freshness['profile']})."
         )
-    if payload["error_code"] == "discovery_not_configured":
-        click.echo("YouTube discovery is unavailable in this version; no search was run.")
-    elif payload["required_user_action"] == "confirm_sufficiency_or_refresh":
+    candidates = payload["candidates"]
+    if isinstance(candidates, list):
+        for candidate in candidates:
+            assert isinstance(candidate, dict)
+            channel = candidate["channel_title"] or candidate["channel_id"] or "Unknown"
+            published_at = candidate["published_at"] or "Unknown"
+            click.echo(f"Date: {published_at}")
+            click.echo(f"Channel: {channel}")
+            click.echo(f"Title: {candidate['title']}")
+            click.echo(f"URL: {candidate['watch_url']}")
+            click.echo(
+                "Matching query: " + ", ".join(candidate["matched_queries"])
+            )
+    if payload["required_user_action"] == "confirm_sufficiency_or_refresh":
         click.echo(_QUESTION)
 
 
@@ -189,6 +215,131 @@ def decide_command(
             as_json=as_json,
             code="research_decision_unavailable",
             message="Research decision is invalid or stale.",
+        )
+        return
+    _emit(response, as_json=as_json)
+
+
+def _revision(value: str) -> int:
+    expected_revision = int(value)
+    if isinstance(expected_revision, bool) or expected_revision < 0:
+        raise ValueError
+    return expected_revision
+
+
+@research_group.command("discover")
+@click.argument("session_id")
+@click.option("--revision", required=True, help="Current session revision.")
+@click.option("--json", "as_json", is_flag=True, help="Emit stable machine-readable JSON.")
+def discover_command(session_id: str, revision: str, as_json: bool) -> None:
+    """Discover metadata candidates after a persisted refresh authorization."""
+    try:
+        expected_revision = _revision(revision)
+    except (TypeError, ValueError):
+        _error(as_json=as_json, code="invalid_discovery_request", message="Discovery request is invalid.")
+        return
+    try:
+        response = _workflow().discover(session_id, expected_revision=expected_revision)
+    except (OSError, RuntimeError, ValueError, TypeError):
+        _error(
+            as_json=as_json,
+            code="research_discovery_unavailable",
+            message="Candidate discovery is unavailable or stale.",
+        )
+        return
+    _emit(response, as_json=as_json)
+
+
+@research_group.command("candidates")
+@click.argument("session_id")
+@click.option("--json", "as_json", is_flag=True, help="Emit stable machine-readable JSON.")
+def candidates_command(session_id: str, as_json: bool) -> None:
+    """Show the latest persisted discovery candidates for SESSION_ID."""
+    try:
+        response = _workflow().candidates(session_id)
+    except (OSError, RuntimeError, ValueError, TypeError):
+        _error(
+            as_json=as_json,
+            code="research_session_unavailable",
+            message="Research session is unavailable.",
+        )
+        return
+    _emit(response, as_json=as_json)
+
+
+@research_group.command("approve")
+@click.argument("session_id")
+@click.argument("video_ids", nargs=-1, required=True)
+@click.option("--revision", required=True, help="Current session revision.")
+@click.option("--idempotency-key", required=True, help="Unique key for this approval.")
+@click.option("--json", "as_json", is_flag=True, help="Emit stable machine-readable JSON.")
+def approve_command(
+    session_id: str,
+    video_ids: tuple[str, ...],
+    revision: str,
+    idempotency_key: str,
+    as_json: bool,
+) -> None:
+    """Approve one to five candidates for a later acquisition command."""
+    try:
+        expected_revision = _revision(revision)
+        if not 1 <= len(video_ids) <= 5 or not idempotency_key:
+            raise ValueError
+    except (TypeError, ValueError):
+        _error(
+            as_json=as_json,
+            code="invalid_candidate_decision",
+            message="Candidate approval is invalid.",
+        )
+        return
+    try:
+        response = _workflow().approve(
+            session_id,
+            expected_revision=expected_revision,
+            video_ids=video_ids,
+            idempotency_key=idempotency_key,
+        )
+    except (OSError, RuntimeError, ValueError, TypeError):
+        _error(
+            as_json=as_json,
+            code="research_candidate_decision_unavailable",
+            message="Candidate approval is invalid or stale.",
+        )
+        return
+    _emit(response, as_json=as_json)
+
+
+@research_group.command("cancel")
+@click.argument("session_id")
+@click.option("--revision", required=True, help="Current session revision.")
+@click.option("--idempotency-key", required=True, help="Unique key for this cancellation.")
+@click.option("--json", "as_json", is_flag=True, help="Emit stable machine-readable JSON.")
+def cancel_command(
+    session_id: str, revision: str, idempotency_key: str, as_json: bool
+) -> None:
+    """Cancel only a session that is waiting for a human decision."""
+    try:
+        expected_revision = _revision(revision)
+        if not idempotency_key:
+            raise ValueError
+    except (TypeError, ValueError):
+        _error(
+            as_json=as_json,
+            code="invalid_candidate_decision",
+            message="Cancellation request is invalid.",
+        )
+        return
+    try:
+        response = _workflow().cancel(
+            session_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+    except (OSError, RuntimeError, ValueError, TypeError):
+        _error(
+            as_json=as_json,
+            code="research_candidate_decision_unavailable",
+            message="Cancellation is invalid or stale.",
         )
         return
     _emit(response, as_json=as_json)
