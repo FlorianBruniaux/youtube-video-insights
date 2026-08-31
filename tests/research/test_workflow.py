@@ -1055,9 +1055,9 @@ def test_mixed_acquisition_persists_every_outcome_and_remains_retryable(tmp_path
 
     assert acquisition.calls == [first.video_id, second.video_id, third.video_id]
     assert len(refresh_calls) == 1
-    assert response.session.state is ResearchState.FAILED_RETRYABLE
-    assert response.session.retry_target is ResearchState.ACQUIRING
-    assert response.required_user_action is None
+    assert response.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert response.session.retry_target is None
+    assert response.required_user_action == "confirm_sufficiency_or_refresh"
     assert response.error_code == "partial_acquisition_failed"
     history = workflow._store.get_session_history(SESSION_ID)  # type: ignore[attr-defined]
     assert history.acquisition_attempts[0].status == "failed_retryable"
@@ -1124,8 +1124,9 @@ def test_partial_acquisition_retries_only_failed_videos_after_reassessment(tmp_p
         language="en",
     )
 
-    assert partial.session.state is ResearchState.FAILED_RETRYABLE
-    assert partial.session.retry_target is ResearchState.ACQUIRING
+    assert partial.session.state is ResearchState.AWAITING_SUFFICIENCY
+    assert partial.session.retry_target is None
+    assert partial.required_user_action == "confirm_sufficiency_or_refresh"
     assert partial.error_code == "partial_acquisition_failed"
     assert acquisition.calls == [first.video_id, second.video_id]
     assert len(refresh_calls) == 1
@@ -1155,6 +1156,73 @@ def test_partial_acquisition_retries_only_failed_videos_after_reassessment(tmp_p
     assert replayed.to_dict() == retried.to_dict()
     assert acquisition.calls == [first.video_id, second.video_id, second.video_id]
     assert len(refresh_calls) == 2
+
+
+def test_partial_acquisition_can_be_accepted_without_retrying_failed_videos(
+    tmp_path,
+) -> None:
+    first = _candidate(video_id="zyx987WVUT0")
+    second = _candidate(video_id="zyx987WVUT1")
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (first, second), (), True)
+    )
+
+    class PartialAcquisition:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def acquire_approved(
+            self,
+            candidates: tuple[ResearchCandidate, ...],
+            *,
+            data_paths: DataPaths,
+            language: str,
+            cookies_from_browser: str | None = None,
+        ) -> tuple[CandidateAcquisitionOutcome, ...]:
+            video_id = candidates[0].video_id
+            self.calls.append(video_id)
+            if video_id == second.video_id:
+                raise LookupError("private transient failure")
+            return (
+                CandidateAcquisitionOutcome(
+                    video_id,
+                    CandidateStatus.ACQUIRED,
+                    None,
+                    "b" * 64,
+                ),
+            )
+
+    acquisition = PartialAcquisition()
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: None,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(first.video_id, second.video_id),
+    )
+    partial = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="partial-acquire-key",
+        language="en",
+    )
+
+    accepted = workflow.decide(
+        SESSION_ID,
+        expected_revision=partial.session.revision,
+        decision="sufficient",
+        idempotency_key="accept-partial-key",
+    )
+
+    assert accepted.session.state is ResearchState.COMPLETED
+    assert acquisition.calls == [first.video_id, second.video_id]
+    history = workflow._store.get_session_history(SESSION_ID)  # type: ignore[attr-defined]
+    assert history.acquisition_attempts[-1].status == "failed_retryable"
 
 
 def test_partial_retry_finalizes_after_failure_without_reacquiring(tmp_path) -> None:

@@ -343,14 +343,13 @@ class ResearchStore:
             return self._transition(
                 connection,
                 session,
-                ResearchState.FAILED_RETRYABLE,
+                ResearchState.AWAITING_SUFFICIENCY,
                 "partial_acquisition_failed",
                 {
                     "attempt_id": attempt_id,
                     "error_code": "partial_acquisition_failed",
-                    "retry_target": ResearchState.ACQUIRING.value,
                 },
-                retry_target=ResearchState.ACQUIRING,
+                required_action=RequiredUserAction.CONFIRM_SUFFICIENCY_OR_REFRESH,
             )
 
         return self._write(operation)
@@ -701,13 +700,12 @@ class ResearchStore:
                 }:
                     return None
                 session = self._session(connection, session_id)
-                if session.state is ResearchState.AWAITING_SUFFICIENCY:
-                    return None
                 if session.state not in {
                     ResearchState.ACQUIRING,
                     ResearchState.FAILED_RETRYABLE,
                     ResearchState.REINDEXING,
                     ResearchState.ASSESSING,
+                    ResearchState.AWAITING_SUFFICIENCY,
                 }:
                     raise ValueError("retry reservation is not recoverable")
             else:
@@ -720,6 +718,7 @@ class ResearchStore:
                         ResearchState.FAILED_RETRYABLE,
                         ResearchState.REINDEXING,
                         ResearchState.ASSESSING,
+                        ResearchState.AWAITING_SUFFICIENCY,
                     },
                 )
                 if session.state in {
@@ -796,6 +795,7 @@ class ResearchStore:
                         ResearchState.ACQUIRING,
                         ResearchState.REINDEXING,
                         ResearchState.ASSESSING,
+                        ResearchState.AWAITING_SUFFICIENCY,
                     }
                     if acquisition_attempt_id is not None
                     else {ResearchState.FAILED_RETRYABLE}
@@ -809,7 +809,11 @@ class ResearchStore:
                     ResearchState.REINDEXING,
                     ResearchState.ASSESSING,
                 }
-                else session.retry_target
+                else (
+                    ResearchState.ACQUIRING
+                    if session.state is ResearchState.AWAITING_SUFFICIENCY
+                    else session.retry_target
+                )
             )
             if target not in set(_FAILURE_RETRY_TARGETS.values()):
                 raise ValueError("failed session has no retry target")
