@@ -309,7 +309,7 @@ def _render_dossier(
         for passage in assessment.passages:
             lines.extend(
                 [
-                    f"- [{passage.video_id}]({passage.url}) | query: {passage.query} | rank: {passage.rank} | source SHA-256: `{passage.source_sha256}`",
+                    f"- evidence: `{passage.passage_id}` | [{passage.video_id}]({passage.url}) | query: {passage.query} | rank: {passage.rank} | source SHA-256: `{passage.source_sha256}`",
                     *[f"  > {line}" for line in passage.excerpt.splitlines()],
                 ]
             )
@@ -510,15 +510,23 @@ def _publish_stage(
         raise FileExistsError("destination changed during publication")
     _require_directory_identity(parent_fd, stage_name, stage_identity)
     if not force:
+        published = False
         try:
             os.rename(stage_name, destination.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+            published = True
+            _verify_parent_path(destination, parent_identity)
+            _require_directory_identity(parent_fd, destination.name, stage_identity)
+            _fsync_directory(parent_fd)
         except OSError as exc:
-            if _destination_identity(parent_fd, destination.name) is not None:
+            if not published and _destination_identity(parent_fd, destination.name) is not None:
                 raise FileExistsError("destination changed during publication") from exc
+            if published:
+                _remove_published_dossier(parent_fd, destination.name, stage_identity)
             raise
-        _verify_parent_path(destination, parent_identity)
-        _require_directory_identity(parent_fd, destination.name, stage_identity)
-        _fsync_directory(parent_fd)
+        except BaseException:
+            if published:
+                _remove_published_dossier(parent_fd, destination.name, stage_identity)
+            raise
         return
 
     if expected_identity is None:
@@ -526,6 +534,7 @@ def _publish_stage(
     _validate_prior_dossier(parent_fd, destination.name, expected_identity)
     backup_name = f".{destination.name}.backup-{uuid.uuid4().hex}"
     moved_prior = False
+    published = False
     try:
         _verify_parent_path(destination, parent_identity)
         _require_directory_identity(parent_fd, destination.name, expected_identity)
@@ -535,13 +544,15 @@ def _publish_stage(
         _require_directory_identity(parent_fd, backup_name, expected_identity)
         _require_directory_identity(parent_fd, stage_name, stage_identity)
         os.rename(stage_name, destination.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        published = True
         _verify_parent_path(destination, parent_identity)
         _require_directory_identity(parent_fd, destination.name, stage_identity)
         _fsync_directory(parent_fd)
     except BaseException:
-        if moved_prior and _destination_identity(parent_fd, destination.name) is None:
-            _require_directory_identity(parent_fd, backup_name, expected_identity)
-            os.rename(backup_name, destination.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        if published:
+            _remove_published_dossier(parent_fd, destination.name, stage_identity)
+        if moved_prior:
+            _restore_prior_dossier(parent_fd, destination.name, backup_name, expected_identity)
         raise
     _remove_validated_prior(parent_fd, backup_name, expected_identity)
 
@@ -617,6 +628,27 @@ def _remove_private_stage(parent_fd: int, name: str, expected_identity: tuple[in
         os.rmdir(name, dir_fd=parent_fd)
     except (FileNotFoundError, ValueError, OSError):
         return
+
+
+def _remove_published_dossier(parent_fd: int, name: str, expected_identity: tuple[int, int]) -> None:
+    """Remove only the verified directory created from this staging identity."""
+    _require_directory_identity(parent_fd, name, expected_identity)
+    _remove_validated_prior(parent_fd, name, expected_identity)
+
+
+def _restore_prior_dossier(
+    parent_fd: int,
+    destination_name: str,
+    backup_name: str,
+    expected_identity: tuple[int, int],
+) -> None:
+    """Restore the verified preimage after removing the staged replacement."""
+    if _destination_identity(parent_fd, destination_name) is not None:
+        raise RuntimeError("cannot restore prior dossier over a changed destination")
+    _require_directory_identity(parent_fd, backup_name, expected_identity)
+    os.rename(backup_name, destination_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+    _require_directory_identity(parent_fd, destination_name, expected_identity)
+    _fsync_directory(parent_fd)
 
 
 def _remove_validated_prior(parent_fd: int, name: str, expected_identity: tuple[int, int]) -> None:

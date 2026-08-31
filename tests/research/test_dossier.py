@@ -122,6 +122,7 @@ def test_export_is_byte_identical_and_only_renders_stored_bounded_evidence(tmp_p
     assert manifest["package_version"] == "1.2.3"
     assert manifest["dossier_sha256"] == hashlib.sha256(first_dossier).hexdigest()
     assert manifest["evidence"][0]["excerpt"] == "Local inference keeps models on-device."
+    assert f"evidence: `{manifest['evidence'][0]['passage_id']}`" in rendered
     assert manifest["acquisition_outcomes"] == [
         {
             "error_code": None,
@@ -353,3 +354,60 @@ def test_export_rejects_a_parent_swapped_after_validation(tmp_path: Path, monkey
 
     assert not (external / "dossier").exists()
     assert not (moved_parent / "dossier").exists()
+
+
+def test_export_removes_unforced_dossier_when_final_parent_check_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A post-rename failure must not leave an unforced new dossier behind."""
+    store = _completed_store(tmp_path)
+    target = tmp_path / "dossier"
+    import yt_insights.research.dossier as dossier
+
+    original_verify = dossier._verify_parent_path
+    verify_calls = 0
+
+    def fail_final_parent_check(destination: Path, identity: tuple[int, int]) -> None:
+        nonlocal verify_calls
+        verify_calls += 1
+        if verify_calls == 2:
+            raise ValueError("injected final parent check failure")
+        original_verify(destination, identity)
+
+    monkeypatch.setattr(dossier, "_verify_parent_path", fail_final_parent_check)
+
+    with pytest.raises(ValueError, match="injected final parent check failure"):
+        export_dossier(_request(target), store=store, package_version="1.2.3")
+
+    assert not target.exists()
+    assert not list(tmp_path.glob(".dossier.staging-*"))
+
+
+def test_export_restores_forced_dossier_when_final_fsync_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A post-rename forced export must restore the exact validated prior dossier."""
+    store = _completed_store(tmp_path)
+    target = tmp_path / "dossier"
+    export_dossier(_request(target), store=store, package_version="1.2.3")
+    previous = {name: (target / name).read_bytes() for name in ("manifest.json", "dossier.md")}
+    import yt_insights.research.dossier as dossier
+
+    original_fsync = dossier._fsync_directory
+    fsync_calls = 0
+
+    def fail_final_fsync(directory_fd: int) -> None:
+        nonlocal fsync_calls
+        fsync_calls += 1
+        if fsync_calls >= 2:
+            raise OSError("injected final fsync failure")
+        original_fsync(directory_fd)
+
+    monkeypatch.setattr(dossier, "_fsync_directory", fail_final_fsync)
+
+    with pytest.raises(OSError, match="injected final fsync failure"):
+        export_dossier(_request(target, force=True), store=store, package_version="1.2.4")
+
+    assert {name: (target / name).read_bytes() for name in previous} == previous
+    assert not list(tmp_path.glob(".dossier.staging-*"))
+    assert not list(tmp_path.glob(".dossier.backup-*"))
