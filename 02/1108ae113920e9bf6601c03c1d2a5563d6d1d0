@@ -1,0 +1,22 @@
+tests/research/test_workflow.py
+  s_0a442347250965::t_f344c0f2c93136 1243-1253
+  s_0a442347250965::t_03079cdfbf09eb 1426-1432,1441
+src/yt_insights/research/workflow.py
+  s_0a442347250965::t_f344c0f2c93136 578-588,597-604,606-608,611-613
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "021108ae113920e9bf6601c03c1d2a5563d6d1d0",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
