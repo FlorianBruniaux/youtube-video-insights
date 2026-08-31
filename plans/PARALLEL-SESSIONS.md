@@ -50,7 +50,7 @@ Task 10 E2E, quality and docs
 | 5 | Start, status, decide | Terminé |
 | 6 | Discover, candidates, approve, cancel | Terminé |
 | 7A | Acquisition structurée et publication par paire | Terminé |
-| 7B | Workflow acquire et retry | Terminé |
+| 7B | Workflow acquire et retry | Terminé; correctif Task 11 à intégrer |
 | 8A | Dossier déterministe | Terminé |
 | 8B | Export CLI et sécurité de racine | Terminé |
 | 9A | Quatrième skill et setup assets-only | Terminé dans le dépôt |
@@ -58,6 +58,7 @@ Task 10 E2E, quality and docs
 | 10A | E2E et limites hostiles | En intégration |
 | 10B | Documentation | En cours dans ce worktree |
 | 10C | Qualité finale | En intégration |
+| 11 | Historique public borné et reprise des lots partiels | Correctif codé; intégration au SHA coordonné requise |
 
 ## Contrats de fusion
 

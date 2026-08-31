@@ -47,11 +47,18 @@ for mutation and never approves candidates on behalf of the user.
    article draft, a corpus export, both, or nothing else.
 
 Every mutation uses the latest returned revision and a fresh idempotency key.
-`status --json` exposes structured attempts and per-video outcomes so the
-assistant can report `attempt_id`, status, `error_code`, and `source_sha256`
-without parsing diagnostics. Retry keeps successful items and never reacquires
-them after a partial batch. An invalid JSON response, stale revision,
-unavailable network, or unknown session fails closed.
+After the Task 11 corrective commit is integrated into the coordinated SHA,
+`status --json` exposes `acquisition_history`, bounded to the latest 100
+attempts, plus `acquisition_history_truncated`. Each attempt contains
+`attempt_id`, `status`, and `items`; each item contains `video_id`, `status`,
+`error_code`, and `source_sha256`. Idempotency keys, cookie selectors,
+transcripts, and raw diagnostics are not exposed. A partial-batch retry resumes
+only items recorded as `failed_retryable`; it does not reacquire any item with
+a recorded terminal outcome. Do not claim this response contract from a
+checkout that has not integrated the Task 11 corrective commit.
+
+An invalid JSON response, stale revision, unavailable network, or unknown
+session fails closed.
 
 English prompts for the three pilot topics, resume, refresh, exact candidate
 approval, dossier export, and current-project copy are in
@@ -62,11 +69,16 @@ approval, dossier export, and current-project copy are in
 Preview the complete skills, native agents, and MCP transaction:
 
 ```bash
+export YT_INSIGHTS_DATA_ROOT="/absolute/path/to/yt-insights-data"
 uv run --extra mcp yt-insights setup assistants \
   --client both \
   --data-root "$YT_INSIGHTS_DATA_ROOT" \
   --dry-run
 ```
+
+`YT_INSIGHTS_DATA_ROOT` must resolve to the absolute YT Insights data root used
+by both clients. Replace the placeholder before running the command; do not
+derive this path from the current project directory.
 
 `--apply` is an explicit user-level write. `--verify` checks the managed files
 and registrations. Different existing files or MCP entries block the

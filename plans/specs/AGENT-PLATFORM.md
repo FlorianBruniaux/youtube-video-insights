@@ -46,9 +46,15 @@ Le quatrième skill doit toujours :
 7. acquérir seulement ces IDs, réévaluer, puis reposer la question;
 8. demander ensuite dossier, brouillon, corpus exporté, les deux, ou rien.
 
-Le statut de session expose l'historique structuré des tentatives et résultats
-par vidéo. Un retry de lot partiel conserve les succès et ne réacquiert pas les
-éléments déjà terminés.
+Après intégration du correctif Task 11 dans le SHA coordonné, le statut JSON
+expose `acquisition_history`, limité aux 100 dernières tentatives, et
+`acquisition_history_truncated`. Chaque tentative contient `attempt_id`,
+`status` et `items`; chaque item contient `video_id`, `status`, `error_code` et
+`source_sha256`. Les clés d'idempotence, sélecteurs de cookies, transcripts et
+diagnostics bruts n'y figurent pas. Un retry de lot partiel reprend uniquement
+les items `failed_retryable`; il ne réacquiert aucun résultat terminal déjà
+enregistré. Ce contrat ne doit pas être annoncé depuis un checkout qui n'a pas
+intégré le correctif Task 11.
 
 Le dossier déterministe est produit par la CLI. Un brouillon d'article reste
 une action explicite de l'assistant et ne devient jamais une source YouTube.
@@ -86,9 +92,12 @@ réelles documentant une friction CLI répétée.
 Le dépôt fournit :
 
 ```bash
-yt-insights setup assistants --client both --dry-run
-yt-insights setup assistants --client both --apply
-yt-insights setup assistants --client both --verify
+yt-insights setup assistants --client both \
+  --data-root /absolute/path/to/yt-insights-data --dry-run
+yt-insights setup assistants --client both \
+  --data-root /absolute/path/to/yt-insights-data --apply
+yt-insights setup assistants --client both \
+  --data-root /absolute/path/to/yt-insights-data --verify
 ```
 
 Le mode complet gère skills, agents natifs et inscriptions MCP. Il refuse les

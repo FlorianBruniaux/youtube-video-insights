@@ -37,7 +37,7 @@ fifth source layer.
 
 ```text
 yt-insights research start TOPIC [--query QUERY]... [--lang LANG]... [--freshness-profile fast|standard|stable|historical] [--json]
-yt-insights research status SESSION_ID [--json]  # includes structured attempts and per-video outcomes
+yt-insights research status SESSION_ID [--json]  # bounded acquisition_history after Task 11 integration
 yt-insights research decide SESSION_ID sufficient|refresh --revision N --idempotency-key KEY [--json]
 yt-insights research discover SESSION_ID --revision N [--json]
 yt-insights research candidates SESSION_ID [--json]
@@ -49,10 +49,14 @@ yt-insights research export SESSION_ID [--output ABSOLUTE_DIRECTORY] [--force] [
 ```
 
 Use the latest returned revision for each mutation. Reuse an idempotency key
-only for the exact same request payload. Status history exposes attempt ID,
-attempt status, and per-video `error_code` and `source_sha256` when present.
-Retry preserves successful outcomes and does not reacquire completed items from
-a partial batch.
+only for the exact same request payload. After the Task 11 corrective commit is
+integrated, status exposes `acquisition_history` for the latest 100 attempts and
+`acquisition_history_truncated`. Each attempt has `attempt_id`, `status`, and
+`items`; each item has `video_id`, `status`, `error_code`, and `source_sha256`.
+It excludes idempotency keys, cookie selectors, transcripts, and raw
+diagnostics. Partial-batch retry resumes only items recorded as
+`failed_retryable`; it does not reacquire recorded terminal outcomes. Do not
+claim these contracts from a checkout without the Task 11 corrective commit.
 
 ## Other stable commands
 
@@ -162,6 +166,10 @@ uv lock --check
 .venv/bin/python scripts/smoke_wheel.py --offline
 git diff --check
 ```
+
+Ruff and mypy are diagnostic commands and are red at the latest known
+checkpoint. They remain release blockers until fixed and rerun on the final
+SHA; green functional gates do not override them.
 
 Static and hermetic checks do not prove live YouTube, Claude Code, or Codex
 behavior.

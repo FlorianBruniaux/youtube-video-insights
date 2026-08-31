@@ -6,10 +6,12 @@ flowchart LR
     FTS --> A
     A --> R[research-v1.sqlite3]
     A --> Q{Evidence sufficient?}
-    Q -->|Yes| D[Deterministic dossier]
+    Q -->|Yes| DONE[Completed research]
+    DONE -->|Optional export| D[Deterministic dossier]
     Q -->|Refresh requested| C[Up to 10 candidates]
     C --> P{Approve 1 to 5 exact IDs?}
-    P -->|Cancel| X[Cancelled or resumable session]
+    P -->|Cancel| X[Cancelled session]
+    P -->|Defer| HOLD[Awaiting candidates, resumable]
     P -->|Approved| ACQ[Acquire exact IDs]
     ACQ --> I[Reindex once]
     I --> A

@@ -36,7 +36,7 @@ cumulative-research architecture is also available as a reproducible
 | Build the timestamped search index | `uv run yt-insights index --all` | A derived FTS5 index over every VTT passage |
 | Find a sourced passage | `uv run yt-insights search "AI product discovery"` | Ranked excerpts, timestamps, and direct YouTube links |
 | Start cumulative research | `uv run yt-insights research start "AI product engineering workflows" --json` | A durable local assessment and a mandatory sufficiency question |
-| Resume research | `uv run yt-insights research status SESSION_ID --json` | Revision, evidence, candidates, attempts, per-video outcomes, and required user action |
+| Resume research | `uv run yt-insights research status SESSION_ID --json` | Revision, evidence, candidates, required action, and bounded acquisition history after Task 11 integration |
 | Export an evidence dossier | `uv run yt-insights research export SESSION_ID --output /absolute/path --json` | Deterministic `dossier.md` and `manifest.json`, kept outside source indexes |
 | Query from an LLM client | `uv run --extra mcp yt-insights-mcp` | Four read-only corpus, video, and passage tools |
 
@@ -98,9 +98,12 @@ flowchart LR
     FTS --> A
     A --> R[research-v1.sqlite3]
     A --> Q{Evidence sufficient?}
-    Q -->|Yes| D[Deterministic dossier]
+    Q -->|Yes| DONE[Completed research]
+    DONE -->|Optional export| D[Deterministic dossier]
     Q -->|Refresh requested| C[Up to 10 candidates]
     C --> P{Approve 1 to 5 exact IDs?}
+    P -->|Cancel| CANCEL[Cancelled session]
+    P -->|Defer| HOLD[Awaiting candidates, resumable]
     P -->|Yes| X[Acquire, reindex once, reassess]
     X --> A
 ```
@@ -587,10 +590,12 @@ yt-insights research start TOPIC [--query QUERY]... [--freshness-profile PROFILE
 yt-insights research status SESSION_ID [--json]
 yt-insights research decide SESSION_ID sufficient|refresh --revision N --idempotency-key KEY [--json]
 
-  Assess local evidence, resume a durable session with structured acquisition
-  history, and record the mandatory sufficiency decision. Status includes
-  attempt ID, status, per-video error code, and source SHA-256 when available.
-  `refresh` authorizes discovery, not acquisition.
+  Assess local evidence, resume a durable session, and record the mandatory
+  sufficiency decision. Once the Task 11 corrective commit is integrated,
+  status returns `acquisition_history` for the latest 100 attempts and an
+  `acquisition_history_truncated` flag. Each attempt has `attempt_id`, `status`,
+  and `items`; each item has `video_id`, `status`, `error_code`, and
+  `source_sha256`. `refresh` authorizes discovery, not acquisition.
 
 yt-insights research discover SESSION_ID --revision N [--json]
 yt-insights research candidates SESSION_ID [--json]
@@ -604,10 +609,14 @@ yt-insights research retry SESSION_ID --revision N --idempotency-key KEY [--json
 yt-insights research cancel SESSION_ID --revision N --idempotency-key KEY [--json]
 yt-insights research export SESSION_ID [--output DIRECTORY] [--force] [--json]
 
-  Retry only the recorded failed stage, preserve successful per-video outcomes
-  without reacquiring them, cancel candidate review, or publish a deterministic
-  evidence dossier.
+  Retry only the recorded failed stage. For a partial batch, retry only items
+  recorded as `failed_retryable`; do not reacquire items with terminal outcomes.
+  Cancel candidate review, or publish an optional deterministic evidence dossier.
 ```
+
+The structured-history and partial-batch contracts above require the Task 11
+corrective commit in the coordinated final SHA. Do not claim them from a
+checkout that has not integrated that code.
 
 </details>
 

@@ -25,7 +25,7 @@ distinctes.
 | Couverture et fraîcheur | Implémentées | Profils déterministes, aucune décision automatique de suffisance |
 | Découverte YouTube | Implémentée | Maximum 10 candidats, métadonnées seulement |
 | Approbation et acquisition | Implémentées | 1 à 5 IDs exacts, décision séparée de `refresh` |
-| Reprise et retry | Implémentés | Historique structuré; un lot partiel ne réacquiert pas les succès |
+| Reprise et retry | Task 11, intégration requise | Historique borné aux 100 dernières tentatives; seuls les items `failed_retryable` d'un lot partiel sont réacquis |
 | Dossier de preuves | Implémenté | `dossier.md` et `manifest.json`, jamais réindexés comme sources |
 | Assistants Claude Code et Codex | Assets projet implémentés | Quatrième skill non installé globalement, canaris frais `UNKNOWN` |
 | MCP | Quatre outils read-only | Aucun outil de mutation ou d'orchestration |

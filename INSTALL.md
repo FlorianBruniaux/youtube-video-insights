@@ -185,11 +185,17 @@ uv run yt-insights research start \
 La réponse attendue contient `session_id`, `revision`, la couverture, la
 fraîcheur et `required_user_action=confirm_sufficiency_or_refresh`.
 
-Conservez le `session_id` et la dernière `revision` retournée. La commande
-`research status SESSION_ID --json` expose aussi l'historique des tentatives et
-résultats par vidéo, avec `attempt_id`, statut, `error_code` et `source_sha256`
-quand ils existent. Chaque cycle demande si les preuves sont suffisantes. Si
-la réponse est non, `refresh` autorise uniquement la découverte :
+Conservez le `session_id` et la dernière `revision` retournée. Après intégration
+du correctif Task 11 dans le SHA coordonné, `research status SESSION_ID --json`
+expose `acquisition_history`, limité aux 100 dernières tentatives, et
+`acquisition_history_truncated`. Chaque tentative contient `attempt_id`,
+`status` et `items`; chaque item contient `video_id`, `status`, `error_code` et
+`source_sha256`. Les clés d'idempotence, sélecteurs de cookies, transcripts et
+diagnostics bruts ne sont pas exposés. Ne revendiquez pas ce contrat depuis un
+checkout qui n'a pas intégré le correctif Task 11.
+
+Chaque cycle demande si les preuves sont suffisantes. Si la réponse est non,
+`refresh` autorise uniquement la découverte :
 
 ```bash
 uv run yt-insights research decide SESSION_ID refresh \
@@ -218,8 +224,9 @@ uv run yt-insights research acquire SESSION_ID \
 
 Le workflow reconstruit et publie le catalogue et l'index une seule fois par
 lot, réévalue les preuves, puis repose la question de suffisance. `retry`
-reprend seulement le stage retryable enregistré. Après un lot partiel, il
-conserve les succès et ne télécharge de nouveau que les éléments retryables.
+reprend seulement le stage retryable enregistré. Après un lot partiel, et une
+fois le correctif Task 11 intégré, il reprend uniquement les items
+`failed_retryable` et ne réacquiert aucun résultat terminal enregistré.
 
 Exporter le dossier déterministe n'appelle aucun LLM :
 

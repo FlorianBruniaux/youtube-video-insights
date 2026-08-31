@@ -19,9 +19,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   through a separate approval before acquisition.
 - Batch acquisition outcomes per video, one atomic catalogue and FTS refresh,
   failure recovery, and automatic reassessment followed by the same mandatory
-  sufficiency question. Session status exposes structured attempts and
-  per-video status, error code, and source SHA-256. Retrying a partial batch
-  preserves completed items instead of reacquiring them.
+  sufficiency question. The Task 11 corrective commit adds bounded
+  `acquisition_history` to status: the latest 100 attempts, a truncation flag,
+  and per-item `video_id`, status, error code, and source SHA-256. Partial-batch
+  retry resumes only `failed_retryable` items and does not reacquire recorded
+  terminal outcomes. These two contracts require that corrective commit to be
+  integrated into the coordinated final SHA.
 - Deterministic research dossiers with `dossier.md` and `manifest.json`, safe
   absolute destinations, source hashes, timestamped evidence, coverage limits,
   and no generated-dossier ingestion into source indexes.
