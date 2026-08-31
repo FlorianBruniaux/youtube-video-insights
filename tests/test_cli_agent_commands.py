@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import subprocess
 
 from click.testing import CliRunner
 
@@ -101,6 +102,29 @@ def test_wheel_smoke_requires_the_installed_cumulative_research_skill(
         assert "cumulative research skill" in str(error)
     else:
         raise AssertionError("the wheel smoke accepted a missing cumulative skill")
+
+
+def test_wheel_smoke_fake_assistant_client_records_any_invocation(
+    tmp_path: Path,
+) -> None:
+    script = REPOSITORY_ROOT / "scripts" / "smoke_wheel.py"
+    specification = importlib.util.spec_from_file_location("smoke_wheel", script)
+    assert specification is not None and specification.loader is not None
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    marker = tmp_path / "invoked.log"
+    fake = module._write_fail_if_called_client(tmp_path / "bin", "claude")
+
+    result = subprocess.run(
+        [str(fake)],
+        env={"YT_INSIGHTS_FAKE_CLIENT_LOG": str(marker)},
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 99
+    assert marker.read_text(encoding="utf-8") == "claude\n"
 
 
 def test_root_doctor_runs_the_registered_adapter(tmp_path: Path, monkeypatch) -> None:

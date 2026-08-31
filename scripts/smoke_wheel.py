@@ -130,10 +130,17 @@ def _write_fake_yt_dlp(directory: Path) -> Path:
 
 
 def _write_fail_if_called_client(directory: Path, name: str) -> Path:
-    """Create a client stand-in that proves a dry-run never executes it."""
+    """Create a client stand-in that records any forbidden invocation."""
     directory.mkdir(exist_ok=True)
     executable = directory / name
-    executable.write_text("#!/bin/sh\nexit 99\n", encoding="utf-8")
+    executable.write_text(
+        "#!/bin/sh\n"
+        "if [ -n \"${YT_INSIGHTS_FAKE_CLIENT_LOG:-}\" ]; then\n"
+        f"  printf '%s\\n' '{name}' >> \"$YT_INSIGHTS_FAKE_CLIENT_LOG\"\n"
+        "fi\n"
+        "exit 99\n",
+        encoding="utf-8",
+    )
     executable.chmod(0o755)
     return executable
 
@@ -378,11 +385,15 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
         _write_fake_yt_dlp(fake_bin)
         _write_fail_if_called_client(fake_bin, "claude")
         _write_fail_if_called_client(fake_bin, "codex")
+        fake_client_log = workspace / "assistant-client-invocations.log"
         acquisition_environment = runtime_environment | {
             "PATH": f"{fake_bin}{os.pathsep}{runtime_environment['PATH']}",
         }
         setup_home = workspace / "setup-home"
-        setup_environment = acquisition_environment | {"HOME": str(setup_home)}
+        setup_environment = acquisition_environment | {
+            "HOME": str(setup_home),
+            "YT_INSIGHTS_FAKE_CLIENT_LOG": str(fake_client_log),
+        }
         setup = _run(
             [
                 str(base_cli),
@@ -399,6 +410,8 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
         )
         if json.loads(setup.stdout).get("status") != "installed":
             raise SmokeFailure("Installed assistant assets-only setup did not apply.")
+        if fake_client_log.exists():
+            raise SmokeFailure("Assistant assets-only setup invoked a client process.")
         _verify_cumulative_research_skill(setup_home)
 
         before_acquire = _snapshot_tree(data_root)
