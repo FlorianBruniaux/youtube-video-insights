@@ -18,7 +18,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 from urllib.parse import urlparse
 
 from .cleaner import clean_vtt
@@ -1772,6 +1772,42 @@ class ReadOnlyCatalog:
             or not 1 <= limit <= maximum
         ):
             raise ValueError(f"limit must be between 1 and {maximum}")
+
+    def existing_video_ids(self, video_ids: Iterable[str]) -> frozenset[str]:
+        """Return the exact valid IDs that are already present in this snapshot."""
+        distinct_ids: list[str] = []
+        seen: set[str] = set()
+        for video_id in video_ids:
+            if not isinstance(video_id, str) or _VIDEO_ID.fullmatch(video_id) is None:
+                raise ValueError("video ID must be an 11-character YouTube identifier")
+            if video_id not in seen:
+                seen.add(video_id)
+                distinct_ids.append(video_id)
+                if len(distinct_ids) > 100:
+                    raise ValueError("video_ids must contain at most 100 distinct IDs")
+        self._require_database_identity()
+        if not distinct_ids:
+            return frozenset()
+        connection = self._connection_or_raise()
+        placeholders = ", ".join("?" for _ in distinct_ids)
+        try:
+            rows = connection.execute(
+                f"SELECT video_id FROM videos WHERE video_id IN ({placeholders})",
+                distinct_ids,
+            ).fetchall()
+            result = frozenset(
+                self._validate_video_identity(
+                    row["video_id"],
+                    f"https://www.youtube.com/watch?v={row['video_id']}",
+                )[0]
+                for row in rows
+            )
+            self._require_database_identity()
+            return result
+        except CatalogError:
+            raise
+        except (sqlite3.Error, TypeError, ValueError) as exc:
+            raise CatalogError("catalog query failed") from exc
 
     def list_corpora(self, *, limit: int = 100) -> tuple[CorpusSummary, ...]:
         self._require_limit(limit, maximum=100)

@@ -20,6 +20,8 @@ class VideoInfo:
     video_id: str
     title: str
     upload_date: str  # YYYYMMDD or empty string
+    channel_id: str = ""
+    channel_title: str = ""
 
     @property
     def formatted_date(self) -> str:
@@ -102,11 +104,17 @@ def fetch_video_list(
         if not isinstance(vid_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid_id):
             metadata_errors.append("yt-dlp emitted metadata without a valid video id")
             continue
+        channel_id = _bounded_metadata_string(payload.get("channel_id"))
+        channel_title = _bounded_metadata_string(
+            payload.get("channel", payload.get("uploader"))
+        )
         videos.append(
             VideoInfo(
                 video_id=vid_id,
                 title=title if isinstance(title, str) else vid_id,
                 upload_date=upload_date if isinstance(upload_date, str) else "",
+                channel_id=channel_id,
+                channel_title=channel_title,
             )
         )
 
@@ -124,6 +132,12 @@ def fetch_video_list(
         errors=errors,
         returncode=result.returncode,
     )
+
+
+def _bounded_metadata_string(value: object) -> str:
+    if not isinstance(value, str) or len(value) > 300 or "\x00" in value:
+        return ""
+    return value
 
 
 _DIRECTORY_FLAGS = (

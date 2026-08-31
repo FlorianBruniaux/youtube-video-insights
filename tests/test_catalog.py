@@ -53,6 +53,48 @@ def _write_video_artifacts(
     )
 
 
+def test_read_only_catalog_returns_only_valid_existing_video_ids_and_detects_replacement(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "catalog.sqlite3"
+    replacement = tmp_path / "replacement.sqlite3"
+    present = "aaaaaaaaaaa"
+    missing = "bbbbbbbbbbb"
+    with Catalog(database) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo(present, "Present", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
+        catalog.checkpoint()
+    with Catalog(replacement) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@replacement/videos",
+            VideoListResult(
+                videos=[VideoInfo(missing, "Replacement", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
+        catalog.checkpoint()
+
+    with Catalog.open_read_only(database) as reader:
+        assert reader.existing_video_ids((present, missing, present)) == frozenset(
+            {present}
+        )
+        assert reader.existing_video_ids(()) == frozenset()
+        with pytest.raises(ValueError, match="video ID"):
+            reader.existing_video_ids(("aaaaaaaaaaa' OR 1=1 --",))
+        with pytest.raises(ValueError, match="100"):
+            reader.existing_video_ids(tuple(f"{index:011d}" for index in range(101)))
+        os.replace(replacement, database)
+        with pytest.raises(CatalogError, match="changed during access"):
+            reader.existing_video_ids((present,))
+
+
 class CatalogImportTests(unittest.TestCase):
     def test_import_never_follows_symlinked_layout_or_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

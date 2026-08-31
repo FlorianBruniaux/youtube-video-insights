@@ -208,6 +208,9 @@ def test_fetch_video_list_preserves_videos_and_external_errors() -> None:
                 "upload_date": "20260820",
                 "title": "Agentic | Systems",
                 "id": "abc123DEF45",
+                "channel_id": "UCtopicDiscovery",
+                "channel": "Topic Discovery",
+                "description": "This must not enter the shared model.",
             }
         ) + "\n",
         stderr="WARNING: transient warning\nERROR: one item is unavailable\n",
@@ -227,7 +230,37 @@ def test_fetch_video_list_preserves_videos_and_external_errors() -> None:
     assert result.videos[0].video_id == "abc123DEF45"
     assert result.videos[0].title == "Agentic | Systems"
     assert result.videos[0].upload_date == "20260820"
+    assert result.videos[0].channel_id == "UCtopicDiscovery"
+    assert result.videos[0].channel_title == "Topic Discovery"
     assert compatibility_videos == result.videos
+
+
+def test_fetch_video_list_discards_unbounded_or_nul_channel_metadata() -> None:
+    completed = SimpleNamespace(
+        stdout=json.dumps(
+            {
+                "upload_date": "20260820",
+                "title": "Agentic | Systems",
+                "id": "abc123DEF45",
+                "channel_id": "x" * 301,
+                "uploader": "unsafe\u0000channel",
+            }
+        )
+        + "\n",
+        stderr="",
+        returncode=0,
+    )
+
+    with patch("yt_insights.downloader.subprocess.run", return_value=completed):
+        result = fetch_video_list("ytsearch10:agentic systems")
+
+    assert result.videos == [
+        VideoInfo(
+            video_id="abc123DEF45",
+            title="Agentic | Systems",
+            upload_date="20260820",
+        )
+    ]
 
 
 def test_fetch_video_list_exposes_nonzero_exit_without_error_line() -> None:
