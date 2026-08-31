@@ -917,6 +917,202 @@ def test_assets_only_rollback_preserves_concurrent_replacement_and_retires_backu
     assert not tuple(first_target.parent.glob(f".{first_target.name}.backup.*"))
 
 
+def test_assets_only_quarantine_preserves_swap_between_verification_and_removal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+
+    changed_root = tmp_path / "changed-assets-for-quarantine"
+    shutil.copytree(
+        REPOSITORY_ROOT / "src" / "yt_insights" / "assistant_assets",
+        changed_root,
+    )
+    first_relative = "skills/youtube-acquire/SKILL.md"
+    second_relative = "skills/youtube-acquire/agents/openai.yaml"
+    (changed_root / first_relative).write_text("first upgrade\n", encoding="utf-8")
+    (changed_root / second_relative).write_text("second upgrade\n", encoding="utf-8")
+    monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
+    first_target = home / ".agents" / first_relative
+    original_replace = assistant_setup._replace_managed_file
+    original_rename = assistant_setup._rename_no_replace_at
+    calls = 0
+    rollback_started = False
+    swapped = False
+
+    def fail_second_replacement(
+        target: Path,
+        content: bytes,
+        expected: assistant_setup.FileSnapshot,
+        root: assistant_setup.BoundRoot,
+    ) -> assistant_setup.ReplacedFile:
+        nonlocal calls, rollback_started
+        calls += 1
+        if calls == 2:
+            rollback_started = True
+            raise OSError("synthetic later publication failure")
+        return original_replace(target, content, expected, root)
+
+    def swap_before_quarantine(
+        parent_fd: int,
+        source_name: str,
+        destination_name: str,
+    ) -> None:
+        nonlocal swapped
+        if (
+            rollback_started
+            and not swapped
+            and source_name == first_target.name
+            and ".quarantine." in destination_name
+        ):
+            swapped = True
+            os.unlink(source_name, dir_fd=parent_fd)
+            descriptor = os.open(
+                source_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o644,
+                dir_fd=parent_fd,
+            )
+            try:
+                os.write(descriptor, b"foreign concurrent content\n")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        original_rename(parent_fd, source_name, destination_name)
+
+    monkeypatch.setattr(assistant_setup, "_replace_managed_file", fail_second_replacement)
+    monkeypatch.setattr(
+        assistant_setup,
+        "_rename_no_replace_at",
+        swap_before_quarantine,
+    )
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    assert swapped is True
+    assert first_target.read_text(encoding="utf-8") == "foreign concurrent content\n"
+    recoveries = tuple(first_target.parent.glob(f".{first_target.name}.conflict-recovery.*"))
+    assert len(recoveries) == 1
+    assert recoveries[0].read_text(encoding="utf-8") == "foreign concurrent content\n"
+    assert not tuple(first_target.parent.glob(f".{first_target.name}.backup.*"))
+
+
+def test_assets_only_directory_substitution_after_mkdir_is_never_descended(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    original = getattr(assistant_setup, "_rename_no_replace_at", None)
+    substituted = False
+
+    def substitute_owned_directory(
+        parent_fd: int,
+        source_name: str,
+        target_name: str,
+    ) -> None:
+        nonlocal substituted
+        if not substituted and target_name == ".agents":
+            substituted = True
+            owned_aside = f"{source_name}.owned-aside"
+            os.rename(
+                source_name,
+                owned_aside,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+            )
+            os.mkdir(source_name, 0o755, dir_fd=parent_fd)
+            foreign_fd = os.open(
+                source_name,
+                os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                dir_fd=parent_fd,
+            )
+            try:
+                marker = os.open(
+                    "foreign-marker",
+                    os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                    0o644,
+                    dir_fd=foreign_fd,
+                )
+                os.close(marker)
+            finally:
+                os.close(foreign_fd)
+        if original is None:
+            raise AssertionError("exclusive directory publication was not implemented")
+        original(parent_fd, source_name, target_name)
+
+    monkeypatch.setattr(
+        assistant_setup,
+        "_rename_no_replace_at",
+        substitute_owned_directory,
+        raising=False,
+    )
+
+    result = runner.invoke(
+        cli,
+        _assets_only_arguments("--apply"),
+        env=env,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code != 0
+    assert substituted is True
+    assert (home / ".agents" / "foreign-marker").is_file()
+    assert not (home / ".agents" / "skills").exists()
+
+
+def test_default_setup_cleanup_failure_after_commit_is_non_fatal(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, state, corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+
+    relative = "skills/youtube-cumulative-research/SKILL.md"
+    target = home / ".agents" / relative
+    previous = target.read_bytes()
+    changed_root = _changed_asset_root(tmp_path, relative, "committed upgrade\n")
+    monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
+    original_unlink = assistant_setup.os.unlink
+
+    def fail_tombstone_cleanup(
+        path: Path | str,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        if ".cleanup-tombstone." in Path(path).name:
+            raise OSError("synthetic post-commit cleanup failure")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(assistant_setup.os, "unlink", fail_tombstone_cleanup)
+
+    result = runner.invoke(
+        cli,
+        _arguments(corpus, tmp_path / "bin" / "yt-insights-mcp", "--apply"),
+        env=env,
+        catch_exceptions=False,
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "installed"
+    assert len(payload["cleanup_pending"]) == 2
+    tombstones = tuple(Path(path) for path in payload["cleanup_pending"])
+    assert all(path.is_file() for path in tombstones)
+    assert previous in {path.read_bytes() for path in tombstones}
+    assert target.read_text(encoding="utf-8") == "committed upgrade\n"
+    assert (state / "claude.json").is_file()
+    assert (state / "codex.json").is_file()
+    operations = [
+        json.loads(line)
+        for line in (state / "operations.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert not any(item["args"][:2] == ["mcp", "remove"] for item in operations)
+
+
 def test_assets_only_never_resolves_or_invokes_mcp_tools(
     tmp_path: Path, monkeypatch
 ) -> None:
