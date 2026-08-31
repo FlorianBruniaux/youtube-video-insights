@@ -36,7 +36,7 @@ cumulative-research architecture is also available as a reproducible
 | Build the timestamped search index | `uv run yt-insights index --all` | A derived FTS5 index over every VTT passage |
 | Find a sourced passage | `uv run yt-insights search "AI product discovery"` | Ranked excerpts, timestamps, and direct YouTube links |
 | Start cumulative research | `uv run yt-insights research start "AI product engineering workflows" --json` | A durable local assessment and a mandatory sufficiency question |
-| Resume research | `uv run yt-insights research status SESSION_ID --json` | Revision, evidence, candidates, required action, and bounded acquisition history after Task 11 integration |
+| Resume research | `uv run yt-insights research status SESSION_ID --json` | Revision, evidence, candidates, required action, and the latest 100 acquisition attempts |
 | Export an evidence dossier | `uv run yt-insights research export SESSION_ID --output /absolute/path --json` | Deterministic `dossier.md` and `manifest.json`, kept outside source indexes |
 | Query from an LLM client | `uv run --extra mcp yt-insights-mcp` | Four read-only corpus, video, and passage tools |
 
@@ -591,8 +591,8 @@ yt-insights research status SESSION_ID [--json]
 yt-insights research decide SESSION_ID sufficient|refresh --revision N --idempotency-key KEY [--json]
 
   Assess local evidence, resume a durable session, and record the mandatory
-  sufficiency decision. Once the Task 11 corrective commit is integrated,
-  status returns `acquisition_history` for the latest 100 attempts and an
+  sufficiency decision. Status returns `acquisition_history` for the latest
+  100 attempts and an
   `acquisition_history_truncated` flag. Each attempt has `attempt_id`, `status`,
   and `items`; each item has `video_id`, `status`, `error_code`, and
   `source_sha256`. `refresh` authorizes discovery, not acquisition.
@@ -614,9 +614,8 @@ yt-insights research export SESSION_ID [--output DIRECTORY] [--force] [--json]
   Cancel candidate review, or publish an optional deterministic evidence dossier.
 ```
 
-The structured-history and partial-batch contracts above require the Task 11
-corrective commit in the coordinated final SHA. Do not claim them from a
-checkout that has not integrated that code.
+These structured-history and partial-batch contracts are implemented in the
+current repository state.
 
 </details>
 
@@ -842,6 +841,13 @@ development workstation has not applied this new four-skill transaction. Live
 YouTube research and fresh Claude Code and Codex workflow canaries remain
 `UNKNOWN`.
 
+The assembled local validation passed `844` tests plus `10` subtests, full
+Ruff, Mypy on the 44 source files, and `git diff --check`. This is not a
+`mypy --strict` claim. A GitHub Actions workflow has been added locally, but no
+hosted run has been observed before push. Human relevance, live YouTube, and
+fresh Claude Code/Codex canaries therefore remain `UNKNOWN`, and global
+activation remains `false`.
+
 | Document | Purpose |
 |---|---|
 | [Current Claude Code and Codex guide](docs/claude-code.md) | Supported skills, four MCP tools, local commands and verified installation boundary |
@@ -959,6 +965,8 @@ following checks before submitting a change:
 
 ```bash
 uv run --extra mcp --extra dev pytest -q
+uv run --extra dev ruff check src tests scripts
+uv run --extra dev mypy src
 uv lock --check
 git diff --check
 ```

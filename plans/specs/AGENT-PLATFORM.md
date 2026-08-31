@@ -46,15 +46,14 @@ Le quatrième skill doit toujours :
 7. acquérir seulement ces IDs, réévaluer, puis reposer la question;
 8. demander ensuite dossier, brouillon, corpus exporté, les deux, ou rien.
 
-Après intégration du correctif Task 11 dans le SHA coordonné, le statut JSON
-expose `acquisition_history`, limité aux 100 dernières tentatives, et
+Le statut JSON expose `acquisition_history`, limité aux 100 dernières
+tentatives, et
 `acquisition_history_truncated`. Chaque tentative contient `attempt_id`,
 `status` et `items`; chaque item contient `video_id`, `status`, `error_code` et
 `source_sha256`. Les clés d'idempotence, sélecteurs de cookies, transcripts et
 diagnostics bruts n'y figurent pas. Un retry de lot partiel reprend uniquement
 les items `failed_retryable`; il ne réacquiert aucun résultat terminal déjà
-enregistré. Ce contrat ne doit pas être annoncé depuis un checkout qui n'a pas
-intégré le correctif Task 11.
+enregistré.
 
 Le dossier déterministe est produit par la CLI. Un brouillon d'article reste
 une action explicite de l'assistant et ne devient jamais une source YouTube.
@@ -133,6 +132,12 @@ cumulatif n'ajoute aucun hook global et aucun agent writable.
 | Claude Code frais | `UNKNOWN` | Pas de claim d'activation |
 | Codex frais | `UNKNOWN` | Pas de claim d'activation |
 | Activation globale | `false` | Quatrième skill et runtime non promus |
+| Qualité locale | `PASS` | 844 tests + 10 subtests, Ruff complet, Mypy sur 44 fichiers, diff-check |
+| GitHub CI hébergée | `UNKNOWN` | Workflow ajouté localement, aucun run observé avant push |
+
+La validation Mypy porte sur `mypy src`; aucun passage de `mypy --strict`
+n'est revendiqué. Les gates locales ne prouvent ni YouTube live ni le
+chargement par des clients frais.
 
 ## Ce qui reste hors périmètre
 

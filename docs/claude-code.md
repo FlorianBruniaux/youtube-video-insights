@@ -47,15 +47,13 @@ for mutation and never approves candidates on behalf of the user.
    article draft, a corpus export, both, or nothing else.
 
 Every mutation uses the latest returned revision and a fresh idempotency key.
-After the Task 11 corrective commit is integrated into the coordinated SHA,
 `status --json` exposes `acquisition_history`, bounded to the latest 100
 attempts, plus `acquisition_history_truncated`. Each attempt contains
 `attempt_id`, `status`, and `items`; each item contains `video_id`, `status`,
 `error_code`, and `source_sha256`. Idempotency keys, cookie selectors,
 transcripts, and raw diagnostics are not exposed. A partial-batch retry resumes
 only items recorded as `failed_retryable`; it does not reacquire any item with
-a recorded terminal outcome. Do not claim this response contract from a
-checkout that has not integrated the Task 11 corrective commit.
+a recorded terminal outcome.
 
 An invalid JSON response, stale revision, unavailable network, or unknown
 session fails closed.
@@ -130,5 +128,7 @@ Observed external gates at this checkpoint:
 - fresh Claude Code and Codex sessions: `UNKNOWN`;
 - global activation: `false`.
 
-The repository has no GitHub CI. All reported checks are local unless a future
-workflow is added and observed.
+Local validation passed `844` tests plus `10` subtests, full Ruff, Mypy on the
+44 source files, and `git diff --check`. This is not a `mypy --strict` claim.
+The GitHub Actions workflow is present in the local integration candidate, but
+its hosted execution remains `UNKNOWN` before push.

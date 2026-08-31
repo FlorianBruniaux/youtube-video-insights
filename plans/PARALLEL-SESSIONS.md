@@ -50,15 +50,16 @@ Task 10 E2E, quality and docs
 | 5 | Start, status, decide | Terminé |
 | 6 | Discover, candidates, approve, cancel | Terminé |
 | 7A | Acquisition structurée et publication par paire | Terminé |
-| 7B | Workflow acquire et retry | Terminé; correctif Task 11 à intégrer |
+| 7B | Workflow acquire et retry | Terminé et intégré |
 | 8A | Dossier déterministe | Terminé |
 | 8B | Export CLI et sécurité de racine | Terminé |
 | 9A | Quatrième skill et setup assets-only | Terminé dans le dépôt |
 | 9B | Prompts anglais et wheel installable | Terminé dans le dépôt |
-| 10A | E2E et limites hostiles | En intégration |
-| 10B | Documentation | En cours dans ce worktree |
-| 10C | Qualité finale | En intégration |
-| 11 | Historique public borné et reprise des lots partiels | Correctif codé; intégration au SHA coordonné requise |
+| 10A | E2E et limites hostiles | Terminé et intégré |
+| 10B | Documentation | Consolidation finale |
+| 10C | Qualité finale | Terminé et intégré |
+| 11 | Historique public borné et reprise des lots partiels | Terminé et intégré |
+| 13 | Ruff et Mypy finaux | Terminé et intégré |
 
 ## Contrats de fusion
 
@@ -86,19 +87,20 @@ Task 10 E2E, quality and docs
 | Claude Code frais | `UNKNOWN` |
 | Codex frais | `UNKNOWN` |
 | Activation globale | `false` |
-| GitHub CI | Absente |
+| Qualité locale | `PASS`, 844 tests + 10 subtests, Ruff, Mypy 44 fichiers, diff-check |
+| GitHub CI hébergée | `UNKNOWN`, workflow ajouté localement mais pas exécuté avant push |
 
 La pertinence `UNKNOWN` n'empêche pas une acquisition locale explicitement
 approuvée. Elle interdit un claim de qualité validée et toute activation
 globale.
 
-## Après intégration locale
+## Après validation locale
 
 Ordre strict :
 
-1. publier les résultats fonctionnels et de qualité au SHA final;
+1. pousser le SHA et observer la première exécution CI hébergée;
 2. réaliser les 20 jugements humains de pertinence;
-3. lancer les canaris frais Claude Code et Codex;
+3. lancer le canari YouTube live et les canaris frais Claude Code et Codex;
 4. seulement ensuite préparer un candidat global inerte et son digest;
 5. conserver web, extension, writable MCP, vectoriel et graphe hors du chemin
    critique tant que leurs déclencheurs ne sont pas observés.

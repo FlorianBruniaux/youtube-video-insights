@@ -2,7 +2,7 @@
 
 **Mise à jour :** 2026-08-31
 
-**Workflow cumulatif local :** `IMPLÉMENTÉ`, validation finale en cours
+**Workflow cumulatif local :** `IMPLÉMENTÉ`, validation locale `PASS`
 
 **Activation globale du nouveau workflow :** `false`
 
@@ -25,7 +25,7 @@ distinctes.
 | Couverture et fraîcheur | Implémentées | Profils déterministes, aucune décision automatique de suffisance |
 | Découverte YouTube | Implémentée | Maximum 10 candidats, métadonnées seulement |
 | Approbation et acquisition | Implémentées | 1 à 5 IDs exacts, décision séparée de `refresh` |
-| Reprise et retry | Task 11, intégration requise | Historique borné aux 100 dernières tentatives; seuls les items `failed_retryable` d'un lot partiel sont réacquis |
+| Reprise et retry | Implémentées | Historique borné aux 100 dernières tentatives; seuls les items `failed_retryable` d'un lot partiel sont réacquis |
 | Dossier de preuves | Implémenté | `dossier.md` et `manifest.json`, jamais réindexés comme sources |
 | Assistants Claude Code et Codex | Assets projet implémentés | Quatrième skill non installé globalement, canaris frais `UNKNOWN` |
 | MCP | Quatre outils read-only | Aucun outil de mutation ou d'orchestration |
@@ -53,7 +53,8 @@ des quatre couches et du corpus source.
 | Claude Code frais | `UNKNOWN` | Asset statique validé, pas de session fraîche probante |
 | Codex frais | `UNKNOWN` | Asset statique validé, pas de session fraîche probante |
 | Activation globale | `false` | Aucune installation globale du quatrième skill ou du runtime |
-| GitHub CI | Absente | Les vérifications disponibles sont locales |
+| Qualité locale | `PASS` | 844 tests + 10 subtests, Ruff complet, Mypy sur 44 fichiers source et diff-check |
+| GitHub CI hébergée | `UNKNOWN` | Workflow ajouté localement; aucune exécution GitHub observée avant push |
 
 Un `UNKNOWN` ne bloque pas une acquisition locale de 1 à 5 IDs explicitement
 approuvés. Il bloque toute affirmation de qualité validée ou d'activation
@@ -63,15 +64,17 @@ globale.
 
 | Priorité | Action | Critère de sortie |
 |---:|---|---|
-| 1 | Terminer la vérification locale du lot | Suite complète, Ruff, mypy, wheel offline et diff-check au SHA final |
+| 1 | Observer la CI GitHub hébergée après push | Tous les jobs du workflow terminent sur le SHA publié |
 | 2 | Faire la revue humaine de pertinence | Exactement 20 résultats jugés, seuil de passage 16/20 |
-| 3 | Exécuter les canaris clients frais | Claude Code et Codex découvrent le quatrième skill et respectent les deux confirmations |
-| 4 | Préparer un candidat global inerte | Préimages, diff expurgé, digest, rollback et approbation exacte |
-| 5 | Tester des sessions de recherche réelles | Dossiers utiles, limites de couverture et frictions consignées |
+| 3 | Exécuter le canari YouTube live | Acquisition réelle bornée, résultat et erreurs consignés |
+| 4 | Exécuter les canaris clients frais | Claude Code et Codex découvrent le quatrième skill et respectent les deux confirmations |
+| 5 | Préparer un candidat global inerte | Préimages, diff expurgé, digest, rollback et approbation exacte |
+| 6 | Tester des sessions de recherche réelles | Dossiers utiles, limites de couverture et frictions consignées |
 
-Le dernier résultat combiné connu avant la finalisation Task 10 est
-`799 passed, 10 subtests passed`. Le coordinateur doit remplacer ce nombre par
-le résultat au SHA final. Ce dépôt ne possède pas de GitHub CI.
+La validation locale assemblée a passé `844` tests et `10` subtests, Ruff sur
+`src tests scripts`, Mypy sur les 44 fichiers de `src`, et `git diff --check`.
+Ce résultat ne signifie pas que `mypy --strict` passe. Le workflow GitHub CI a
+été ajouté localement, mais son exécution hébergée reste `UNKNOWN` avant push.
 
 ## Évolutions conditionnelles
 

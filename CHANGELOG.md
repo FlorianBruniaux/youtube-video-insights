@@ -19,12 +19,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   through a separate approval before acquisition.
 - Batch acquisition outcomes per video, one atomic catalogue and FTS refresh,
   failure recovery, and automatic reassessment followed by the same mandatory
-  sufficiency question. The Task 11 corrective commit adds bounded
-  `acquisition_history` to status: the latest 100 attempts, a truncation flag,
+  sufficiency question. Status includes bounded `acquisition_history`: the
+  latest 100 attempts, a truncation flag,
   and per-item `video_id`, status, error code, and source SHA-256. Partial-batch
   retry resumes only `failed_retryable` items and does not reacquire recorded
-  terminal outcomes. These two contracts require that corrective commit to be
-  integrated into the coordinated final SHA.
+  terminal outcomes.
+- Final local quality validation: `844` tests plus `10` subtests, full Ruff,
+  Mypy on all 44 source files, and `git diff --check` passed. Mypy was not run
+  with `--strict`. The GitHub Actions workflow exists in the local integration
+  candidate, but its first hosted execution remains `UNKNOWN` before push.
 - Deterministic research dossiers with `dossier.md` and `manifest.json`, safe
   absolute destinations, source hashes, timestamped evidence, coverage limits,
   and no generated-dossier ingestion into source indexes.

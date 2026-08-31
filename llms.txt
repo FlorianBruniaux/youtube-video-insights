@@ -37,7 +37,7 @@ fifth source layer.
 
 ```text
 yt-insights research start TOPIC [--query QUERY]... [--lang LANG]... [--freshness-profile fast|standard|stable|historical] [--json]
-yt-insights research status SESSION_ID [--json]  # bounded acquisition_history after Task 11 integration
+yt-insights research status SESSION_ID [--json]  # latest 100 acquisition attempts, with truncation flag
 yt-insights research decide SESSION_ID sufficient|refresh --revision N --idempotency-key KEY [--json]
 yt-insights research discover SESSION_ID --revision N [--json]
 yt-insights research candidates SESSION_ID [--json]
@@ -49,14 +49,13 @@ yt-insights research export SESSION_ID [--output ABSOLUTE_DIRECTORY] [--force] [
 ```
 
 Use the latest returned revision for each mutation. Reuse an idempotency key
-only for the exact same request payload. After the Task 11 corrective commit is
-integrated, status exposes `acquisition_history` for the latest 100 attempts and
+only for the exact same request payload. Status exposes `acquisition_history`
+for the latest 100 attempts and
 `acquisition_history_truncated`. Each attempt has `attempt_id`, `status`, and
 `items`; each item has `video_id`, `status`, `error_code`, and `source_sha256`.
 It excludes idempotency keys, cookie selectors, transcripts, and raw
 diagnostics. Partial-batch retry resumes only items recorded as
-`failed_retryable`; it does not reacquire recorded terminal outcomes. Do not
-claim these contracts from a checkout without the Task 11 corrective commit.
+`failed_retryable`; it does not reacquire recorded terminal outcomes.
 
 ## Other stable commands
 
@@ -151,10 +150,12 @@ Fresh Claude Code and Codex canaries remain `UNKNOWN`.
 - fresh Claude Code workflow: `UNKNOWN`.
 - fresh Codex workflow: `UNKNOWN`.
 - global activation: `false`.
-- GitHub CI: absent; verification is local.
+- local quality: `PASS`; 844 tests plus 10 subtests, full Ruff, Mypy on 44
+  source files, and `git diff --check`.
+- GitHub CI hosted execution: `UNKNOWN`; the workflow is added locally but has
+  not run on GitHub before push.
 
-The latest combined test count before Task 10 finalization is an interim
-`799 passed, 10 subtests passed`. Do not present it as the final release count.
+Mypy was run as `mypy src`; do not claim `mypy --strict` passes.
 
 ## Verification
 
@@ -167,9 +168,8 @@ uv lock --check
 git diff --check
 ```
 
-Ruff and mypy are diagnostic commands and are red at the latest known
-checkpoint. They remain release blockers until fixed and rerun on the final
-SHA; green functional gates do not override them.
+These Ruff and Mypy commands pass on the assembled local SHA. They do not prove
+hosted CI, live YouTube, or fresh-client behavior.
 
 Static and hermetic checks do not prove live YouTube, Claude Code, or Codex
 behavior.

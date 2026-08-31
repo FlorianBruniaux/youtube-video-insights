@@ -2,15 +2,16 @@
 
 **Mise à jour :** 2026-08-31
 
-**Workflow cumulatif :** implémenté localement, vérification finale en cours
+**Workflow cumulatif :** implémenté, validation locale `PASS`
 
 **Activation globale :** `false`
 
-**GitHub CI :** absente
+**GitHub CI hébergée :** `UNKNOWN` avant push
 
-Le dernier résultat combiné connu avant la finalisation Task 10 est
-`799 passed, 10 subtests passed`. Ce nombre est intermédiaire. Le coordinateur
-doit publier le résultat au SHA final.
+Le SHA assemblé a passé localement `844` tests et `10` subtests, Ruff sur
+`src tests scripts`, Mypy sur les 44 fichiers source, et `git diff --check`.
+Le workflow GitHub Actions est ajouté localement, mais aucune exécution hébergée
+n'a encore été observée. Mypy n'a pas été exécuté avec `--strict`.
 
 ## Vue d'ensemble
 
@@ -49,22 +50,21 @@ Le JPG du README reste inchangé car sa source de génération n'est pas suivie.
 |---|---|---|
 | Acquisition | VTT et métadonnées, preview et confirmation des lots | Pas de transcription audio |
 | Évaluation locale | Couverture, dates inconnues et fraîcheur par fingerprint exact | Aucun accès réseau, ne décide jamais que le corpus suffit |
-| Sessions | État, révisions, événements, tentatives et résultats par vidéo dans `research-v1.sqlite3` | Après intégration Task 11, `status --json` expose les 100 dernières tentatives et signale la troncature |
+| Sessions | État, révisions, événements, tentatives et résultats par vidéo dans `research-v1.sqlite3` | `status --json` expose les 100 dernières tentatives et signale la troncature |
 | Découverte | Recherche YouTube par métadonnées après `refresh` | Maximum 10 candidats, aucune acquisition implicite |
 | Approbation | IDs vérifiés contre le dernier snapshot | 1 à 5 IDs exacts |
 | Acquisition cumulative | Résultats par vidéo, refresh unique, réévaluation | Les sources acquises restent en cas d'échec de publication |
-| Retry | Reprend seulement le stage retryable enregistré | Après intégration Task 11, seuls les items `failed_retryable` sont réacquis |
+| Retry | Reprend seulement le stage retryable enregistré | Seuls les items `failed_retryable` sont réacquis |
 | Dossier | `dossier.md` et `manifest.json` déterministes | Destination absolue, pas de prose LLM ni de réindexation |
 | MCP | `list_corpora`, `search_videos`, `search_passages`, `get_passage` | Lecture seule |
 | Assistants | Quatre skills projet et assets wheel Claude Code/Codex | Quatrième skill non installé globalement |
 | Setup | `--dry-run`, `--apply`, `--verify`, plus `--assets-only` | Une écriture globale demande toujours une transaction approuvée |
 
-Le contrat Task 11 ajoute `acquisition_history`, limité aux 100 dernières
+Le contrat actuel expose `acquisition_history`, limité aux 100 dernières
 tentatives, et `acquisition_history_truncated`. Chaque tentative contient
 `attempt_id`, `status` et `items`; chaque item contient `video_id`, `status`,
 `error_code` et `source_sha256`. Les clés d'idempotence, sélecteurs de cookies,
-transcripts et diagnostics bruts restent absents. Les claims de cette section
-exigent l'intégration du correctif Task 11 dans le SHA coordonné.
+transcripts et diagnostics bruts restent absents.
 
 ## Cycle utilisateur
 
@@ -101,6 +101,8 @@ les candidats à acquérir.
 | Claude Code frais | `UNKNOWN` | Chargement statique seulement |
 | Codex frais | `UNKNOWN` | Chargement statique seulement |
 | Activation globale | `false` | Pas de promotion du quatrième skill ou du runtime |
+| Qualité locale | `PASS` | 844 tests + 10 subtests, Ruff complet, Mypy sur 44 fichiers et diff-check |
+| GitHub CI hébergée | `UNKNOWN` | Workflow ajouté localement; aucun run observé avant push |
 
 Les statuts `UNKNOWN` bloquent les affirmations de qualité et l'activation
 globale. Ils ne bloquent pas une acquisition locale explicitement approuvée.
@@ -118,10 +120,8 @@ uv lock --check
 git diff --check
 ```
 
-Les commandes Ruff et mypy sont des diagnostics. Elles sont rouges au dernier
-checkpoint connu et restent des bloqueurs de release jusqu'à correction et
-nouvelle exécution sur le SHA final. Les gates fonctionnelles vertes ne les
-remplacent pas.
+Ces commandes sont vertes sur le SHA assemblé local. La commande documentée est
+`mypy src`; aucun passage de `mypy --strict` n'est revendiqué.
 
 Ces commandes ne prouvent ni YouTube live ni le chargement effectif dans une
 session Claude Code ou Codex fraîche.
