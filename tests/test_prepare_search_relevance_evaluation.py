@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -19,7 +19,6 @@ from yt_insights.search.models import (
     youtube_url,
 )
 from yt_insights.search.sqlite_fts import SQLiteFtsIndex
-
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "prepare_search_relevance_evaluation.py"
 COMMIT_SHA = "0123456789abcdef0123456789abcdef01234567"

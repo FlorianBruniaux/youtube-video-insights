@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from math import isfinite
 
 from .models import DocumentRef, Passage, compute_passage_id, youtube_url
-
 
 MIN_WORDS = 100
 MAX_WORDS = 220
@@ -14,7 +14,7 @@ MAX_DURATION_SECONDS = 90
 OVERLAP_SECONDS = 12
 
 
-def _normalize_segments(segments: list[dict]) -> list[tuple[float, str]]:
+def _normalize_segments(segments: Sequence[object]) -> list[tuple[float, str]]:
     normalized: list[tuple[float, str]] = []
     for segment in segments:
         if not isinstance(segment, dict):
@@ -34,7 +34,9 @@ def _normalize_segments(segments: list[dict]) -> list[tuple[float, str]]:
     return sorted(normalized, key=lambda segment: segment[0])
 
 
-def build_passages(document: DocumentRef, segments: list[dict]) -> tuple[Passage, ...]:
+def build_passages(
+    document: DocumentRef, segments: Sequence[object]
+) -> tuple[Passage, ...]:
     """Build overlapping, timestamp-aligned passages for one document."""
     source_segments = _normalize_segments(segments)
     if not source_segments:

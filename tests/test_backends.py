@@ -32,7 +32,7 @@ class _ProbeClient:
     def __init__(self, tags_payload: object) -> None:
         self._tags_payload = tags_payload
 
-    def __enter__(self) -> "_ProbeClient":
+    def __enter__(self) -> _ProbeClient:
         return self
 
     def __exit__(self, *args: object) -> None:
@@ -387,7 +387,7 @@ class _CcBridgeClient:
         self.status_code = status_code
         self.tags_payload = tags_payload
 
-    def __enter__(self) -> "_CcBridgeClient":
+    def __enter__(self) -> _CcBridgeClient:
         return self
 
     def __exit__(self, *args: object) -> None:

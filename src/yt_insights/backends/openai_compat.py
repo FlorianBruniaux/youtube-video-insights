@@ -10,12 +10,12 @@ may trigger a 401 if active_route forwards to Anthropic in OAuth passthrough mod
 from __future__ import annotations
 
 import json
-from typing import Iterator
+from collections.abc import Iterator
 
 import httpx
 
-from .base import BackendUnavailableError, LLMBackend
 from ..config import Config
+from .base import BackendUnavailableError
 
 
 class OpenAICompatBackend:
@@ -55,11 +55,14 @@ class OpenAICompatBackend:
     ) -> tuple[str, str]:
         parts: list[str] = []
         stop_reason = "end_turn"
-        for chunk in self.stream(prompt, max_tokens=max_tokens, timeout=timeout):
+        for streamed_chunk in self.stream(
+            prompt, max_tokens=max_tokens, timeout=timeout
+        ):
+            chunk: object = streamed_chunk
             if isinstance(chunk, tuple):
                 # Internal signal: (stop_reason,)
-                stop_reason = chunk[0]
-            else:
+                stop_reason = str(chunk[0])
+            elif isinstance(chunk, str):
                 parts.append(chunk)
         return "".join(parts).strip(), stop_reason
 

@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -17,7 +17,6 @@ from yt_insights.search.models import (
     youtube_url,
 )
 from yt_insights.search.sqlite_fts import SQLiteFtsIndex
-
 
 SCRIPT = Path(__file__).parents[1] / "scripts" / "benchmark_search.py"
 

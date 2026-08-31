@@ -1,11 +1,10 @@
 from __future__ import annotations
 
-from collections import namedtuple
 import os
+from collections import namedtuple
 from pathlib import Path
 
 import pytest
-
 
 DiskUsage = namedtuple("DiskUsage", "total used free")
 
@@ -75,7 +74,7 @@ def test_preflight_fails_closed_when_a_regular_source_cannot_be_reinventoried(
 
     monkeypatch.setattr(preflight, "_stable_file_size", raise_during_inventory)
 
-    with pytest.raises(preflight.IndexSpacePreflightError, match="source.vtt"):
+    with pytest.raises(preflight.IndexSpacePreflightError, match=r"source\.vtt"):
         preflight.preflight_index_space(root, tmp_path / "search.db")
 
 
@@ -117,5 +116,7 @@ def test_preflight_raises_an_actionable_domain_error_when_space_is_insufficient(
     source.write_bytes(b"x")
     monkeypatch.setattr(preflight.shutil, "disk_usage", lambda _: DiskUsage(1, 1, 1))
 
-    with pytest.raises(preflight.InsufficientIndexSpace, match="available.*required"):
+    with pytest.raises(
+        preflight.InsufficientIndexSpace, match=r"available.*required"
+    ):
         preflight.preflight_index_space(root, tmp_path / "search.db")

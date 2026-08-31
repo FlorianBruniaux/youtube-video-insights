@@ -5,8 +5,8 @@ import json
 import os
 from pathlib import Path
 
-from mcp import Client
 import pytest
+from mcp import Client
 
 from yt_insights.catalog import Catalog
 from yt_insights.downloader import VideoInfo, VideoListResult
@@ -263,7 +263,6 @@ def test_discovery_tools_expose_unicode_handle_written_by_catalog_api(
 
 
 def test_search_passages_uses_the_local_index_and_bounds_its_payload(tmp_path: Path) -> None:
-    from yt_insights.mcp_server import create_server
 
     database, passage = _indexed_passage(tmp_path, text="needle " + "context " * 500)
 
@@ -286,7 +285,6 @@ def test_search_passages_uses_the_local_index_and_bounds_its_payload(tmp_path: P
 
 
 def test_search_passages_bounds_the_complete_mcp_result_below_64_kib(tmp_path: Path) -> None:
-    from yt_insights.mcp_server import create_server
 
     database = _large_index(tmp_path)
 
@@ -305,7 +303,6 @@ def test_search_passages_bounds_the_complete_mcp_result_below_64_kib(tmp_path: P
 
 
 def test_get_passage_returns_one_bounded_source_backed_record(tmp_path: Path) -> None:
-    from yt_insights.mcp_server import create_server
 
     database, passage = _indexed_passage(
         tmp_path, text="source backed passage " + "🧪" * 5000
@@ -356,7 +353,6 @@ def test_invalid_tool_input_and_index_errors_are_clean_mcp_errors(tmp_path: Path
 def test_search_passages_rejects_in_place_corruption_after_mtime_is_restored(
     tmp_path: Path,
 ) -> None:
-    from yt_insights.mcp_server import create_server
 
     database, _passage = _indexed_passage(tmp_path, text="needle")
     original = database.stat()
@@ -378,7 +374,6 @@ def test_pre_handler_validation_never_reflects_invalid_values_or_extra_fields(
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    from yt_insights.mcp_server import create_server
 
     database, _passage = _indexed_passage(tmp_path)
     canaries = {
@@ -672,6 +667,7 @@ def test_catalog_semantic_corruption_returns_safe_tool_errors(
     tmp_path: Path,
 ) -> None:
     import sqlite3
+
     from yt_insights.mcp_server import create_server
 
     search_database, _passage = _indexed_passage(tmp_path)

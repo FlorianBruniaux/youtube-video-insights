@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
-import fcntl
 import os
 from dataclasses import replace
 from pathlib import Path
@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from yt_insights.acquisition import (
+    AcquisitionPlan,
     SourceKind,
     build_acquisition_plan,
     classify_source,
@@ -785,6 +786,7 @@ def test_execute_restores_old_catalog_when_post_publication_validation_fails(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import sqlite3
+
     import yt_insights.acquisition as acquisition_module
     from yt_insights.catalog import Catalog
     from yt_insights.downloader import VideoListResult
@@ -936,7 +938,9 @@ def test_refresh_restores_both_previous_databases_when_search_validation_fails(
         lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("forced failure")),
     )
 
-    with pytest.raises(ValueError, match="search.*publication validation failed"):
+    with pytest.raises(
+        ValueError, match=r"search.*publication validation failed"
+    ):
         acquisition.rebuild_and_publish_indexes(paths)
 
     assert paths.catalog_database.read_bytes() == old_catalog
@@ -967,7 +971,9 @@ def test_refresh_removes_both_new_databases_when_no_previous_pair_exists(
         lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("forced failure")),
     )
 
-    with pytest.raises(ValueError, match="search.*publication validation failed"):
+    with pytest.raises(
+        ValueError, match=r"search.*publication validation failed"
+    ):
         acquisition.rebuild_and_publish_indexes(paths)
 
     assert not paths.catalog_database.exists()

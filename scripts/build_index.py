@@ -79,7 +79,7 @@ def parse_name(stem: str):
 def load_json(p: Path):
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 

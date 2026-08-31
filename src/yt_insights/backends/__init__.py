@@ -15,16 +15,16 @@ from __future__ import annotations
 
 import importlib.util
 import os
+from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import Iterator
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
+from ..config import DEFAULT_BASE_URL, DEFAULT_MODEL, Config
 from .base import BackendNotFoundError, LLMBackend
 from .mlx import MLXBackend
 from .openai_compat import OpenAICompatBackend
-from ..config import Config, DEFAULT_BASE_URL, DEFAULT_MODEL
 
 _CC_BRIDGE = "http://127.0.0.1:4141"
 _OLLAMA = "http://127.0.0.1:11434"
@@ -185,7 +185,7 @@ def _ollama_endpoint(base_url: str) -> str | None:
     return sanitize_endpoint(base_url).rstrip("/").removesuffix("/v1")
 
 
-def _probe_llm(cfg: "Config") -> bool:
+def _probe_llm(cfg: Config) -> bool:
     """Send a 1-token completion to verify the LLM endpoint actually responds."""
     try:
         with httpx.Client(timeout=5.0) as c:
@@ -247,6 +247,7 @@ def _explicit_backend(config: Config) -> ResolvedBackend:
         return _resolved_mlx(config)
 
     if config.backend == "ollama":
+        endpoint: str | None
         if config.base_url == DEFAULT_BASE_URL:
             endpoint = _OLLAMA
         else:
@@ -416,13 +417,13 @@ def backend_type(backend: LLMBackend) -> str:
 
 
 __all__ = [
-    "resolve_backend",
-    "backend_type",
-    "LLMBackend",
-    "BackendNotFoundError",
     "BackendIdentity",
+    "BackendNotFoundError",
+    "LLMBackend",
     "ResolvedBackend",
-    "format_backend_identity",
-    "sanitize_endpoint",
     "available_backend_routes",
+    "backend_type",
+    "format_backend_identity",
+    "resolve_backend",
+    "sanitize_endpoint",
 ]

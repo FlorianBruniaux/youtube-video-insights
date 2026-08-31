@@ -136,7 +136,7 @@ Sois factuel et direct."""
     os.replace(tmp_full, full_report_path)
 
 
-def _render_video_section(vi: "VideoInsight") -> str:
+def _render_video_section(vi: VideoInsight) -> str:
     lines = [f"## {vi.title}\n", f"**Sujet** : {vi.subject}\n"]
     if vi.key_points:
         lines.append("**Points clés** :\n" + "\n".join(f"- {p}" for p in vi.key_points))

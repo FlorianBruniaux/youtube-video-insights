@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
-import shutil
 
 from .corpus import _stable_file_size, discover_corpus_sources
-
 
 _MINIMUM_FREE_BYTES = 256 * 1024**2
 

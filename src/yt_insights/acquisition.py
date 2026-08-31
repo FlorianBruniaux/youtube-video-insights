@@ -3,33 +3,33 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import stat
-import os
 import tempfile
+from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from .config import Config
 from .downloader import (
+    _READ_FLAGS,
     DownloadResult,
     VideoInfo,
-    _READ_FLAGS,
-    _copy_regular_at,
     _confined_directory,
+    _copy_regular_at,
     _list_regular_names,
-    _publish_new_regular_file,
     _promote_regular_file,
+    _publish_new_regular_file,
     _read_regular_at,
     _replace_regular_file,
     download_subtitles,
 )
 from .paths import DataPaths
-
 
 _VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 _SAFE_SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")
@@ -38,7 +38,7 @@ _MAX_BATCH_BYTES = 1024 * 1024
 _MAX_BATCH_LINES = 1000
 
 
-class SourceKind(str, Enum):
+class SourceKind(str, Enum):  # noqa: UP042 - preserve legacy str(Enum) semantics
     VIDEO = "video"
     PLAYLIST = "playlist"
     CHANNEL = "channel"
@@ -694,9 +694,12 @@ def rebuild_and_publish_indexes(data_paths: DataPaths) -> IndexRefreshReport:
             _reject_nonempty_catalog_wal(catalog_parent_fd, catalog_path.name)
             old_catalog_dir = staging / "old-catalog"
             old_catalog_dir.mkdir()
-            old_catalog = old_catalog_dir / catalog_path.name
+            old_catalog_candidate = old_catalog_dir / catalog_path.name
+            old_catalog: Path | None = old_catalog_candidate
             try:
-                _copy_regular_at(catalog_parent_fd, catalog_path.name, old_catalog)
+                _copy_regular_at(
+                    catalog_parent_fd, catalog_path.name, old_catalog_candidate
+                )
             except FileNotFoundError:
                 old_catalog = None
             if old_catalog is not None:
@@ -800,9 +803,8 @@ def rebuild_and_publish_indexes(data_paths: DataPaths) -> IndexRefreshReport:
                     staging / "published-search",
                 )
             except Exception as exc:
-                previous_pair = old_catalog is not None and old_search is not None
                 try:
-                    if previous_pair:
+                    if old_catalog is not None and old_search is not None:
                         _replace_regular_file(
                             old_catalog, catalog_parent_fd, catalog_path.name
                         )
@@ -867,7 +869,7 @@ def execute_acquisition(
     ready_by_id: dict[str, list[_VttSnapshot]] = {}
     items: list[AcquisitionItemReport] = []
 
-    for video, url in zip(plan.selected_videos, plan.selected_urls):
+    for video, url in zip(plan.selected_videos, plan.selected_urls, strict=False):
         try:
             cached = _matching_vtts(
                 plan.transcripts_dir, video.video_id, plan.language, plan.data_paths.root
@@ -971,30 +973,29 @@ def execute_acquisition(
             try:
                 with _confined_directory(
                     plan.data_paths.root, plan.insights_dir, create=True
-                ) as insights_fd:
-                    with tempfile.TemporaryDirectory(
-                        prefix="yt-insights-analysis-"
-                    ) as staging_name:
-                        staging = Path(staging_name)
-                        staged_vtts = staging / "transcripts"
-                        staged_insights = staging / "insights"
-                        staged_vtts.mkdir()
-                        staged_insights.mkdir()
-                        analyzer_inputs: list[Path] = []
-                        for snapshot in missing_insights:
-                            staged = staged_vtts / snapshot.path.name
-                            staged.write_bytes(snapshot.content)
-                            analyzer_inputs.append(staged)
-                        backend = backend_resolver(effective)
-                        analyze_many(
-                            analyzer_inputs, staged_insights, backend, effective
+                ) as insights_fd, tempfile.TemporaryDirectory(
+                    prefix="yt-insights-analysis-"
+                ) as staging_name:
+                    staging = Path(staging_name)
+                    staged_vtts = staging / "transcripts"
+                    staged_insights = staging / "insights"
+                    staged_vtts.mkdir()
+                    staged_insights.mkdir()
+                    analyzer_inputs: list[Path] = []
+                    for snapshot in missing_insights:
+                        staged = staged_vtts / snapshot.path.name
+                        staged.write_bytes(snapshot.content)
+                        analyzer_inputs.append(staged)
+                    backend = backend_resolver(effective)
+                    analyze_many(
+                        analyzer_inputs, staged_insights, backend, effective
+                    )
+                    for artifact in staged_insights.iterdir():
+                        if artifact.suffix not in {".json", ".md"}:
+                            continue
+                        _promote_regular_file(
+                            artifact, insights_fd, artifact.name
                         )
-                        for artifact in staged_insights.iterdir():
-                            if artifact.suffix not in {".json", ".md"}:
-                                continue
-                            _promote_regular_file(
-                                artifact, insights_fd, artifact.name
-                            )
             except Exception as exc:
                 failures.append(f"analysis: {type(exc).__name__}: {exc}")
             finally:

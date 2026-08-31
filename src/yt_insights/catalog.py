@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import hashlib
 import ctypes
 import fcntl
+import hashlib
 import json
 import math
 import os
@@ -14,23 +14,23 @@ import sqlite3
 import stat
 import tempfile
 import unicodedata
-from contextlib import contextmanager
+from collections.abc import Iterable, Iterator
+from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Iterable, Iterator
+from typing import Any, cast
 from urllib.parse import urlparse
 
 from .cleaner import clean_vtt
 from .downloader import (
+    _DIRECTORY_FLAGS,
     VideoInfo,
     VideoListResult,
     _confined_directory,
-    _DIRECTORY_FLAGS,
     _list_regular_names,
     _read_regular_at,
 )
-
 
 _SCHEMA_VERSION = 2
 _ARTIFACT_NAME = re.compile(
@@ -203,10 +203,8 @@ def _remove_catalog_stage(parent_fd: int, staging_name: str | None) -> None:
         f"{staging_name}-wal",
         f"{staging_name}-shm",
     ):
-        try:
+        with suppress(FileNotFoundError):
             os.unlink(name, dir_fd=parent_fd)
-        except FileNotFoundError:
-            pass
 
 
 def _cleanup_stale_catalog_stages(parent_fd: int, database_name: str) -> None:
@@ -623,13 +621,15 @@ class Catalog:
             if requested_path.is_absolute()
             else (Path.cwd() / requested_path).absolute()
         )
-        self._connection: sqlite3.Connection | None = None
+        self._connection_or_none: sqlite3.Connection | None = None
         self._database_identity: _CatalogIdentity | None = None
         self._staging_name: str | None = None
         self._preserve_staging_on_error = False
-        self._directory_context = _held_catalog_parent(self.db_path.parent)
+        self._directory_context: AbstractContextManager[int] | None = (
+            _held_catalog_parent(self.db_path.parent)
+        )
         self._parent_fd = self._directory_context.__enter__()
-        self._lock_context = None
+        self._lock_context: AbstractContextManager[None] | None = None
         try:
             database_identity = _catalog_database_identity(
                 self._parent_fd, self.db_path.name
@@ -675,7 +675,7 @@ class Catalog:
             self.close(publish=False)
             raise
 
-    def __enter__(self) -> "Catalog":
+    def __enter__(self) -> Catalog:
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:
@@ -690,14 +690,22 @@ class Catalog:
                 return
             raise
 
+    @property
+    def _connection(self) -> sqlite3.Connection:
+        return cast(sqlite3.Connection, self._connection_or_none)
+
+    @_connection.setter
+    def _connection(self, connection: sqlite3.Connection | None) -> None:
+        self._connection_or_none = connection
+
     @staticmethod
-    def open_read_only(db_path: Path) -> "ReadOnlyCatalog":
+    def open_read_only(db_path: Path) -> ReadOnlyCatalog:
         """Open catalog discovery queries without locks, journals, or writes."""
         return ReadOnlyCatalog(db_path)
 
     def close(self, *, publish: bool = True) -> None:
-        connection = self._connection
-        self._connection = None
+        connection = self._connection_or_none
+        self._connection_or_none = None
         publish_error: BaseException | None = None
         try:
             if connection is not None:
@@ -780,7 +788,7 @@ class Catalog:
                 f"preserved at {self._staging_name}: "
                 f"{type(final_rollback_error).__name__}: {final_rollback_error}"
             )
-            raise primary_error
+            raise primary_error  # noqa: B904 - preserve primary exception semantics
 
     def _publish_staged_database(self) -> None:
         if self._staging_name is None:
@@ -916,7 +924,7 @@ class Catalog:
             connection.close()
 
     def _create_schema(self, *, existing: bool) -> None:
-        if self._connection is None:
+        if self._connection_or_none is None:
             raise CatalogError("catalog database is closed")
         if existing:
             quick_check = self._connection.execute("PRAGMA quick_check").fetchone()
@@ -1026,7 +1034,9 @@ class Catalog:
             """,
             (str(corpus_root), started_at),
         )
-        run_id = int(cursor.lastrowid)
+        if cursor.lastrowid is None:
+            raise RuntimeError("catalog ingestion run id is unavailable")
+        run_id = cursor.lastrowid
         self._connection.commit()
         items_seen = 0
         items_written = 0
@@ -1206,7 +1216,9 @@ class Catalog:
             """,
             (source, started_at),
         )
-        run_id = int(cursor.lastrowid)
+        if cursor.lastrowid is None:
+            raise RuntimeError("catalog discovery run id is unavailable")
+        run_id = cursor.lastrowid
         slug = _source_slug(source)
         items_written = 0
 
@@ -1571,7 +1583,7 @@ class ReadOnlyCatalog:
             self.close()
             raise CatalogError("catalog database is unavailable or invalid") from exc
 
-    def __enter__(self) -> "ReadOnlyCatalog":
+    def __enter__(self) -> ReadOnlyCatalog:
         return self
 
     def __exit__(self, exc_type: object, exc: object, traceback: object) -> None:

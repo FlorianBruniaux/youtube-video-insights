@@ -5,11 +5,11 @@ import os
 from pathlib import Path
 
 import pytest
+
 from yt_insights import analyzer
 from yt_insights.analyzer import analyze_video
-from yt_insights.config import Config
 from yt_insights.cleaner import clean_vtt
-
+from yt_insights.config import Config
 
 INSIGHT_DATA = {
     "subject": "Reliable agent delivery",

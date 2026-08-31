@@ -1,12 +1,11 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
-
 
 REPOSITORY_ROOT = Path(__file__).parents[1]
 SCRIPT = REPOSITORY_ROOT / "scripts" / "validate_cumulative_research_gates.py"

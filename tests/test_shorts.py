@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from yt_insights import analyzer
 from yt_insights.config import Config
 from yt_insights.shorts import suggest_shorts
 

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from hashlib import sha256
 from math import isfinite
 from pathlib import PurePosixPath
-import re
-
 
 _SHA256_RE = re.compile(r"[0-9a-f]{64}")
 _VIDEO_ID_RE = re.compile(r"[A-Za-z0-9_-]{11}")
@@ -51,7 +50,7 @@ def compute_document_id(channel_id: str, video_id: str, language: str) -> str:
     _require_video_id(video_id)
     _require_nonblank("language", language)
     _require_no_nul("language", language)
-    return sha256(f"{channel_id}\0{video_id}\0{language}".encode("utf-8")).hexdigest()
+    return sha256(f"{channel_id}\0{video_id}\0{language}".encode()).hexdigest()
 
 
 def compute_passage_id(

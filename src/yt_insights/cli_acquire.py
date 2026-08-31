@@ -73,7 +73,7 @@ def acquire(
 
     config = load_config({"data_root": data_root, "backend": backend})
     snapshot_urls: tuple[str, ...] = ()
-    discovery_sources = (source,)
+    discovery_sources: tuple[str, ...] = (source,)
     if source_kind is SourceKind.BATCH:
         try:
             snapshot_urls = read_batch_snapshot(Path(source))

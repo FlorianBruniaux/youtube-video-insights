@@ -17,6 +17,12 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import TypedDict
+
+
+class TimestampedSegment(TypedDict):
+    start: float
+    text: str
 
 
 def ts_to_seconds(ts: str) -> float:
@@ -39,7 +45,7 @@ def _strip_markup(text: str) -> str:
     return " ".join(text.split()).strip()
 
 
-def parse_vtt_timestamped(vtt_path: Path) -> list[dict]:
+def parse_vtt_timestamped(vtt_path: Path) -> list[TimestampedSegment]:
     """Parse a YouTube VTT file into deduplicated timestamped segments.
 
     Returns list of {'start': float (seconds), 'text': str}, sorted by start.
@@ -70,12 +76,16 @@ def parse_vtt_timestamped(vtt_path: Path) -> list[dict]:
         if clean not in seen:
             seen[clean] = current_ts
 
-    result = [{"start": ts, "text": txt} for txt, ts in seen.items()]
+    result: list[TimestampedSegment] = [
+        {"start": ts, "text": txt} for txt, ts in seen.items()
+    ]
     result.sort(key=lambda x: x["start"])
     return result
 
 
-def format_timestamped_transcript(segments: list[dict], max_chars: int = 18_000) -> str:
+def format_timestamped_transcript(
+    segments: list[TimestampedSegment], max_chars: int = 18_000
+) -> str:
     """Format segments as '[HH:MM:SS] text' lines for LLM input.
 
     Truncates at max_chars to stay within context windows.

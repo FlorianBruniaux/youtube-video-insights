@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import fcntl
+import json
 import os
 import sqlite3
 import stat
@@ -16,7 +16,6 @@ import pytest
 from yt_insights.catalog import Catalog, CatalogError
 from yt_insights.cleaner import clean_vtt
 from yt_insights.downloader import VideoInfo, VideoListResult
-
 
 VIDEO_ID = "abc123DEF45"
 
@@ -109,9 +108,11 @@ def test_read_only_catalog_rejects_duplicate_heavy_generators_after_1000_items(
             items_yielded += 1
             yield "aaaaaaaaaaa"
 
-    with Catalog.open_read_only(database) as reader:
-        with pytest.raises(ValueError, match="1000"):
-            reader.existing_video_ids(duplicate_ids())
+    with (
+        Catalog.open_read_only(database) as reader,
+        pytest.raises(ValueError, match="1000"),
+    ):
+        reader.existing_video_ids(duplicate_ids())
 
     assert items_yielded == 1_001
 
@@ -168,10 +169,12 @@ class CatalogImportTests(unittest.TestCase):
                     vtt.symlink_to(outside)
                 return names
 
-            with patch.object(catalog_module, "_list_regular_names", swapping_list):
-                with Catalog(base / "catalog.sqlite3") as catalog:
-                    summary = catalog.import_corpus(corpus)
-                    stats = catalog.stats()
+            with (
+                patch.object(catalog_module, "_list_regular_names", swapping_list),
+                Catalog(base / "catalog.sqlite3") as catalog,
+            ):
+                summary = catalog.import_corpus(corpus)
+                stats = catalog.stats()
 
             self.assertEqual(summary.items_seen, 0)
             self.assertEqual(stats.videos, 0)
@@ -525,7 +528,7 @@ class CatalogDiscoveryTests(unittest.TestCase):
         cases = {
             "https://www.youtube.com/@safe\x00name/videos": "safe-name",
             "https://www.youtube.com/@safe\\name/videos": "safe-name",
-            "https://www.youtube.com/@／etc／passwd/videos": "etc-passwd",
+            "https://www.youtube.com/@／etc／passwd/videos": "etc-passwd",  # noqa: RUF001
             r"C:\secret": "secret",
             "/absolute/path": "path",
         }
@@ -600,9 +603,11 @@ class CatalogDiscoveryTests(unittest.TestCase):
                     connection.commit()
                     connection.execute("PRAGMA wal_checkpoint(TRUNCATE)")
 
-                with Catalog.open_read_only(database) as reader:
-                    with self.assertRaisesRegex(CatalogError, "catalog row is invalid"):
-                        reader.list_corpora()
+                with (
+                    Catalog.open_read_only(database) as reader,
+                    self.assertRaisesRegex(CatalogError, "catalog row is invalid"),
+                ):
+                    reader.list_corpora()
 
     def test_discovery_upserts_videos_and_persists_partial_errors(self) -> None:
         result = VideoListResult(
@@ -623,13 +628,15 @@ class CatalogDiscoveryTests(unittest.TestCase):
         )
         source = "https://www.youtube.com/@example/videos"
 
-        with tempfile.TemporaryDirectory() as tmp:
-            with Catalog(Path(tmp) / "catalog.sqlite3") as catalog:
-                first = catalog.ingest_discovery(source, result)
-                second = catalog.ingest_discovery(source, result)
-                stats = catalog.stats()
-                errors = catalog.list_errors()
-                found = catalog.search("agent observability", source="example")
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            Catalog(Path(tmp) / "catalog.sqlite3") as catalog,
+        ):
+            first = catalog.ingest_discovery(source, result)
+            second = catalog.ingest_discovery(source, result)
+            stats = catalog.stats()
+            errors = catalog.list_errors()
+            found = catalog.search("agent observability", source="example")
 
         self.assertEqual(first.status, "partial")
         self.assertEqual(first.items_seen, 2)
@@ -808,7 +815,9 @@ def test_import_rejects_corpus_root_replaced_after_identity_check(tmp_path: Path
         with original_confined_directory(*args, **kwargs) as descriptor:
             yield descriptor
 
-    with patch.object(catalog_module, "_confined_directory", replace_root_before_open):
+    with patch.object(  # noqa: SIM117
+        catalog_module, "_confined_directory", replace_root_before_open
+    ):
         with Catalog(database) as catalog:
             with pytest.raises(ValueError, match="corpus root changed"):
                 catalog.import_corpus(corpus)
@@ -1038,16 +1047,15 @@ def test_writer_parent_swap_after_lock_never_mutates_replacement(
 
     monkeypatch.setattr(catalog_module, "catalog_writer_lock", lock_then_swap)
 
-    with pytest.raises(CatalogError):
-        with Catalog(live_database) as catalog:
-            catalog.ingest_discovery(
-                "https://www.youtube.com/@source/videos",
-                VideoListResult(
-                    videos=[VideoInfo("fresh123ABC", "Mutating title", "20260828")],
-                    errors=[],
-                    returncode=0,
-                ),
-            )
+    with pytest.raises(CatalogError), Catalog(live_database) as catalog:
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo("fresh123ABC", "Mutating title", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
 
     assert swapped is True
     assert (live_parent / "catalog.sqlite3").read_bytes() == replacement_before
@@ -1091,9 +1099,8 @@ def test_writer_database_swap_after_lock_never_opens_replacement(
 
     monkeypatch.setattr(catalog_module, "catalog_writer_lock", lock_then_swap)
 
-    with pytest.raises(CatalogError):
-        with Catalog(database):
-            pass
+    with pytest.raises(CatalogError), Catalog(database):
+        pass
 
     assert swapped is True
     assert database.read_bytes() == replacement_before
@@ -1115,17 +1122,19 @@ def test_writer_discards_staging_when_context_is_interrupted(tmp_path: Path) -> 
         catalog.checkpoint()
     before_database = database.read_bytes()
 
-    with pytest.raises(RuntimeError, match="interrupt"):
-        with Catalog(database) as catalog:
-            catalog.ingest_discovery(
-                "https://www.youtube.com/@source/videos",
-                VideoListResult(
-                    videos=[VideoInfo("fresh123ABC", "Unpublished title", "20260828")],
-                    errors=[],
-                    returncode=0,
-                ),
-            )
-            raise RuntimeError("interrupt before publish")
+    with (
+        pytest.raises(RuntimeError, match="interrupt"),
+        Catalog(database) as catalog,
+    ):
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo("fresh123ABC", "Unpublished title", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
+        raise RuntimeError("interrupt before publish")
 
     assert database.read_bytes() == before_database
     assert not database.with_name(database.name + "-wal").exists()
@@ -1184,16 +1193,18 @@ def test_writer_atomic_exchange_restores_concurrent_file_replacement(
         catalog_module, "_exchange_catalog_names", swap_then_exchange
     )
 
-    with pytest.raises(CatalogError, match="changed during publication"):
-        with Catalog(database) as catalog:
-            catalog.ingest_discovery(
-                "https://www.youtube.com/@source/videos",
-                VideoListResult(
-                    videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
-                    errors=[],
-                    returncode=0,
-                ),
-            )
+    with (
+        pytest.raises(CatalogError, match="changed during publication"),
+        Catalog(database) as catalog,
+    ):
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
 
     assert swapped is True
     assert database.read_bytes() == replacement_before
@@ -1238,16 +1249,18 @@ def test_writer_atomic_exchange_rolls_back_when_parent_is_replaced_at_publish(
         catalog_module, "_exchange_catalog_names", swap_then_exchange
     )
 
-    with pytest.raises(CatalogError, match="parent path changed"):
-        with Catalog(database) as catalog:
-            catalog.ingest_discovery(
-                "https://www.youtube.com/@source/videos",
-                VideoListResult(
-                    videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
-                    errors=[],
-                    returncode=0,
-                ),
-            )
+    with (
+        pytest.raises(CatalogError, match="parent path changed"),
+        Catalog(database) as catalog,
+    ):
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
 
     assert swapped is True
     assert (live_parent / database.name).read_bytes() == replacement_before
@@ -1278,16 +1291,18 @@ def test_writer_rolls_back_when_parent_fsync_fails(
 
     monkeypatch.setattr(catalog_module.os, "fsync", fail_directory_fsync)
 
-    with pytest.raises(OSError, match="directory fsync witness"):
-        with Catalog(database) as catalog:
-            catalog.ingest_discovery(
-                "https://www.youtube.com/@source/videos",
-                VideoListResult(
-                    videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
-                    errors=[],
-                    returncode=0,
-                ),
-            )
+    with (
+        pytest.raises(OSError, match="directory fsync witness"),
+        Catalog(database) as catalog,
+    ):
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
 
     assert database.read_bytes() == before
 
@@ -1325,9 +1340,11 @@ def test_writer_preserves_publish_error_when_stage_cleanup_also_fails(
     monkeypatch.setattr(catalog_module, "_exchange_catalog_names", fail_publish)
     monkeypatch.setattr(catalog_module, "_remove_catalog_stage", fail_cleanup)
 
-    with pytest.raises(CatalogError, match="primary publication failure") as raised:
-        with Catalog(database):
-            pass
+    with (
+        pytest.raises(CatalogError, match="primary publication failure") as raised,
+        Catalog(database),
+    ):
+        pass
 
     assert any("secondary cleanup failure" in note for note in raised.value.__notes__)
 
@@ -1369,16 +1386,18 @@ def test_writer_retries_rollback_below_wrapper_and_preserves_primary_error(
     )
     monkeypatch.setattr(catalog_module.os, "fsync", fail_directory_fsync)
 
-    with pytest.raises(OSError, match="primary fsync witness") as raised:
-        with Catalog(database) as catalog:
-            catalog.ingest_discovery(
-                "https://www.youtube.com/@source/videos",
-                VideoListResult(
-                    videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
-                    errors=[],
-                    returncode=0,
-                ),
-            )
+    with (
+        pytest.raises(OSError, match="primary fsync witness") as raised,
+        Catalog(database) as catalog,
+    ):
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
 
     assert exchanges == 2
     assert database.read_bytes() == before
@@ -1397,9 +1416,11 @@ def test_writer_body_error_survives_stage_cleanup_failure(
 
     monkeypatch.setattr(catalog_module, "_remove_catalog_stage", fail_cleanup)
 
-    with pytest.raises(RuntimeError, match="business failure") as raised:
-        with Catalog(database):
-            raise RuntimeError("business failure")
+    with (
+        pytest.raises(RuntimeError, match="business failure") as raised,
+        Catalog(database),
+    ):
+        raise RuntimeError("business failure")
 
     assert any("cleanup witness" in note for note in raised.value.__notes__)
 
@@ -1450,16 +1471,18 @@ def test_writer_preserves_old_stage_when_both_rollback_attempts_fail(
     )
     monkeypatch.setattr(catalog_module.os, "fsync", fail_directory_fsync)
 
-    with pytest.raises(OSError, match="primary fsync witness") as raised:
-        with Catalog(database) as catalog:
-            catalog.ingest_discovery(
-                "https://www.youtube.com/@source/videos",
-                VideoListResult(
-                    videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
-                    errors=[],
-                    returncode=0,
-                ),
-            )
+    with (
+        pytest.raises(OSError, match="primary fsync witness") as raised,
+        Catalog(database) as catalog,
+    ):
+        catalog.ingest_discovery(
+            "https://www.youtube.com/@source/videos",
+            VideoListResult(
+                videos=[VideoInfo("fresh123ABC", "New title", "20260828")],
+                errors=[],
+                returncode=0,
+            ),
+        )
 
     preserved = list(tmp_path.glob(f".{database.name}.stage-*"))
     assert len(preserved) == 1

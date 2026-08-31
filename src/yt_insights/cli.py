@@ -15,6 +15,13 @@ from .backends import (
     sanitize_endpoint,
 )
 from .backends.base import BackendNotFoundError, BackendUnavailableError
+from .catalog import RunSummary
+from .cli_acquire import acquire
+from .cli_doctor import doctor_command
+from .cli_export import export_group
+from .cli_research import research_group
+from .cli_search import index_command, search_command
+from .cli_setup import setup_group
 from .config import BACKEND_NAMES, CONFIG_TOML_TEMPLATE, load_config
 
 SortKey = Literal["date-desc", "date-asc", "title"]
@@ -153,8 +160,13 @@ def run(
     or a path to a local file containing one URL per line.
     """
     from .analyzer import analyze_all
-    from .downloader import VideoInfo, download_subtitles, list_videos, vtt_to_video_info
-    from .reporter import generate_report, load_insights
+    from .downloader import (
+        VideoInfo,
+        download_subtitles,
+        list_videos,
+        vtt_to_video_info,
+    )
+    from .reporter import generate_report
 
     # Config
     overrides: dict = {
@@ -168,14 +180,15 @@ def run(
         overrides["transcripts_dir"] = base / "transcripts"
         overrides["insights_dir"] = base / "insights"
     config = load_config(overrides)
+    paths = config.data_paths
 
     # Backend (lazy probe)
     try:
-        backend = resolve_backend(config)
+        resolved_backend = resolve_backend(config)
     except BackendNotFoundError as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
-    _echo_resolved_backend(backend)
+    _echo_resolved_backend(resolved_backend)
 
     # Pick mode: fuzzy interactive video selection
     vtt_files: list[Path] = []
@@ -183,10 +196,10 @@ def run(
         from InquirerPy import inquirer
 
         if skip_download:
-            all_vtts = sorted(config.transcripts_dir.glob("*.vtt"))
+            all_vtts = sorted(paths.transcripts.glob("*.vtt"))
             if not all_vtts:
                 click.echo(
-                    f"No VTT files found in {config.transcripts_dir}/. "
+                    f"No VTT files found in {paths.transcripts}/. "
                     "Remove --skip-download to fetch them first.",
                     err=True,
                 )
@@ -206,7 +219,10 @@ def run(
         # Use display strings as choices; look up VideoInfo after selection.
         # Avoids InquirerPy Choice.value inconsistencies across versions.
         choice_labels = [f"{v.formatted_date}  {v.title}" for v in videos]
-        label_to_video = {label: v for label, v in zip(choice_labels, videos)}
+        label_to_video = {
+            label: video
+            for label, video in zip(choice_labels, videos, strict=True)
+        }
 
         selected_labels: list[str] = inquirer.fuzzy(
             message=f"Search and select videos ({len(videos)} available, Tab to toggle):",
@@ -227,7 +243,7 @@ def run(
                 click.echo(f"  Downloading: {v.title}")
                 dl = download_subtitles(
                     v.watch_url,
-                    config.transcripts_dir,
+                    paths.transcripts,
                     sleep_requests=sleep_requests,
                     cookies_from_browser=cookies_from_browser,
                     sub_langs=config.sub_langs,
@@ -239,11 +255,11 @@ def run(
                     # and skipped without a "already exists" message.
                     # Fall back to scanning by video_id.
                     existing = [
-                        f for f in config.transcripts_dir.glob("*.vtt")
+                        f for f in paths.transcripts.glob("*.vtt")
                         if v.video_id in f.name
                     ]
                     if existing:
-                        click.echo(f"    (using cached VTT)")
+                        click.echo("    (using cached VTT)")
                         vtt_files.extend(existing)
                 if dl.errors:
                     for e in dl.errors[:2]:
@@ -258,7 +274,7 @@ def run(
             click.echo(f"Downloading subtitles from {source} ...")
             result = download_subtitles(
                 source,
-                config.transcripts_dir,
+                paths.transcripts,
                 sleep_requests=sleep_requests,
                 cookies_from_browser=cookies_from_browser,
                 sub_langs=config.sub_langs,
@@ -274,16 +290,16 @@ def run(
             _vid_match = _re.search(r"[?&]v=([A-Za-z0-9_-]{11})", source)
             if _vid_match:
                 vid_id = _vid_match.group(1)
-                vtt_files = [f for f in config.transcripts_dir.glob("*.vtt") if vid_id in f.name]
+                vtt_files = [f for f in paths.transcripts.glob("*.vtt") if vid_id in f.name]
                 if not vtt_files:
                     click.echo(
-                        f"No cached VTT for video {vid_id} in {config.transcripts_dir}/. "
+                        f"No cached VTT for video {vid_id} in {paths.transcripts}/. "
                         "Remove --skip-download to fetch it.",
                         err=True,
                     )
                     sys.exit(1)
             else:
-                vtt_files = sorted(config.transcripts_dir.glob("*.vtt"))
+                vtt_files = sorted(paths.transcripts.glob("*.vtt"))
             click.echo(f"Found {len(vtt_files)} existing VTT file(s).")
 
     if not vtt_files:
@@ -296,13 +312,13 @@ def run(
     # Analyze
     click.echo(
         f"\nAnalyzing {len(vtt_files)} video(s) with model "
-        f"'{backend.identity.model}' ..."
+        f"'{resolved_backend.identity.model}' ..."
     )
     try:
         insights = analyze_all(
             vtt_files,
-            config.insights_dir,
-            backend,
+            paths.insights,
+            resolved_backend,
             config,
             force=force,
             on_transcript_usage=lambda _path, usage: click.echo(usage.format_message()),
@@ -311,7 +327,7 @@ def run(
         click.echo(f"Error: backend unavailable — {exc}", err=True)
         sys.exit(1)
     finally:
-        backend.close()
+        resolved_backend.close()
 
     if not insights:
         click.echo("No usable insights generated.", err=True)
@@ -324,7 +340,7 @@ def run(
             click.echo(f"    {md_path}")
 
     # Report
-    report_path = config.insights_dir / "AGGREGATE_REPORT.md"
+    report_path = paths.insights / "AGGREGATE_REPORT.md"
     click.echo("\nGenerating aggregate report ...")
     report_backend: ResolvedBackend | None = None
     try:
@@ -367,32 +383,33 @@ def report(
     config = load_config(
         {"model": model, "base_url": base_url, "backend": backend}
     )
+    paths = config.data_paths
 
-    insights = load_insights(config.insights_dir)
+    insights = load_insights(paths.insights)
     if not insights:
         click.echo(
-            f"No insight JSON files found in {config.insights_dir}/. "
+            f"No insight JSON files found in {paths.insights}/. "
             "Run 'yt-insights run' first.",
             err=True,
         )
         sys.exit(1)
 
-    report_path = Path(output) if output else config.insights_dir / "AGGREGATE_REPORT.md"
+    report_path = Path(output) if output else paths.insights / "AGGREGATE_REPORT.md"
 
     try:
-        backend = resolve_backend(config)
+        resolved_backend = resolve_backend(config)
     except BackendNotFoundError as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
-    _echo_resolved_backend(backend)
+    _echo_resolved_backend(resolved_backend)
 
     try:
-        generate_report(insights, backend, config, report_path=report_path)
+        generate_report(insights, resolved_backend, config, report_path=report_path)
     except BackendUnavailableError as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
     finally:
-        backend.close()
+        resolved_backend.close()
 
     click.echo(f"Report written to {report_path}")
 
@@ -424,7 +441,7 @@ def suggest_shorts_cmd(
     Reads from <transcripts_dir>/*.vtt and writes suggestions to <shorts_dir>/.
     Skips already-processed talks unless --force is set.
     """
-    from .shorts import generate_index, suggest_all, suggest_shorts
+    from .shorts import generate_index, suggest_all
 
     overrides: dict = {"model": model, "base_url": base_url, "backend": backend}
     if output_dir:
@@ -433,49 +450,50 @@ def suggest_shorts_cmd(
         overrides["insights_dir"] = base / "insights"
         overrides["shorts_dir"] = base / "shorts"
     config = load_config(overrides)
+    paths = config.data_paths
 
-    config.shorts_dir.mkdir(parents=True, exist_ok=True)
+    paths.shorts.mkdir(parents=True, exist_ok=True)
 
     if index_only:
-        index_md = generate_index(config.shorts_dir)
-        index_path = config.shorts_dir / "INDEX.md"
+        index_md = generate_index(paths.shorts)
+        index_path = paths.shorts / "INDEX.md"
         index_path.write_text(index_md, encoding="utf-8")
         click.echo(f"Index regenerated: {index_path}")
         return
 
     try:
-        backend = resolve_backend(config)
+        resolved_backend = resolve_backend(config)
     except BackendNotFoundError as exc:
         click.echo(f"Error: {exc}", err=True)
         sys.exit(1)
-    _echo_resolved_backend(backend)
+    _echo_resolved_backend(resolved_backend)
 
     if vtt_path:
         vtt_files = [Path(vtt_path)]
     else:
-        vtt_files = sorted(config.transcripts_dir.glob("*.vtt"))
+        vtt_files = sorted(paths.transcripts.glob("*.vtt"))
         if not vtt_files:
             click.echo(
-                f"No VTT files found in {config.transcripts_dir}/. "
+                f"No VTT files found in {paths.transcripts}/. "
                 "Run 'yt-insights run' first.",
                 err=True,
             )
             sys.exit(1)
 
-    cached = sum(1 for f in vtt_files if (config.shorts_dir / f"{f.stem}.json").exists())
+    cached = sum(1 for f in vtt_files if (paths.shorts / f"{f.stem}.json").exists())
     to_process = len(vtt_files) - cached if not force else len(vtt_files)
     click.echo(
         f"\n{len(vtt_files)} VTT file(s) found — "
         f"{cached} cached, {to_process} to process — "
-        f"model '{backend.identity.model}'"
+        f"model '{resolved_backend.identity.model}'"
     )
 
     try:
         results = suggest_all(
             vtt_files,
-            config.insights_dir,
-            config.shorts_dir,
-            backend,
+            paths.insights,
+            paths.shorts,
+            resolved_backend,
             config,
             force=force,
             on_transcript_usage=lambda _path, usage: click.echo(usage.format_message()),
@@ -484,14 +502,14 @@ def suggest_shorts_cmd(
         click.echo(f"Error: backend unavailable — {exc}", err=True)
         sys.exit(1)
     finally:
-        backend.close()
+        resolved_backend.close()
 
     total_suggestions = sum(len(r.suggestions) for r in results)
     click.echo(f"\n{len(results)} talk(s) processed, {total_suggestions} suggestion(s) generated.")
 
     click.echo("Generating global index ...")
-    index_md = generate_index(config.shorts_dir)
-    index_path = config.shorts_dir / "INDEX.md"
+    index_md = generate_index(paths.shorts)
+    index_path = paths.shorts / "INDEX.md"
     index_path.write_text(index_md, encoding="utf-8")
     click.echo(f"  Index -> {index_path}")
     click.echo("Done.")
@@ -533,7 +551,7 @@ def generate_short_cmd(
     from .shorts import generate_short_clip
 
     config = load_config({})
-    clips_dir = Path(output_dir) if output_dir else config.shorts_clips_dir
+    clips_dir = Path(output_dir) if output_dir else config.data_paths.clips
 
     click.echo(f"Downloading clip {video_id} [{start} -> {end}] ...")
     clip_path = generate_short_clip(video_id, start, end, clips_dir, title=title, output_format=output_format)
@@ -580,7 +598,7 @@ def interactive_cmd(
 _DEFAULT_CATALOG_DB = "output/catalog.sqlite3"
 
 
-def _echo_catalog_run(summary: object) -> None:
+def _echo_catalog_run(summary: RunSummary) -> None:
     click.echo(
         f"run={summary.run_id} status={summary.status} "
         f"seen={summary.items_seen} written={summary.items_written} "
@@ -817,15 +835,7 @@ def config_show(
     width = max(len(k) for k, *_ in rows)
     for key, value, env_key, flag_val in rows:
         src = _src(env_key, flag_val, None)
-        click.echo(f"  {key:<{width}}  {str(value):<40}  # {src}")
-
-
-from .cli_acquire import acquire
-from .cli_doctor import doctor_command
-from .cli_export import export_group
-from .cli_research import research_group
-from .cli_search import index_command, search_command
-from .cli_setup import setup_group
+        click.echo(f"  {key:<{width}}  {value!s:<40}  # {src}")
 
 
 cli.add_command(acquire)

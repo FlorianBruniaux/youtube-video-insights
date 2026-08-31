@@ -1,8 +1,8 @@
 """Public-domain contract tests for the local search slice."""
 
+import math
 from dataclasses import FrozenInstanceError, fields
 from hashlib import sha256
-import math
 
 import pytest
 
@@ -17,7 +17,6 @@ from yt_insights.search.models import (
     youtube_url,
 )
 
-
 CHANNEL_ID = "UC_DEMO"
 VIDEO_ID = "dQw4w9WgXcQ"
 LANGUAGE = "en"
@@ -28,7 +27,7 @@ TEXT = "A useful transcript passage."
 def expected_document_id(
     channel_id: str = CHANNEL_ID, video_id: str = VIDEO_ID, language: str = LANGUAGE
 ) -> str:
-    return sha256(f"{channel_id}\0{video_id}\0{language}".encode("utf-8")).hexdigest()
+    return sha256(f"{channel_id}\0{video_id}\0{language}".encode()).hexdigest()
 
 
 def expected_passage_id(
@@ -150,9 +149,9 @@ def test_document_id_helper_uses_utf8_nul_separated_identity() -> None:
     (("channel\0identity", LANGUAGE), (CHANNEL_ID, "en\0identity")),
 )
 def test_document_identity_rejects_nul_delimited_components(channel_id: str, language: str) -> None:
-    with pytest.raises(ValueError, match="channel_id|language"):
+    with pytest.raises(ValueError, match=r"channel_id|language"):
         compute_document_id(channel_id, VIDEO_ID, language)
-    with pytest.raises(ValueError, match="channel_id|language"):
+    with pytest.raises(ValueError, match=r"channel_id|language"):
         make_document(channel_id=channel_id, language=language)
 
 
@@ -164,7 +163,7 @@ def test_both_nul_collision_tuples_cannot_construct_documents() -> None:
         ("alpha", f"{VIDEO_ID}\0en"),
         (f"alpha\0{VIDEO_ID}", "en"),
     ):
-        with pytest.raises(ValueError, match="channel_id|language"):
+        with pytest.raises(ValueError, match=r"channel_id|language"):
             make_document(
                 document_id=colliding_id,
                 channel_id=channel_id,

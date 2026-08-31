@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 import re
 import sqlite3
 import subprocess
 import sys
+from itertools import pairwise
 from pathlib import Path
 
 import pytest
@@ -20,7 +21,6 @@ from yt_insights.search.models import (
     compute_passage_id,
     youtube_url,
 )
-
 
 _GENERATION_ID_RE = re.compile(r"[0-9a-f]{32}")
 
@@ -94,8 +94,8 @@ def _add_document(manifest: CorpusManifest, *, channel: str, language: str, text
         youtube_url=youtube_url(video_id, 30.0),
     )
     return CorpusManifest(
-        documents=manifest.documents + (document,),
-        passages=manifest.passages + (passage,),
+        documents=(*manifest.documents, document),
+        passages=(*manifest.passages, passage),
         invalid_sources=manifest.invalid_sources,
         sources_discovered=3,
         sources_selected=2,
@@ -504,7 +504,11 @@ def test_failed_publish_leaves_prior_active_database_readable(tmp_path: Path, mo
 
 
 def test_missing_and_invalid_databases_raise_domain_errors(tmp_path: Path) -> None:
-    from yt_insights.search.sqlite_fts import SearchIndexInvalid, SearchIndexNotFound, SQLiteFtsIndex
+    from yt_insights.search.sqlite_fts import (
+        SearchIndexInvalid,
+        SearchIndexNotFound,
+        SQLiteFtsIndex,
+    )
 
     missing = SQLiteFtsIndex(tmp_path / "missing.sqlite3")
     with pytest.raises(SearchIndexNotFound):
@@ -649,7 +653,7 @@ def test_built_database_validation_grows_linearly_across_multiple_sizes() -> Non
     assert max(callbacks_per_passage) <= min(callbacks_per_passage) * 1.5
     assert all(
         larger <= smaller * 2.6 + 10
-        for smaller, larger in zip(callbacks[:-1], callbacks[1:], strict=True)
+        for smaller, larger in pairwise(callbacks)
     )
 
 

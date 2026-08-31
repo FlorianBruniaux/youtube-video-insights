@@ -7,7 +7,6 @@ from click.testing import CliRunner
 
 from yt_insights.cli_export import export_group
 
-
 VIDEO_ID = "nfupYzLjFGc"
 
 

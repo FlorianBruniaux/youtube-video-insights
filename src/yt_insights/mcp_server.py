@@ -4,11 +4,17 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Annotated, Any
 
 from mcp.server import MCPServer
+from mcp.server.context import (
+    CallNext,
+    HandlerResult,
+    ServerMiddleware,
+    ServerRequestContext,
+)
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import CallToolResult, TextContent, ToolAnnotations
 from pydantic import Field
@@ -22,7 +28,6 @@ from .search.sqlite_fts import (
     SearchPassageNotFound,
     SQLiteFtsIndex,
 )
-
 
 # Compatibility import for callers that document the historic layout. main()
 # resolves the configured database at execution time instead.
@@ -39,15 +44,15 @@ _PASSAGE_ID_RE = re.compile(r"[0-9a-f]{64}")
 _TOOL_NAMES = frozenset(
     ("list_corpora", "search_videos", "search_passages", "get_passage")
 )
-_LIST_CORPORA_ARGUMENTS = frozenset()
+_LIST_CORPORA_ARGUMENTS: frozenset[str] = frozenset()
 _VIDEO_SEARCH_ARGUMENTS = frozenset(("query", "source", "limit"))
 _SEARCH_ARGUMENTS = frozenset(("query", "channel", "language", "limit"))
 _PASSAGE_ARGUMENTS = frozenset(("passage_id",))
 _READ_ONLY_ANNOTATIONS = ToolAnnotations(
-    readOnlyHint=True,
-    destructiveHint=False,
-    idempotentHint=True,
-    openWorldHint=False,
+    read_only_hint=True,
+    destructive_hint=False,
+    idempotent_hint=True,
+    open_world_hint=False,
 )
 QueryInput = Annotated[str, Field(min_length=1, max_length=MAX_QUERY_CHARACTERS)]
 FilterInput = Annotated[str, Field(min_length=1, max_length=MAX_QUERY_CHARACTERS)]
@@ -58,7 +63,7 @@ PassageIdInput = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 def _invalid_tool_result() -> CallToolResult:
     return CallToolResult(
         content=[TextContent(type="text", text="Tool input is invalid.")],
-        isError=True,
+        is_error=True,
     )
 
 
@@ -114,10 +119,14 @@ def _has_invalid_tool_arguments(params: object) -> bool:
     )
 
 
-class _SanitizeToolInputMiddleware:
+class _SanitizeToolInputMiddleware(ServerMiddleware[Any]):
     """Reject malformed closed-world tool calls before SDK value reflection."""
 
-    async def __call__(self, context: Any, call_next: Any) -> Any:
+    async def __call__(
+        self,
+        context: ServerRequestContext[Any, Any],
+        call_next: CallNext,
+    ) -> HandlerResult:
         if context.method == "tools/call" and _has_invalid_tool_arguments(context.params):
             return _invalid_tool_result()
         return await call_next(context)
@@ -140,11 +149,11 @@ def _search_hit_payload(hit: SearchHit) -> dict[str, object]:
         "passage_id": hit.passage.passage_id,
         "rank": hit.rank,
         "score": hit.score,
-        "channel_id": _clip(hit.document.channel_id, 200),
+        "channel_id": _clip(hit.document.channel_id or "", 200),
         "channel": _clip(hit.document.channel_title, 200),
         "title": _clip(hit.document.video_title, 300),
         "language": _clip(hit.document.language, 64),
-        "excerpt": _clip(hit.excerpt, MAX_EXCERPT_CHARACTERS),
+        "excerpt": _clip(hit.excerpt or "", MAX_EXCERPT_CHARACTERS),
         "start_seconds": hit.passage.start_seconds,
         "end_seconds": hit.passage.end_seconds,
         "url": hit.passage.youtube_url,

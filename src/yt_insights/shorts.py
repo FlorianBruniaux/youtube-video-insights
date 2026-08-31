@@ -27,8 +27,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .backends import LLMBackend, backend_type
 from .analyzer import TranscriptUsageCallback, prepare_transcript_input
+from .backends import LLMBackend, backend_type
 from .cleaner import parse_title
 from .config import Config, effective_concurrency
 from .vtt_parser import (
@@ -85,7 +85,7 @@ class ShortSuggestion:
         }
 
     @classmethod
-    def from_dict(cls, d: dict) -> "ShortSuggestion":
+    def from_dict(cls, d: dict) -> ShortSuggestion:
         return cls(
             start=d.get("start", "00:00:00"),
             end=d.get("end", "00:00:30"),
@@ -426,7 +426,7 @@ def generate_short_clip(
     ]
 
     try:
-        result = subprocess.run(cmd, check=True, capture_output=False, text=True)
+        subprocess.run(cmd, check=True, capture_output=False, text=True)
     except subprocess.CalledProcessError as exc:
         warnings.warn(f"yt-dlp failed for {video_id} [{start}-{end}]: {exc}", stacklevel=2)
         return None

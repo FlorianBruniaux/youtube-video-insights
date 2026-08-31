@@ -4,18 +4,17 @@
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
-from hashlib import sha256
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
 import tempfile
 import uuid
+from contextlib import contextmanager, suppress
+from hashlib import sha256
+from pathlib import Path
 from zipfile import ZipFile
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 PACKAGE_VERSION = "0.2.0"
@@ -198,10 +197,8 @@ def _stale_build_sentinel():
             sentinel.unlink()
         for directory in reversed(directories):
             if not existed[directory]:
-                try:
+                with suppress(OSError):
                     directory.rmdir()
-                except OSError:
-                    pass
 
 
 def _verify_wheel(

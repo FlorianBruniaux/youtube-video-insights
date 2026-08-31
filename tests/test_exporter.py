@@ -23,7 +23,6 @@ from yt_insights.exporter import (
 )
 from yt_insights.paths import DataPaths
 
-
 VIDEO_ID = "nfupYzLjFGc"
 
 
@@ -34,7 +33,7 @@ def _vtt_bytes(text: str = "Bonjour le monde") -> bytes:
         f"{text}\n\n"
         "00:00:15.000 --> 00:00:17.000\n"
         "Deuxième idée\n"
-    ).encode("utf-8")
+    ).encode()
 
 
 def _write_transcript(
@@ -254,7 +253,7 @@ def test_text_export_is_normalized_utf8(tmp_path: Path) -> None:
         VideoExportRequest(VIDEO_ID, "txt", "fr", target), DataPaths.from_root(tmp_path)
     )
 
-    assert target.read_bytes() == f"{clean_vtt(source)}\n".encode("utf-8")
+    assert target.read_bytes() == f"{clean_vtt(source)}\n".encode()
 
 
 def test_markdown_export_keeps_provenance_and_timestamps(tmp_path: Path) -> None:

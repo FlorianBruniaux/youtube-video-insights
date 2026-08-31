@@ -4,20 +4,20 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Iterator, Sequence
-from contextlib import contextmanager
-from dataclasses import dataclass
 import hashlib
 import json
-from math import isfinite
 import os
-from pathlib import Path, PurePosixPath
 import re
 import sqlite3
 import stat
 import sys
 import tempfile
 import unicodedata
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from dataclasses import dataclass
+from math import isfinite
+from pathlib import Path, PurePosixPath
 
 import yt_insights as yt_insights_module
 import yt_insights.search as search_package_module
@@ -32,7 +32,6 @@ from yt_insights.search.models import SearchHit, SearchQuery, youtube_url
 from yt_insights.search.query import build_fts_expression
 from yt_insights.search.service import SearchService
 from yt_insights.search.sqlite_fts import SearchIndexError, SQLiteFtsIndex
-
 
 SCHEMA_VERSION = 1
 MAX_QUERIES_FILE_BYTES = 1_048_576
@@ -238,7 +237,7 @@ def _same_json_value(actual: object, expected: object) -> bool:
             return False
         return len(actual) == len(expected) and all(
             _same_json_value(actual_item, expected_item)
-            for actual_item, expected_item in zip(actual, expected)
+            for actual_item, expected_item in zip(actual, expected, strict=True)
         )
     return actual == expected
 

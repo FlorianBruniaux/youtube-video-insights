@@ -90,12 +90,12 @@ class VideoInsight:
     insight_path: Path
     subject: str = ""
     key_points: list[str] = field(default_factory=list)
-    tools: list[dict] = field(default_factory=list)
+    tools: list[dict[str, object] | str] = field(default_factory=list)
     advice: list[str] = field(default_factory=list)
     quotes: list[str] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, data: dict, *, title: str, vtt_path: Path, insight_path: Path) -> "VideoInsight":
+    def from_dict(cls, data: dict, *, title: str, vtt_path: Path, insight_path: Path) -> VideoInsight:
         return cls(
             title=title,
             vtt_path=vtt_path,

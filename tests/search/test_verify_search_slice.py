@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import importlib.util
-from pathlib import Path
 import sys
+from pathlib import Path
 
 import pytest
-
 
 VERIFY_SCRIPT = Path(__file__).parents[2] / "scripts" / "verify_search_slice.py"
 

@@ -5,18 +5,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import secrets
 import sqlite3
 import stat
 import tempfile
+from contextlib import suppress
+from pathlib import Path
 from typing import Any
 
 from .corpus import CorpusManifest
 from .models import BuildReport, DocumentRef, Passage, SearchHit, SearchQuery
 from .query import build_fts_expression
-
 
 _SCHEMA_VERSION = "1"
 _INDEX_VERSION = "search-v1"
@@ -96,10 +96,8 @@ class SQLiteFtsIndex:
             if connection is not None:
                 connection.close()
             if temporary_path is not None:
-                try:
+                with suppress(OSError):
                     temporary_path.unlink(missing_ok=True)
-                except OSError:
-                    pass
             if isinstance(error, SearchIndexError):
                 raise
             raise SearchIndexError("search index rebuild failed") from error
@@ -641,10 +639,12 @@ class SQLiteFtsIndex:
             """
         ):
             passage = SQLiteFtsIndex._row_to_passage(row)
-            document = documents.get(passage.document_id)
-            if document is None:
+            matched_document = documents.get(passage.document_id)
+            if matched_document is None:
                 raise ValueError("passage document is missing")
-            SearchHit(document=document, passage=passage, rank=1, score=0.0)
+            SearchHit(
+                document=matched_document, passage=passage, rank=1, score=0.0
+            )
 
     @staticmethod
     def _validate_schema(connection: sqlite3.Connection) -> None:

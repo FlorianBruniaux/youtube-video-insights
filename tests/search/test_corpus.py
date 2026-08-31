@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from hashlib import sha256
 import json
 import os
-from pathlib import Path
+import socket
 import subprocess
 import sys
-import socket
 import tempfile
+from hashlib import sha256
+from pathlib import Path
 
 import pytest
 

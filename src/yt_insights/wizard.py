@@ -321,7 +321,7 @@ def _run_suggest_shorts(vtt_files: list[Path], config, min_s: int, max_s: int, p
         print("Aucune suggestion ne correspond aux critères de durée/plateforme.", file=sys.stderr)
     else:
         print(f"{len(pairs)} suggestion(s) après filtrage :")
-        for vid_id, s in pairs:
+        for _vid_id, s in pairs:
             print(f"  [{s.score}/5] {s.start}→{s.end} ({s.duration}s) — {s.hook}")
 
     return pairs
@@ -430,6 +430,7 @@ def run_wizard(
 
     # --- Execute ---
     vtt_files: list[Path] = []
+    assert source is not None
 
     if action == "insights":
         _run_insights(source, config)

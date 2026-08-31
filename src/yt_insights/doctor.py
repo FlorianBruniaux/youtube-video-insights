@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
-from pathlib import Path
 import shutil
 import stat
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 import httpx
 
 from .config import Config
 from .search.sqlite_fts import SearchIndexError, SQLiteFtsIndex
-
 
 CheckStatus = Literal["pass", "warn", "fail", "unknown"]
 

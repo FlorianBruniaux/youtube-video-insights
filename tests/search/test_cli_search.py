@@ -5,12 +5,15 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from yt_insights.cli import cli
 from yt_insights import config as config_module
+from yt_insights.cli import cli
 from yt_insights.config import load_config
 from yt_insights.search.corpus import CorpusManifest
 from yt_insights.search.models import BuildReport
-from yt_insights.search.preflight import IndexSpacePreflightReport, InsufficientIndexSpace
+from yt_insights.search.preflight import (
+    IndexSpacePreflightReport,
+    InsufficientIndexSpace,
+)
 
 
 def _write_vtt(path: Path, *segments: tuple[int, str]) -> None:

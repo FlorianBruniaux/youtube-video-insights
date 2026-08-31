@@ -5,14 +5,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import secrets
 import stat
 import subprocess
 import tempfile
-import secrets
-from contextlib import contextmanager
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Iterator
 
 
 @dataclass
@@ -98,10 +98,12 @@ def fetch_video_list(
         if not isinstance(payload, dict):
             metadata_errors.append("yt-dlp emitted an invalid metadata record")
             continue
-        vid_id = payload.get("id")
-        title = payload.get("title")
-        upload_date = payload.get("upload_date")
-        if not isinstance(vid_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{11}", vid_id):
+        raw_video_id = payload.get("id")
+        raw_title = payload.get("title")
+        raw_upload_date = payload.get("upload_date")
+        if not isinstance(raw_video_id, str) or not re.fullmatch(
+            r"[A-Za-z0-9_-]{11}", raw_video_id
+        ):
             metadata_errors.append("yt-dlp emitted metadata without a valid video id")
             continue
         channel_id = _bounded_metadata_string(payload.get("channel_id"))
@@ -110,9 +112,11 @@ def fetch_video_list(
         )
         videos.append(
             VideoInfo(
-                video_id=vid_id,
-                title=title if isinstance(title, str) else vid_id,
-                upload_date=upload_date if isinstance(upload_date, str) else "",
+                video_id=raw_video_id,
+                title=raw_title if isinstance(raw_title, str) else raw_video_id,
+                upload_date=(
+                    raw_upload_date if isinstance(raw_upload_date, str) else ""
+                ),
                 channel_id=channel_id,
                 channel_title=channel_title,
             )
@@ -197,7 +201,9 @@ def _list_regular_names(
             details = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
         except OSError:
             if reject_unsafe:
-                raise ValueError(f"directory entry changed during inventory: {name}")
+                raise ValueError(  # noqa: B904 - preserve filesystem error context
+                    f"directory entry changed during inventory: {name}"
+                )
             continue
         if not stat.S_ISREG(details.st_mode):
             if reject_unsafe:
@@ -276,10 +282,8 @@ def _copy_regular_at(directory_fd: int, name: str, destination: Path) -> None:
         ):
             raise ValueError(f"file changed while being copied: {name}")
     except Exception:
-        try:
+        with suppress(OSError):
             destination.unlink(missing_ok=True)
-        except OSError:
-            pass
         raise
     finally:
         if destination_fd is not None:
@@ -453,16 +457,16 @@ def _promote_regular_file(source: Path, destination_fd: int, name: str) -> bool:
         except FileExistsError:
             existing = os.stat(name, dir_fd=destination_fd, follow_symlinks=False)
             if not stat.S_ISREG(existing.st_mode):
-                raise ValueError(f"destination changed to a non-regular file: {name}")
+                raise ValueError(  # noqa: B904 - preserve filesystem error context
+                    f"destination changed to a non-regular file: {name}"
+                )
             return False
     finally:
         if temporary_fd is not None:
             os.close(temporary_fd)
         os.close(source_fd)
-        try:
+        with suppress(FileNotFoundError):
             os.unlink(temporary_name, dir_fd=destination_fd)
-        except FileNotFoundError:
-            pass
 
 
 def list_videos(source: str, *, cookies_from_browser: str | None = None) -> list[VideoInfo]:

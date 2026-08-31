@@ -7,7 +7,7 @@ since mlx-lm has no streaming API.
 
 from __future__ import annotations
 
-from typing import Iterator
+from collections.abc import Iterator
 
 from ..config import Config
 
@@ -22,8 +22,8 @@ class MLXBackend:
             ) from exc
         self._config = config
         self._mlx_lm = mlx_lm
-        self._model = None
-        self._tokenizer = None
+        self._model: object | None = None
+        self._tokenizer: object | None = None
 
     def _ensure_loaded(self) -> tuple[object, object]:
         if self._model is None or self._tokenizer is None:

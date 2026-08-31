@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import re
 
-
 _TOKENS = re.compile(r"\w+", re.UNICODE)
 _MAX_QUERY_CODEPOINTS = 500
 

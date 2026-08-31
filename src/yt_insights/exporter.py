@@ -2,19 +2,19 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from hashlib import sha256
 import json
 import os
-from pathlib import Path
 import re
 import stat
+from contextlib import suppress
+from dataclasses import dataclass
+from hashlib import sha256
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
 from .cleaner import clean_vtt
 from .paths import DataPaths
 from .vtt_parser import parse_vtt_timestamped, seconds_to_hms
-
 
 _VIDEO_ID_RE = re.compile(r"[A-Za-z0-9_-]{11}")
 _VTT_NAME_RE = re.compile(
@@ -619,10 +619,8 @@ def _write_bounded_default(
     directory_fd = steps[-1].directory_fd
     _write_atomic_at(directory_fd, filename, payload, force=force)
     if not _directory_path_matches(anchor, anchor_identity) or not _directory_steps_match(steps):
-        try:
+        with suppress(NotImplementedError, OSError):
             os.unlink(filename, dir_fd=directory_fd)
-        except (NotImplementedError, OSError):
-            pass
         raise UnsafeExportTarget("configured exports directory changed during publication")
 
 
@@ -696,7 +694,7 @@ def export_video(request: VideoExportRequest, paths: DataPaths) -> ExportResult:
         if output_format == "vtt":
             payload = source_bytes
         elif output_format == "txt":
-            payload = f"{clean_vtt(snapshot)}\n".encode("utf-8")  # type: ignore[arg-type]
+            payload = f"{clean_vtt(snapshot)}\n".encode()  # type: ignore[arg-type]
         else:
             payload = _markdown(resolved, source_hash, snapshot).encode("utf-8")
 

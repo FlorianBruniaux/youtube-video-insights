@@ -10,19 +10,18 @@ failed critical gate.
 from __future__ import annotations
 
 import argparse
-from dataclasses import asdict, dataclass
 import hashlib
 import importlib
 import json
 import os
-from pathlib import Path, PurePosixPath
 import re
 import subprocess
 import sys
 import time
+from dataclasses import asdict, dataclass
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qs, urlparse
-
 
 SOURCE_FILENAME_RE = re.compile(
     r"^(?:(?:\d{8}) - )?(?P<title>.+?) \[(?P<video_id>[A-Za-z0-9_-]{11})\]\.(?P<language>[A-Za-z0-9-]+)\.vtt$"

@@ -7,10 +7,9 @@ from types import SimpleNamespace
 
 from click.testing import CliRunner
 
-from yt_insights.cli import cli
-from yt_insights.config import Config
 from yt_insights.backends import BackendIdentity, ResolvedBackend
 from yt_insights.backends.base import BackendUnavailableError
+from yt_insights.cli import cli
 
 
 def _resolved_fake(backend, *, model: str = "qwen3:8b") -> ResolvedBackend:
@@ -232,7 +231,9 @@ def test_run_closes_report_backend_when_report_generation_fails(
     tmp_path: Path, sample_fr_vtt: Path, monkeypatch, fake_backend_factory
 ) -> None:
     """Detects leaking the second backend after report generation fails."""
-    from yt_insights import analyzer, cli as cli_module, config as config_module, reporter
+    from yt_insights import analyzer, reporter
+    from yt_insights import cli as cli_module
+    from yt_insights import config as config_module
 
     output_dir = tmp_path / "output"
     transcripts = output_dir / "transcripts"

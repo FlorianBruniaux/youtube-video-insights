@@ -20,7 +20,6 @@ from .search.preflight import (
 from .search.service import SearchService
 from .search.sqlite_fts import SearchIndexError, SearchIndexNotFound, SQLiteFtsIndex
 
-
 # Compatibility imports for callers that still document the historic layout.
 # Command defaults resolve from Config.data_paths only when a command executes.
 DEFAULT_CORPUS_ROOT = Path("output")
@@ -66,6 +65,8 @@ def _configured_paths(
     """Resolve option defaults only when a command is executed."""
     configured = load_config({}).data_paths
     if _parameter_is_explicit(context, "corpus_root"):
+        if corpus_root is None:
+            raise click.ClickException("Explicit corpus root is missing.")
         corpus_paths = DataPaths.from_root(corpus_root)
         resolved_corpus_root = corpus_paths.root
         resolved_database = (
@@ -80,6 +81,8 @@ def _configured_paths(
             if _parameter_is_explicit(context, "database")
             else configured.search_database
         )
+    if resolved_database is None:
+        raise click.ClickException("Explicit search database is missing.")
     return resolved_corpus_root, resolved_database
 
 
@@ -96,7 +99,7 @@ def _hit_payload(hit: SearchHit) -> dict[str, int | str]:
         "channel": hit.document.channel_title,
         "title": hit.document.video_title,
         "language": hit.document.language,
-        "excerpt": hit.excerpt,
+        "excerpt": hit.excerpt or "",
         "timestamp": _format_timestamp(hit.passage.start_seconds),
         "url": hit.passage.youtube_url,
         "source": hit.document.source_relpath,

@@ -21,7 +21,7 @@ class DataPaths:
     research_database: Path
 
     @classmethod
-    def from_root(cls, root: Path) -> "DataPaths":
+    def from_root(cls, root: Path) -> DataPaths:
         """Derive every location from a root without requiring it to exist."""
         resolved = root.expanduser().resolve(strict=False)
         return cls(

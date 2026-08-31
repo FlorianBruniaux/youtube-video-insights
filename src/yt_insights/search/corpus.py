@@ -2,21 +2,21 @@
 
 from __future__ import annotations
 
-from collections import deque
-from dataclasses import dataclass
-from hashlib import sha256
 import json
 import os
-from pathlib import Path
 import re
 import stat
 import tempfile
+from collections import deque
+from contextlib import suppress
+from dataclasses import dataclass
+from hashlib import sha256
+from pathlib import Path
 
-from yt_insights.vtt_parser import parse_vtt_timestamped
+from yt_insights.vtt_parser import TimestampedSegment, parse_vtt_timestamped
 
 from .chunker import build_passages
 from .models import DocumentRef, Passage, compute_document_id
-
 
 _FILENAME_RE = re.compile(
     r"^(?:(?:\d{8}) - )?(?P<title>.+?) \[(?P<video_id>[A-Za-z0-9_-]{11})\]\.(?P<language>[A-Za-z0-9-]+)\.vtt$"
@@ -293,10 +293,8 @@ def _read_stable_source(candidate: _CorpusSource) -> bytes:
         with os.fdopen(descriptor, "rb") as source_file:
             return source_file.read()
     except Exception:
-        try:
+        with suppress(OSError):
             os.close(descriptor)
-        except OSError:
-            pass
         raise
 
 
@@ -308,7 +306,7 @@ def _stable_file_size(candidate: _CorpusSource) -> int:
         os.close(descriptor)
 
 
-def _parse_source_bytes(source_bytes: bytes) -> list[dict]:
+def _parse_source_bytes(source_bytes: bytes) -> list[TimestampedSegment]:
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_source = Path(temporary_directory) / "source.vtt"
         temporary_source.write_bytes(source_bytes)

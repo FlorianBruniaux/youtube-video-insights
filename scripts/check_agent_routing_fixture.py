@@ -4,12 +4,11 @@
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 import json
-from pathlib import Path
 import sys
+from collections import Counter
+from pathlib import Path
 from typing import Any
-
 
 EXPECTED_MINIMUMS = {
     "youtube-acquire": 10,

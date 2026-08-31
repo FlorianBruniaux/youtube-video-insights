@@ -4,17 +4,16 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Sequence
 import json
-from math import ceil
-from pathlib import Path
 import statistics
 import sys
 import time
+from collections.abc import Sequence
+from math import ceil
+from pathlib import Path
 
 from yt_insights.search.models import SearchQuery
 from yt_insights.search.sqlite_fts import SearchIndexError, SQLiteFtsIndex
-
 
 DEFAULT_QUERIES = (
     "retrieval",

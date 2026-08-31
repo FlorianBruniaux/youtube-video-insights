@@ -27,7 +27,7 @@ class _DefaultModel(str):
     """Private marker used only when Config.model is omitted."""
 
 
-class _OmittedLegacyPath(type(Path())):
+class _OmittedLegacyPath(type(Path())):  # type: ignore[misc]
     """Path-compatible marker for an omitted legacy directory setting."""
 
 
@@ -120,7 +120,7 @@ class Config:
         api_key: str | None = None,
         model_source: str | None = None,
         base_url_source: str | None = None,
-    ) -> "Config":
+    ) -> Config:
         kwargs: dict = {"base_url": url}
         if model is not None:
             kwargs["model"] = model
@@ -250,7 +250,7 @@ def _derive_data_paths(cfg: Config) -> Config:
             if isinstance(getattr(cfg, field_name), _OmittedLegacyPath)
             else resolved
         )
-    return replace(cfg, **updates)
+    return replace(cfg, **updates)  # type: ignore[arg-type]
 
 
 CONFIG_TOML_TEMPLATE = """\
