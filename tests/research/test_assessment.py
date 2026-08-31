@@ -547,3 +547,33 @@ def test_assessment_scope_closes_catalogue_when_evidence_collection_raises(
         )
 
     assert closed == 1
+
+
+@pytest.mark.parametrize("invalid", [False, True])
+def test_assessment_scope_bounds_missing_or_invalid_catalogue_errors(
+    tmp_path: Path, invalid: bool
+) -> None:
+    search_database, catalog_database = _build_local_databases(tmp_path)
+    if invalid:
+        catalog_database.write_bytes(b"not sqlite")
+    else:
+        catalog_database.unlink()
+    query = QuerySpec("private assessment query")
+
+    with pytest.raises(AssessmentRetryableError) as raised:
+        assess_local(
+            queries=(query,),
+            profile=FreshnessProfile.FAST,
+            evidence_reader=SQLiteEvidenceReader(
+                search_database=search_database, catalog_database=catalog_database
+            ),
+            last_successful_discovery_at=None,
+            now=NOW,
+        )
+
+    assert str(raised.value) in {
+        "local evidence database is unavailable",
+        "local catalogue evidence is unavailable",
+    }
+    assert query.text not in str(raised.value)
+    assert str(catalog_database) not in str(raised.value)

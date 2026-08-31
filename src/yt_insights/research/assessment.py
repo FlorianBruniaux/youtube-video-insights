@@ -8,7 +8,7 @@ the caller retry rather than receive mixed-generation evidence.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import os
@@ -91,7 +91,15 @@ class SQLiteEvidenceReader:
     def assessment_scope(self) -> Iterator[EvidenceReader]:
         """Keep one validated catalogue snapshot alive for an assessment."""
         snapshot = self.capture_snapshot()
-        with Catalog.open_read_only(self._catalog_database) as catalog:
+        with ExitStack() as stack:
+            try:
+                catalog = stack.enter_context(
+                    Catalog.open_read_only(self._catalog_database)
+                )
+            except (CatalogError, OSError, TypeError, ValueError):
+                raise AssessmentRetryableError(
+                    "local catalogue evidence is unavailable"
+                ) from None
             self.validate_snapshot(snapshot)
             yield _CatalogEvidenceReader(self, catalog, snapshot)
 
