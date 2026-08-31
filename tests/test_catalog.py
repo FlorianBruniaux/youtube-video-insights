@@ -95,6 +95,27 @@ def test_read_only_catalog_returns_only_valid_existing_video_ids_and_detects_rep
             reader.existing_video_ids((present,))
 
 
+def test_read_only_catalog_rejects_duplicate_heavy_generators_after_1000_items(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "catalog.sqlite3"
+    with Catalog(database) as catalog:
+        catalog.checkpoint()
+    items_yielded = 0
+
+    def duplicate_ids():
+        nonlocal items_yielded
+        for _ in range(1_001):
+            items_yielded += 1
+            yield "aaaaaaaaaaa"
+
+    with Catalog.open_read_only(database) as reader:
+        with pytest.raises(ValueError, match="1000"):
+            reader.existing_video_ids(duplicate_ids())
+
+    assert items_yielded == 1_001
+
+
 class CatalogImportTests(unittest.TestCase):
     def test_import_never_follows_symlinked_layout_or_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

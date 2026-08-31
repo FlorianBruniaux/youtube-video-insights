@@ -130,6 +130,17 @@ def test_discovery_records_bounded_errors_and_refuses_an_empty_success() -> None
     assert result.completed is False
 
 
+def test_discovery_fails_closed_when_catalogue_membership_is_unavailable() -> None:
+    result = YtDlpDiscoveryProvider(
+        fetcher=lambda _: VideoListResult(videos=[_video("aaaaaaaaaaa")]),
+        existing_ids=lambda _: (_ for _ in ()).throw(RuntimeError("database replaced")),
+    ).discover((QuerySpec("valid topic"),))
+
+    assert result.candidates == ()
+    assert result.errors == ("catalog_membership_failed",)
+    assert result.completed is False
+
+
 def test_discovery_rejects_noncanonical_unicode_video_ids() -> None:
     result = YtDlpDiscoveryProvider(
         fetcher=lambda _: VideoListResult(videos=[_video("é" * 11)]),

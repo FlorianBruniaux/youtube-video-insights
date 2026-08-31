@@ -1777,7 +1777,9 @@ class ReadOnlyCatalog:
         """Return the exact valid IDs that are already present in this snapshot."""
         distinct_ids: list[str] = []
         seen: set[str] = set()
-        for video_id in video_ids:
+        for item_count, video_id in enumerate(video_ids, start=1):
+            if item_count > 1_000:
+                raise ValueError("video_ids must contain at most 1000 items")
             if not isinstance(video_id, str) or _VIDEO_ID.fullmatch(video_id) is None:
                 raise ValueError("video ID must be an 11-character YouTube identifier")
             if video_id not in seen:

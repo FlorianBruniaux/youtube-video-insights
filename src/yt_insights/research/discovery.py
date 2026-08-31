@@ -92,8 +92,14 @@ class YtDlpDiscoveryProvider:
         try:
             known_ids = self._existing_ids(tuple(candidates_by_id))
         except Exception:
-            known_ids = frozenset()
             self._append_error(errors, "catalog_membership_failed")
+            return DiscoveryResult(
+                provider_name=self.name,
+                provider_version=self.version,
+                candidates=(),
+                errors=tuple(errors),
+                completed=False,
+            )
 
         unseen = [
             metadata
