@@ -1,0 +1,21 @@
+tests/research/test_store.py
+  s_0a442347250965::t_1edfd601ed753c 173-195
+src/yt_insights/research/store.py
+  s_0a442347250965::t_fe67ca71c1546c 47-54,541
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "9e13ae5ca3f428e4bf1f27633981a483c23d625d",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
