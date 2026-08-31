@@ -575,7 +575,17 @@ class ResearchWorkflow:
         self,
         attempt: AcquisitionAttempt,
     ) -> ResearchResponse:
-        session = self._store.get_session(attempt.session_id)
+        snapshot = self._store.get_public_snapshot(attempt.session_id)
+        session = snapshot.session
+        latest_attempt = (
+            snapshot.acquisition_attempts[-1]
+            if snapshot.acquisition_attempts
+            else None
+        )
+        is_latest_attempt = (
+            latest_attempt is not None
+            and latest_attempt.attempt_id == attempt.attempt_id
+        )
         partial_failure = self._partial_attempt_id(attempt) is not None
         error_code = (
             (
@@ -584,15 +594,23 @@ class ResearchWorkflow:
                 else "acquisition_unavailable"
             )
             if attempt.status == "failed_retryable"
-            and session.state is ResearchState.FAILED_RETRYABLE
-            and session.retry_target is ResearchState.ACQUIRING
+            and is_latest_attempt
+            and (
+                (
+                    session.state is ResearchState.FAILED_RETRYABLE
+                    and session.retry_target is ResearchState.ACQUIRING
+                )
+                or session.state is ResearchState.AWAITING_SUFFICIENCY
+            )
             else (
-                "acquisition_in_progress" if attempt.status == "running" else None
+                "acquisition_in_progress"
+                if attempt.status == "running" and is_latest_attempt
+                else None
             )
         )
-        return self._response(
-            session,
-            error_code,
+        return self._response_from_snapshot(
+            snapshot,
+            error_code=error_code,
         )
 
     def _acquisition_in_progress(

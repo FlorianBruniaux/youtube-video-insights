@@ -1240,6 +1240,17 @@ def test_partial_acquisition_retries_only_failed_videos_after_reassessment(tmp_p
     assert len(refresh_calls) == 1
     assert len(workflow._store.get_session_history(SESSION_ID).assessments) == 2  # type: ignore[attr-defined]
 
+    acquisition_replay = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="partial-acquire-key",
+        language="en",
+    )
+
+    assert acquisition_replay.to_dict() == partial.to_dict()
+    assert acquisition.calls == [first.video_id, second.video_id]
+    assert len(refresh_calls) == 1
+
     retried = workflow.retry(
         SESSION_ID,
         expected_revision=partial.session.revision,
@@ -1412,6 +1423,13 @@ def test_retry_does_not_resurrect_an_old_partial_attempt_after_new_acquisition(
     )
     calls_before_retry = tuple(acquisition.calls)
 
+    old_acquisition_replay = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="partial-acquire-key",
+        language="en",
+    )
+
     with pytest.raises(ValueError, match="recoverable acquisition attempt"):
         workflow.retry(
             SESSION_ID,
@@ -1420,6 +1438,7 @@ def test_retry_does_not_resurrect_an_old_partial_attempt_after_new_acquisition(
         )
 
     assert tuple(acquisition.calls) == calls_before_retry
+    assert old_acquisition_replay.to_dict() == complete.to_dict()
 
 
 @pytest.mark.parametrize("failed_stage", ["reindexing", "assessing"])
