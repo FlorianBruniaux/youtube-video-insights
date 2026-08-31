@@ -529,6 +529,7 @@ def export_command(
     """Export stored evidence without generating model-authored prose."""
     root_stack = ExitStack()
     bound_root = None
+    root_constraint = None
     if output is not None:
         try:
             output_directory = _explicit_export_path(output)
@@ -563,9 +564,11 @@ def export_command(
             if bound_root is None:
                 raise RuntimeError("research output root is unavailable")
             response = workflow.status(session_id)
-            topic_directory = bound_root.ensure_topic_directory(
+            prepared_topic = bound_root.ensure_topic_directory(
                 _topic_slug(response.session.topic)
             )
+            topic_directory = prepared_topic.directory
+            root_constraint = prepared_topic.root_constraint
             created_date = (
                 response.session.created_at.astimezone(UTC).date().isoformat()
             )
@@ -577,6 +580,7 @@ def export_command(
                 session_id=session_id,
                 output_directory=output_directory,
                 force=force,
+                root_constraint=root_constraint,
             ),
             package_version=__version__,
         )

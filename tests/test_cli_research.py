@@ -1017,6 +1017,60 @@ def test_research_export_derives_bounded_topic_path_from_session_creation_date(
     assert expected.is_dir()
 
 
+def test_research_export_rejects_configured_root_swap_after_topic_preparation(
+    tmp_path, monkeypatch
+) -> None:
+    from yt_insights import cli_research
+
+    created_at = datetime(2026, 7, 4, 23, 30, tzinfo=UTC)
+    session_id = "01K4RESEARCH0000000000000000"
+    output_root = tmp_path / "tracked-research"
+    output_root.mkdir()
+    moved_root = tmp_path / "moved-tracked-research"
+    replacement_root = tmp_path / "replacement-tracked-research"
+    replacement_topic = replacement_root / "local-evidence"
+    replacement_topic.mkdir(parents=True)
+    workflow = ResearchWorkflow(
+        store=ResearchStore(
+            tmp_path / "research.sqlite3", now=lambda: created_at
+        ),
+        evidence_reader=FakeEvidenceReader(),
+        data_paths=DataPaths.from_root(tmp_path / "data"),
+        now=lambda: created_at,
+        session_id_factory=lambda: session_id,
+    )
+    original_export = workflow.export
+    observed_constraint: list[object] = []
+
+    def swap_root_before_export(request: object, *, package_version: str) -> object:
+        observed_constraint.append(getattr(request, "root_constraint", None))
+        output_root.rename(moved_root)
+        replacement_root.rename(output_root)
+        return original_export(request, package_version=package_version)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(workflow, "export", swap_root_before_export)
+    monkeypatch.setattr(cli_research, "_workflow", lambda: workflow)
+    runner = CliRunner()
+    started = runner.invoke(cli, ["research", "start", "Local evidence", "--json"])
+    assert started.exit_code == 0, started.output
+
+    exported = runner.invoke(
+        cli,
+        ["research", "export", session_id, "--json"],
+        env={"YT_INSIGHTS_RESEARCH_OUTPUT_ROOT": str(output_root)},
+    )
+
+    assert exported.exit_code == 1
+    assert json.loads(exported.output) == {
+        "error": {"code": "research_export_unavailable"},
+        "schema_version": 1,
+    }
+    assert len(observed_constraint) == 1
+    assert observed_constraint[0] is not None
+    assert list((output_root / "local-evidence").iterdir()) == []
+    assert list((moved_root / "local-evidence").iterdir()) == []
+
+
 @pytest.mark.parametrize(
     ("arguments", "environment"),
     (

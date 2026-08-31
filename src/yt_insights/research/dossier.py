@@ -43,10 +43,34 @@ _DIRECTORY_OPEN_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os
 
 
 @dataclass(frozen=True, slots=True)
+class DossierRootConstraint:
+    root: Path
+    device: int
+    inode: int
+
+    def __post_init__(self) -> None:
+        _validate_output_root(self.root)
+        for label, value in (("device", self.device), ("inode", self.inode)):
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                raise ValueError(f"root {label} must be a non-negative integer")
+
+    @property
+    def identity(self) -> tuple[int, int]:
+        return (self.device, self.inode)
+
+
+@dataclass(frozen=True, slots=True)
+class PreparedDossierTopicDirectory:
+    directory: Path
+    root_constraint: DossierRootConstraint
+
+
+@dataclass(frozen=True, slots=True)
 class DossierExportRequest:
     session_id: str
     output_directory: Path
     force: bool = False
+    root_constraint: DossierRootConstraint | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +93,10 @@ class _BoundDossierOutputRoot:
     descriptor: int
     identity: tuple[int, int]
 
-    def ensure_topic_directory(self, topic_slug: str) -> Path:
+    def ensure_topic_directory(
+        self,
+        topic_slug: str,
+    ) -> PreparedDossierTopicDirectory:
         """Create or reopen one exact child while this root remains bound."""
         return _ensure_bound_topic_directory(self, topic_slug)
 
@@ -81,15 +108,22 @@ def bind_dossier_output_root(
     """Bind an existing absolute root without following any symlink component."""
     _validate_output_root(root)
     probe = root / ".yt-insights-root-probe"
-    descriptor, identity = _open_parent_directory(probe)
+    opened_root = _open_parent_directory(probe)
     try:
-        _verify_parent_path(probe, identity)
-        yield _BoundDossierOutputRoot(root, descriptor, identity)
+        _verify_parent_path(probe, opened_root.identity)
+        yield _BoundDossierOutputRoot(
+            root,
+            opened_root.descriptor,
+            opened_root.identity,
+        )
     finally:
-        os.close(descriptor)
+        opened_root.close()
 
 
-def ensure_dossier_topic_directory(root: Path, topic_slug: str) -> Path:
+def ensure_dossier_topic_directory(
+    root: Path,
+    topic_slug: str,
+) -> PreparedDossierTopicDirectory:
     """Safely create the topic parent used by a configured default export."""
     with bind_dossier_output_root(root) as bound_root:
         return bound_root.ensure_topic_directory(topic_slug)
@@ -134,6 +168,7 @@ def export_dossier(
         dossier_bytes=dossier_bytes,
         manifest_bytes=manifest_bytes,
         force=request.force,
+        root_constraint=request.root_constraint,
     )
     return DossierExportResult(destination, manifest_sha256, dossier_sha256)
 
@@ -147,6 +182,11 @@ def _validate_request(request: DossierExportRequest, package_version: str) -> No
         raise TypeError("output directory must be a Path")
     if not isinstance(request.force, bool):
         raise TypeError("force must be a boolean")
+    if request.root_constraint is not None and not isinstance(
+        request.root_constraint,
+        DossierRootConstraint,
+    ):
+        raise TypeError("root constraint must be a DossierRootConstraint")
     if not isinstance(package_version, str) or not package_version:
         raise ValueError("package version must be non-empty")
 
@@ -178,7 +218,7 @@ def _validate_topic_slug(topic_slug: str) -> None:
 def _ensure_bound_topic_directory(
     bound_root: _BoundDossierOutputRoot,
     topic_slug: str,
-) -> Path:
+) -> PreparedDossierTopicDirectory:
     _validate_topic_slug(topic_slug)
     destination = bound_root.root / topic_slug
     _verify_parent_path(destination, bound_root.identity)
@@ -196,58 +236,47 @@ def _ensure_bound_topic_directory(
             topic_slug,
             existing_identity,
         )
-        return destination
+        return PreparedDossierTopicDirectory(
+            destination,
+            DossierRootConstraint(
+                bound_root.root,
+                *bound_root.identity,
+            ),
+        )
 
-    created_identity: tuple[int, int] | None = None
+    os.mkdir(topic_slug, mode=0o755, dir_fd=bound_root.descriptor)
+    created_identity = _destination_identity(bound_root.descriptor, topic_slug)
+    if created_identity is None:
+        raise RuntimeError("created topic directory disappeared")
+    child_fd = _open_named_directory(
+        bound_root.descriptor,
+        topic_slug,
+        created_identity,
+    )
     try:
-        os.mkdir(topic_slug, mode=0o755, dir_fd=bound_root.descriptor)
-        created_identity = _destination_identity(bound_root.descriptor, topic_slug)
-        if created_identity is None:
-            raise RuntimeError("created topic directory disappeared")
-        child_fd = _open_named_directory(
-            bound_root.descriptor,
-            topic_slug,
-            created_identity,
-        )
-        try:
-            _fsync_directory(child_fd)
-        finally:
-            os.close(child_fd)
-        _verify_parent_path(destination, bound_root.identity)
-        _require_directory_identity(
-            bound_root.descriptor,
-            topic_slug,
-            created_identity,
-        )
-        _fsync_directory(bound_root.descriptor)
-        _verify_parent_path(destination, bound_root.identity)
-        _require_directory_identity(
-            bound_root.descriptor,
-            topic_slug,
-            created_identity,
-        )
-        return destination
-    except BaseException:
-        if created_identity is not None:
-            _remove_empty_owned_directory(
-                bound_root.descriptor,
-                topic_slug,
-                created_identity,
-            )
-        raise
-
-
-def _remove_empty_owned_directory(
-    parent_fd: int,
-    name: str,
-    expected_identity: tuple[int, int],
-) -> None:
-    try:
-        _require_directory_identity(parent_fd, name, expected_identity)
-        os.rmdir(name, dir_fd=parent_fd)
-        _fsync_directory(parent_fd)
-    except (FileNotFoundError, NotADirectoryError, OSError, ValueError):
-        return
+        _fsync_directory(child_fd)
+    finally:
+        os.close(child_fd)
+    _verify_parent_path(destination, bound_root.identity)
+    _require_directory_identity(
+        bound_root.descriptor,
+        topic_slug,
+        created_identity,
+    )
+    _fsync_directory(bound_root.descriptor)
+    _verify_parent_path(destination, bound_root.identity)
+    _require_directory_identity(
+        bound_root.descriptor,
+        topic_slug,
+        created_identity,
+    )
+    return PreparedDossierTopicDirectory(
+        destination,
+        DossierRootConstraint(
+            bound_root.root,
+            *bound_root.identity,
+        ),
+    )
 
 
 def _validate_destination(destination: Path) -> Path:
@@ -488,8 +517,29 @@ def _date(value: date | None) -> str | None:
     return None if value is None else value.isoformat()
 
 
-def _publish(*, destination: Path, dossier_bytes: bytes, manifest_bytes: bytes, force: bool) -> None:
-    parent_fd, parent_identity = _open_parent_directory(destination)
+@dataclass(frozen=True, slots=True)
+class _OpenedParentDirectory:
+    descriptor: int
+    identity: tuple[int, int]
+    held_descriptors: tuple[int, ...]
+
+    def close(self) -> None:
+        os.close(self.descriptor)
+        for held_descriptor in self.held_descriptors:
+            os.close(held_descriptor)
+
+
+def _publish(
+    *,
+    destination: Path,
+    dossier_bytes: bytes,
+    manifest_bytes: bytes,
+    force: bool,
+    root_constraint: DossierRootConstraint | None,
+) -> None:
+    opened_parent = _open_parent_directory(destination, root_constraint)
+    parent_fd = opened_parent.descriptor
+    parent_identity = opened_parent.identity
     stage_name: str | None = None
     stage_identity: tuple[int, int] | None = None
     try:
@@ -519,41 +569,103 @@ def _publish(*, destination: Path, dossier_bytes: bytes, manifest_bytes: bytes, 
             stage_identity=stage_identity,
             force=force,
             expected_identity=initial,
+            root_constraint=root_constraint,
         )
     except BaseException:
         if stage_name is not None and stage_identity is not None:
             _remove_private_stage(parent_fd, stage_name, stage_identity)
         raise
     finally:
-        os.close(parent_fd)
+        opened_parent.close()
 
 
-def _open_parent_directory(destination: Path) -> tuple[int, tuple[int, int]]:
+def _open_parent_directory(
+    destination: Path,
+    root_constraint: DossierRootConstraint | None = None,
+) -> _OpenedParentDirectory:
+    if root_constraint is not None:
+        root_parts = root_constraint.root.parts
+        if (
+            destination.parts[: len(root_parts)] != root_parts
+            or len(destination.parts) <= len(root_parts)
+        ):
+            raise ValueError("output directory is outside the constrained root")
+    else:
+        root_parts = ()
+
     descriptor = os.open(destination.anchor, _DIRECTORY_OPEN_FLAGS)
+    held_descriptors: list[int] = []
+    constraint_observed = False
     try:
-        for part in destination.parts[1:-1]:
+        if root_constraint is not None and root_parts == (destination.anchor,):
+            _require_opened_root_identity(descriptor, root_constraint)
+            held_descriptors.append(os.dup(descriptor))
+            constraint_observed = True
+        for position, part in enumerate(destination.parts[1:-1], start=1):
             next_descriptor = os.open(part, _DIRECTORY_OPEN_FLAGS, dir_fd=descriptor)
             os.close(descriptor)
             descriptor = next_descriptor
+            if (
+                root_constraint is not None
+                and destination.parts[: position + 1] == root_parts
+            ):
+                _require_opened_root_identity(descriptor, root_constraint)
+                held_descriptors.append(os.dup(descriptor))
+                constraint_observed = True
+        if root_constraint is not None and not constraint_observed:
+            raise ValueError("constrained root is not an opened destination ancestor")
         details = os.fstat(descriptor)
         if not stat.S_ISDIR(details.st_mode):
             raise NotADirectoryError("output parent is not a directory")
-        return descriptor, (details.st_dev, details.st_ino)
+        return _OpenedParentDirectory(
+            descriptor,
+            (details.st_dev, details.st_ino),
+            tuple(held_descriptors),
+        )
     except BaseException:
         os.close(descriptor)
+        for held_descriptor in held_descriptors:
+            os.close(held_descriptor)
         raise
 
 
-def _verify_parent_path(destination: Path, expected_identity: tuple[int, int]) -> None:
+def _require_opened_root_identity(
+    descriptor: int,
+    root_constraint: DossierRootConstraint,
+) -> None:
+    details = os.fstat(descriptor)
+    if (
+        not stat.S_ISDIR(details.st_mode)
+        or (details.st_dev, details.st_ino) != root_constraint.identity
+    ):
+        raise ValueError("configured output root changed before publication")
+
+
+def _verify_parent_path(
+    destination: Path,
+    expected_identity: tuple[int, int],
+    root_constraint: DossierRootConstraint | None = None,
+) -> None:
     try:
-        descriptor, identity = _open_parent_directory(destination)
+        opened_parent = _open_parent_directory(destination, root_constraint)
     except OSError as exc:
         raise ValueError("output parent changed during publication") from exc
     try:
-        if identity != expected_identity:
+        if opened_parent.identity != expected_identity:
             raise ValueError("output parent changed during publication")
     finally:
-        os.close(descriptor)
+        opened_parent.close()
+
+
+def _verify_publication_parent(
+    destination: Path,
+    expected_identity: tuple[int, int],
+    root_constraint: DossierRootConstraint | None,
+) -> None:
+    if root_constraint is None:
+        _verify_parent_path(destination, expected_identity)
+        return
+    _verify_parent_path(destination, expected_identity, root_constraint)
 
 
 def _destination_identity(parent_fd: int, name: str) -> tuple[int, int] | None:
@@ -637,8 +749,9 @@ def _publish_stage(
     stage_identity: tuple[int, int],
     force: bool,
     expected_identity: tuple[int, int] | None,
+    root_constraint: DossierRootConstraint | None,
 ) -> None:
-    _verify_parent_path(destination, parent_identity)
+    _verify_publication_parent(destination, parent_identity, root_constraint)
     if _destination_identity(parent_fd, destination.name) != expected_identity:
         raise FileExistsError("destination changed during publication")
     _require_directory_identity(parent_fd, stage_name, stage_identity)
@@ -647,7 +760,11 @@ def _publish_stage(
         try:
             os.rename(stage_name, destination.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
             published = True
-            _verify_parent_path(destination, parent_identity)
+            _verify_publication_parent(
+                destination,
+                parent_identity,
+                root_constraint,
+            )
             _require_directory_identity(parent_fd, destination.name, stage_identity)
             _fsync_directory(parent_fd)
         except OSError as exc:
@@ -669,7 +786,7 @@ def _publish_stage(
     moved_prior = False
     published = False
     try:
-        _verify_parent_path(destination, parent_identity)
+        _verify_publication_parent(destination, parent_identity, root_constraint)
         _require_directory_identity(parent_fd, destination.name, expected_identity)
         _require_directory_identity(parent_fd, stage_name, stage_identity)
         os.rename(destination.name, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
@@ -678,7 +795,11 @@ def _publish_stage(
         _require_directory_identity(parent_fd, stage_name, stage_identity)
         os.rename(stage_name, destination.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         published = True
-        _verify_parent_path(destination, parent_identity)
+        _verify_publication_parent(
+            destination,
+            parent_identity,
+            root_constraint,
+        )
         _require_directory_identity(parent_fd, destination.name, stage_identity)
         _fsync_directory(parent_fd)
     except BaseException:

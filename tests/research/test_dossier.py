@@ -335,7 +335,61 @@ def test_topic_directory_creation_rejects_root_replacement_without_redirecting(
         dossier.ensure_dossier_topic_directory(configured_root, "local-ai")
 
     assert not (configured_root / "local-ai").exists()
-    assert not (moved_root / "local-ai").exists()
+    assert (moved_root / "local-ai").is_dir()
+    assert list((moved_root / "local-ai").iterdir()) == []
+
+
+def test_topic_directory_failure_never_attempts_rmdir_after_identity_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retaining an empty owned directory avoids deleting a substituted foreign inode."""
+    import yt_insights.research.dossier as dossier
+
+    configured_root = tmp_path / "research"
+    configured_root.mkdir()
+    original_verify = dossier._verify_parent_path
+    original_rmdir = dossier.os.rmdir
+    original_rename = dossier.os.rename
+    original_mkdir = dossier.os.mkdir
+    verify_calls = 0
+    rmdir_calls: list[str] = []
+
+    def fail_after_creation(
+        destination: Path,
+        identity: tuple[int, int],
+    ) -> None:
+        nonlocal verify_calls
+        verify_calls += 1
+        if verify_calls == 3:
+            raise ValueError("injected post-creation failure")
+        original_verify(destination, identity)
+
+    def substitute_before_rmdir(
+        name: object,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        if name == "local-ai" and kwargs.get("dir_fd") is not None:
+            rmdir_calls.append(str(name))
+            directory_fd = kwargs["dir_fd"]
+            original_rename(
+                name,
+                "owned-retained",
+                src_dir_fd=directory_fd,
+                dst_dir_fd=directory_fd,
+            )
+            original_mkdir(name, mode=0o755, dir_fd=directory_fd)
+        return original_rmdir(name, *args, **kwargs)
+
+    monkeypatch.setattr(dossier, "_verify_parent_path", fail_after_creation)
+    monkeypatch.setattr(dossier.os, "rmdir", substitute_before_rmdir)
+
+    with pytest.raises(ValueError, match="injected post-creation failure"):
+        dossier.ensure_dossier_topic_directory(configured_root, "local-ai")
+
+    assert rmdir_calls == []
+    assert (configured_root / "local-ai").is_dir()
+    assert list((configured_root / "local-ai").iterdir()) == []
 
 
 def test_export_preserves_destination_when_publication_is_interrupted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
