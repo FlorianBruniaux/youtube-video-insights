@@ -1,0 +1,48 @@
+src/yt_insights/cli_setup.py
+  s_0a442347250965::t_f80a3d90d31bdc 46-50,54,59,73
+  s_0a442347250965::t_e804885dbfc946 28-31
+.agents/skills/youtube-cumulative-research/agents/openai.yaml
+  s_0a442347250965::t_d67b421d3398f9 1-4
+src/yt_insights/assistant_assets/skills/youtube-cumulative-research/agents/openai.yaml
+  s_0a442347250965::t_d67b421d3398f9 1-4
+tests/test_agent_routing_fixture.py
+  s_0a442347250965::t_b4fe3967ce8935 18,46,68,73,77,79,170
+tests/fixtures/agent-routing.json
+  s_0a442347250965::t_81eb5081f38419 122-161
+tests/test_agent_assets.py
+  s_0a442347250965::t_01587df5791ba3 11-16,179-223
+  s_0a442347250965::t_19278fdad0c7e6 224-225
+scripts/check_agent_routing_fixture.py
+  s_0a442347250965::t_b4fe3967ce8935 18
+tests/test_assistant_setup.py
+  s_0a442347250965::t_97c9b5fa5240d1 397-401,403-421
+  s_0a442347250965::t_b12064ae1799c3 363-396,422-513
+  s_0a442347250965::t_03a4dfc6d60bad 402
+  s_0a442347250965::t_adf0e9a2f708fe 25-30,116-119,148,212-214
+src/yt_insights/assistant_assets/skills/youtube-cumulative-research/SKILL.md
+  s_0a442347250965::t_c33de6693706d0 43,46
+  s_0a442347250965::t_d67b421d3398f9 1-42,44-45
+tests/test_packaging.py
+  s_0a442347250965::t_00cfe9fe860ee3 182-190
+.agents/skills/youtube-cumulative-research/SKILL.md
+  s_0a442347250965::t_c33de6693706d0 43,46
+  s_0a442347250965::t_d67b421d3398f9 1-42,44-45
+src/yt_insights/assistant_setup.py
+  s_0a442347250965::t_f80a3d90d31bdc 39-44,200-204,210-214,218-270,274,277,287-293,298,302
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "6bff0aaf8994c5e69d10dd0eeab04e0fef3accbd",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
