@@ -289,6 +289,28 @@ class ResearchStore:
         with self._connection() as connection:
             return self._session(connection, session_id)
 
+    def list_sessions(
+        self, *, limit: int, offset: int
+    ) -> tuple[ResearchSession, ...]:
+        """Return one bounded, stable page of durable research sessions."""
+        if (
+            isinstance(limit, bool)
+            or not isinstance(limit, int)
+            or not 1 <= limit <= 100
+        ):
+            raise ValueError("limit must be between 1 and 100")
+        if isinstance(offset, bool) or not isinstance(offset, int) or offset < 0:
+            raise ValueError("offset must be non-negative")
+        with self._connection() as connection:
+            rows = connection.execute(
+                "SELECT session_id FROM research_sessions "
+                "ORDER BY updated_at DESC, session_id ASC LIMIT ? OFFSET ?",
+                (limit, offset),
+            ).fetchall()
+            return tuple(
+                self._session(connection, str(row[0])) for row in rows
+            )
+
     def record_assessment(self, session_id: str, *, expected_revision: int, assessment: ResearchAssessment) -> ResearchSession:
         def operation(connection: sqlite3.Connection) -> ResearchSession:
             session = self._expected(connection, session_id, expected_revision, {ResearchState.ASSESSING})

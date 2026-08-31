@@ -115,6 +115,40 @@ def test_default_clock_persists_timezone_aware_timestamps(tmp_path: object) -> N
     assert session.created_at.utcoffset() is not None
 
 
+def test_list_sessions_is_bounded_and_stably_sorted(tmp_path: object) -> None:
+    """Removing ordering, paging, or the store guard breaks this public read."""
+    moments = iter((
+        datetime(2026, 8, 31, 10, 0, tzinfo=UTC),
+        datetime(2026, 8, 31, 10, 1, tzinfo=UTC),
+        datetime(2026, 8, 31, 10, 1, tzinfo=UTC),
+        datetime(2026, 8, 31, 10, 2, tzinfo=UTC),
+    ))
+    store = ResearchStore(tmp_path / "research.sqlite3", now=lambda: next(moments))  # type: ignore[operator]
+    first = store.create_session(
+        session_id="a" * 32,
+        topic="Older",
+        queries=(QuerySpec("older"),),
+        languages=("en",),
+        freshness_profile=FreshnessProfile.FAST,
+        discovery_fingerprint="a" * 64,
+    )
+    second = store.create_session(
+        session_id="b" * 32,
+        topic="Newer",
+        queries=(QuerySpec("newer"),),
+        languages=("en",),
+        freshness_profile=FreshnessProfile.FAST,
+        discovery_fingerprint="b" * 64,
+    )
+
+    assert store.list_sessions(limit=1, offset=0) == (second,)
+    assert store.list_sessions(limit=1, offset=1) == (first,)
+    with pytest.raises(ValueError, match="limit"):
+        store.list_sessions(limit=0, offset=0)
+    with pytest.raises(ValueError, match="offset"):
+        store.list_sessions(limit=1, offset=-1)
+
+
 def test_assessment_sufficiency_and_refresh_transitions_are_revision_checked(tmp_path: object) -> None:
     """Removing a state/revision guard must make one of these calls mutate incorrectly."""
     store = _store(tmp_path)
