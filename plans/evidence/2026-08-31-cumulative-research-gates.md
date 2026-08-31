@@ -47,7 +47,7 @@ gate evidence valid
 
 The representative build selected 50 valid VTTs, generated 3,293 passages, and produced database SHA-256 `9e4d8ff3bc56be56f82416ad0c3c5ca67d72c274f2630a2852952ff4ead8be20` (10,940,416 bytes). The unreviewed packet is at `/private/tmp/yt-insights-task0.dOEsXX/pilot-evaluation-packet.json`, SHA-256 `2cefde38d43742849ce1e371557eff51f2f1ca7f7b199050432517f1fe7aee10`.
 
-The packet has four pilot queries and three subjects, but zero returned rank-1-to-5 results rather than the expected 20. Its evaluation status remains `UNKNOWN`; zero null judgments reflects zero result rows, not review completion.
+The packet has four pilot queries and three subjects, but zero returned rank-1-to-5 results rather than the expected 20. Its observed judgment count and observed relevant count are both zero. Its evaluation status remains `UNKNOWN`; zero null judgments reflects zero result rows, not review completion.
 
 ## No-write discovery probes
 

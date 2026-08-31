@@ -20,7 +20,9 @@
     "top_k": 10,
     "expected_rank_1_to_5_judgment_count": 20,
     "observed_rank_1_to_5_result_count": 0,
+    "observed_judgment_count": 0,
     "observed_null_judgment_count": 0,
+    "observed_relevant_count": 0,
     "packet_status": "UNKNOWN",
     "representative_index": {
       "sha256": "9e4d8ff3bc56be56f82416ad0c3c5ca67d72c274f2630a2852952ff4ead8be20",

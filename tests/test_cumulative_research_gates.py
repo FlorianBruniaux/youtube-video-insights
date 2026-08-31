@@ -32,13 +32,24 @@ def _write_mutated_evidence(tmp_path: Path, mutate) -> Path:
 
 def _mark_all_external_gates_pass(payload: dict[str, object]) -> None:
     gates = payload["gates"]
+    relevance = payload["relevance_pilot"]
     assert isinstance(gates, dict)
+    assert isinstance(relevance, dict)
     gates.update(
         {
             "relevance_pilot": "PASS",
             "discovery_probe": "PASS",
             "refresh_performance": "PASS",
             "global_activation_ready": True,
+        }
+    )
+    relevance.update(
+        {
+            "packet_status": "PASS",
+            "observed_rank_1_to_5_result_count": 20,
+            "observed_judgment_count": 20,
+            "observed_null_judgment_count": 0,
+            "observed_relevant_count": 16,
         }
     )
 
@@ -129,6 +140,53 @@ def test_rejects_invalid_gate_evidence(tmp_path: Path, mutate, message: str) -> 
     ),
 )
 def test_rejects_contradictory_all_pass_evidence(tmp_path: Path, mutate, message: str) -> None:
+    def make_contradictory(payload: dict[str, object]) -> None:
+        _mark_all_external_gates_pass(payload)
+        mutate(payload)
+
+    result = _run(_write_mutated_evidence(tmp_path, make_contradictory))
+
+    assert result.returncode == 2
+    assert message in result.stderr
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    (
+        (
+            lambda payload: payload["refresh_performance"]["samples"][0].update({"exit_code": 1}),
+            "exit_code",
+        ),
+        (
+            lambda payload: payload["refresh_performance"]["samples"][0].update({"validation_exit_code": 1}),
+            "validation_exit_code",
+        ),
+        (
+            lambda payload: payload["relevance_pilot"].update({"packet_status": "UNKNOWN"}),
+            "packet_status",
+        ),
+        (
+            lambda payload: payload["relevance_pilot"].update({"observed_rank_1_to_5_result_count": 19}),
+            "observed_rank_1_to_5_result_count",
+        ),
+        (
+            lambda payload: payload["relevance_pilot"].update({"observed_judgment_count": 19}),
+            "observed_judgment_count",
+        ),
+        (
+            lambda payload: payload["relevance_pilot"].update({"observed_relevant_count": 15}),
+            "observed_relevant_count",
+        ),
+        (
+            lambda payload: payload["relevance_pilot"].update({"observed_null_judgment_count": 1}),
+            "observed_null_judgment_count",
+        ),
+    ),
+)
+def test_rejects_all_pass_evidence_without_required_receipts(
+    tmp_path: Path, mutate, message: str
+) -> None:
     def make_contradictory(payload: dict[str, object]) -> None:
         _mark_all_external_gates_pass(payload)
         mutate(payload)

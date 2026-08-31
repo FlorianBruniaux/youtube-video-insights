@@ -97,7 +97,7 @@ def _validate_corpus(value: object) -> None:
     _sha256(corpus["search_sha256_before_after"], "corpus.search_sha256_before_after")
 
 
-def _validate_relevance(value: object) -> None:
+def _validate_relevance(value: object) -> dict[str, object]:
     relevance = _object(
         value,
         "relevance_pilot",
@@ -107,7 +107,9 @@ def _validate_relevance(value: object) -> None:
             "top_k",
             "expected_rank_1_to_5_judgment_count",
             "observed_rank_1_to_5_result_count",
+            "observed_judgment_count",
             "observed_null_judgment_count",
+            "observed_relevant_count",
             "packet_status",
             "representative_index",
             "packet_sha256",
@@ -119,7 +121,9 @@ def _validate_relevance(value: object) -> None:
         "top_k",
         "expected_rank_1_to_5_judgment_count",
         "observed_rank_1_to_5_result_count",
+        "observed_judgment_count",
         "observed_null_judgment_count",
+        "observed_relevant_count",
     ):
         if _integer(relevance[key], f"relevance_pilot.{key}") < 0:
             raise GateValidationError(f"relevance_pilot.{key} must not be negative")
@@ -134,6 +138,7 @@ def _validate_relevance(value: object) -> None:
         if _integer(index[key], f"relevance_pilot.representative_index.{key}") < 0:
             raise GateValidationError(f"relevance_pilot.representative_index.{key} must not be negative")
     _sha256(relevance["packet_sha256"], "relevance_pilot.packet_sha256")
+    return relevance
 
 
 def _validate_discovery(value: object) -> dict[str, object]:
@@ -233,7 +238,7 @@ def validate(payload: object) -> None:
         raise GateValidationError("gates.global_activation_ready must be boolean")
     if gates["global_activation_ready"] and not all(status == "PASS" for status in (relevance_status, discovery_status, refresh_status)):
         raise GateValidationError("gates.global_activation_ready requires every external gate to PASS")
-    _validate_relevance(evidence["relevance_pilot"])
+    relevance = _validate_relevance(evidence["relevance_pilot"])
     discovery = _validate_discovery(evidence["discovery_probe"])
     refresh = _validate_refresh(evidence["refresh_performance"])
     if discovery_status == "PASS":
@@ -245,12 +250,30 @@ def validate(payload: object) -> None:
                 raise GateValidationError(f"discovery_probe.subjects[{position}].exit_code must equal 0 when discovery passes")
             if subject_value["candidate_count"] < 5:
                 raise GateValidationError(f"discovery_probe.subjects[{position}].candidate_count must be at least 5 when discovery passes")
+    if relevance_status == "PASS":
+        if relevance["packet_status"] != "PASS":
+            raise GateValidationError("relevance_pilot.packet_status must equal PASS when relevance passes")
+        if relevance["observed_rank_1_to_5_result_count"] != 20:
+            raise GateValidationError("relevance_pilot.observed_rank_1_to_5_result_count must equal 20 when relevance passes")
+        if relevance["observed_judgment_count"] != 20:
+            raise GateValidationError("relevance_pilot.observed_judgment_count must equal 20 when relevance passes")
+        if relevance["observed_null_judgment_count"] != 0:
+            raise GateValidationError("relevance_pilot.observed_null_judgment_count must equal 0 when relevance passes")
+        if relevance["observed_relevant_count"] < 16:
+            raise GateValidationError("relevance_pilot.observed_relevant_count must be at least 16 when relevance passes")
     p95 = _number(refresh["p95_wall_seconds"], "refresh_performance.p95_wall_seconds")
     incremental_required = refresh["incremental_refresh_required"]
     if incremental_required != (p95 > 60):
         raise GateValidationError("refresh_performance.incremental_refresh_required must match whether p95_wall_seconds exceeds 60")
     if refresh_status == "PASS" and (p95 > 60 or incremental_required):
         raise GateValidationError("gates.refresh_performance PASS requires p95_wall_seconds at most 60 and incremental_refresh_required false")
+    if refresh_status == "PASS":
+        for position, sample_value in enumerate(refresh["samples"], start=1):
+            assert isinstance(sample_value, dict)
+            if sample_value["exit_code"] != 0:
+                raise GateValidationError(f"refresh_performance.samples[{position}].exit_code must equal 0 when refresh passes")
+            if sample_value["validation_exit_code"] != 0:
+                raise GateValidationError(f"refresh_performance.samples[{position}].validation_exit_code must equal 0 when refresh passes")
     _validate_artifacts(evidence["artifacts"])
 
 
