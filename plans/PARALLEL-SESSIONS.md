@@ -56,7 +56,7 @@ Task 10 E2E, quality and docs
 | 9A | Quatrième skill et setup assets-only | Terminé dans le dépôt |
 | 9B | Prompts anglais et wheel installable | Terminé dans le dépôt |
 | 10A | E2E et limites hostiles | Terminé et intégré |
-| 10B | Documentation | Consolidation finale |
+| 10B | Documentation | Terminée et intégrée |
 | 10C | Qualité finale | Terminé et intégré |
 | 11 | Historique public borné et reprise des lots partiels | Terminé et intégré |
 | 13 | Ruff et Mypy finaux | Terminé et intégré |

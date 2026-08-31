@@ -2,7 +2,7 @@
 
 **Mise à jour :** 2026-08-31
 
-**Workflow cumulatif projet :** implémenté, validation finale en cours
+**Workflow cumulatif projet :** implémenté, validation locale `PASS`
 
 **Activation globale :** `false`
 
@@ -27,7 +27,7 @@
 | 7 | Acquisition exacte, refresh unique et reprise | Implémenté |
 | 8 | Dossier déterministe et export projet | Implémenté |
 | 9 | Quatrième skill, prompts anglais et assets-only | Implémenté dans le dépôt, pas globalement |
-| 10 | E2E, qualité et documentation | Validation finale en cours |
+| 10 | E2E, qualité et documentation | Terminé et intégré |
 
 ## Gates mesurées
 
@@ -40,6 +40,8 @@
 | Claude Code frais | `UNKNOWN` | Non exécuté |
 | Codex frais | `UNKNOWN` | Non exécuté |
 | Activation globale | `false` | Aucune promotion du quatrième skill |
+| Qualité locale | `PASS` | 844 tests + 10 subtests, Ruff complet, `mypy src` sur 44 fichiers et `git diff --check` |
+| GitHub CI hébergée | `UNKNOWN` | Workflow ajouté localement; aucune exécution GitHub observée avant push |
 
 [Artefacts JSON et Markdown](evidence/2026-08-31-cumulative-research-gates.md)
 
@@ -70,5 +72,5 @@ Web UI, extension, API hébergée, MCP writable, vectoriel, graphe et acquisitio
 automatique restent conditionnels. Aucun de ces éléments n'est implémenté ou
 autorisé par les plans actuels.
 
-Le dépôt ne contient pas de GitHub CI. Les preuves mentionnées ici sont des
-artefacts et exécutions locales.
+Le workflow GitHub CI a été ajouté localement. Son exécution hébergée reste
+`UNKNOWN` avant push; les autres preuves mentionnées ici sont locales.

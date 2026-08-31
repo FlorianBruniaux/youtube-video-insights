@@ -134,7 +134,8 @@ Portable skills:
 
 The cumulative skill runs in the main session, interprets
 `required_user_action`, and asks before discovery and candidate acquisition.
-All skill instructions, metadata, and copy-ready prompts are English.
+The cumulative skill instructions and all copy-ready prompts are English. The
+three legacy skill frontmatter files retain French trigger phrases.
 
 The repository and wheel contain the fourth skill. It is not globally active.
 Fresh Claude Code and Codex canaries remain `UNKNOWN`.
