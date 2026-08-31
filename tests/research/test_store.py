@@ -170,6 +170,29 @@ def test_legacy_raw_decision_payload_replays_its_historical_result(tmp_path: obj
         legacy_store.decide_sufficiency(SESSION_ID, expected_revision=1, sufficient=True, idempotency_key="legacy-refresh")
 
 
+def test_legacy_raw_approval_replays_its_historical_result(tmp_path: object) -> None:
+    """Legacy approval uses its transition event code, not the decision action name."""
+    store = _store(tmp_path)
+    _create(store)
+    store.record_assessment(SESSION_ID, expected_revision=0, assessment=_assessment())
+    store.decide_sufficiency(SESSION_ID, expected_revision=1, sufficient=False, idempotency_key="refresh")
+    store.record_candidates(SESSION_ID, expected_revision=2, candidates=(_candidate(),), provider_name="p", provider_version=1, errors=())
+    committed = store.approve_candidates(SESSION_ID, expected_revision=3, video_ids=(VIDEO_ID,), idempotency_key="legacy-approve")
+    store.start_acquisition_attempt(SESSION_ID, expected_revision=4, video_ids=(VIDEO_ID,), idempotency_key="attempt", attempt_id="attempt-1")
+    store.record_acquisition_batch(SESSION_ID, expected_revision=4, attempt_id="attempt-1", outcomes=(ResearchAcquisitionOutcome("attempt-1", VIDEO_ID, CandidateStatus.ACQUIRED, None, "c" * 64),))
+    database = tmp_path / "research.sqlite3"
+    with sqlite3.connect(database) as connection:  # type: ignore[arg-type]
+        connection.execute("UPDATE research_decisions SET payload_json = ? WHERE idempotency_key = ?", ('{"video_ids":["abc123DEF45"]}', "legacy-approve"))
+    legacy_store = ResearchStore(database, now=lambda: NOW)  # type: ignore[arg-type]
+
+    replayed = legacy_store.approve_candidates(SESSION_ID, expected_revision=3, video_ids=(VIDEO_ID,), idempotency_key="legacy-approve")
+
+    assert replayed == committed
+    assert replayed.state is ResearchState.ACQUIRING
+    with pytest.raises(ValueError, match="idempotency"):
+        legacy_store.approve_candidates(SESSION_ID, expected_revision=3, video_ids=("vid00000001",), idempotency_key="legacy-approve")
+
+
 def test_sufficient_assessment_completes_without_discovery(tmp_path: object) -> None:
     """Changing the sufficient branch must not enter discovery."""
     store = _store(tmp_path)

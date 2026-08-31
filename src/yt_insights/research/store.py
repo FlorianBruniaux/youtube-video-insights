@@ -44,6 +44,14 @@ _FAILURE_RETRY_TARGETS = {
     ResearchState.REINDEXING: ResearchState.REINDEXING,
 }
 
+_LEGACY_DECISION_EVENTS = {
+    "sufficient": "sufficient",
+    "refresh": "refresh",
+    "approve_candidates": "candidates_approved",
+    "retry": "retry",
+    "cancel": "cancel",
+}
+
 _SCHEMA = (
     "CREATE TABLE schema_meta(version INTEGER NOT NULL)",
     """CREATE TABLE research_sessions(
@@ -530,7 +538,7 @@ class ResearchStore:
             if revision == target_revision:
                 event_row = event
                 break
-        if event_row is None or event_row["event_code"] != decision["action"]:
+        if event_row is None or _LEGACY_DECISION_EVENTS.get(decision["action"]) != event_row["event_code"]:
             raise ValueError("legacy decision result is unavailable")
         current = self._session(connection, decision["session_id"])
         target = ResearchState(event_row["to_state"])
