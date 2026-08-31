@@ -196,3 +196,44 @@ def test_rejects_all_pass_evidence_without_required_receipts(
     assert result.returncode == 2
     assert message in result.stderr
     assert result.stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    (
+        (
+            lambda payload: payload["relevance_pilot"].update(
+                {"observed_judgment_count": 1}
+            ),
+            "observed_judgment_count must not exceed observed_rank_1_to_5_result_count",
+        ),
+        (
+            lambda payload: payload["relevance_pilot"].update(
+                {"observed_relevant_count": 1}
+            ),
+            "observed_relevant_count must not exceed observed_judgment_count",
+        ),
+    ),
+)
+def test_rejects_impossible_relevance_counts_when_relevance_is_not_pass(
+    tmp_path: Path, mutate, message: str
+) -> None:
+    result = _run(_write_mutated_evidence(tmp_path, mutate))
+
+    assert result.returncode == 2
+    assert message in result.stderr
+    assert result.stdout == ""
+
+
+def test_rejects_all_pass_receipt_with_more_relevant_than_judged(tmp_path: Path) -> None:
+    def make_contradictory(payload: dict[str, object]) -> None:
+        _mark_all_external_gates_pass(payload)
+        relevance = payload["relevance_pilot"]
+        assert isinstance(relevance, dict)
+        relevance.update({"observed_relevant_count": 21})
+
+    result = _run(_write_mutated_evidence(tmp_path, make_contradictory))
+
+    assert result.returncode == 2
+    assert "observed_relevant_count must not exceed observed_judgment_count" in result.stderr
+    assert result.stdout == ""

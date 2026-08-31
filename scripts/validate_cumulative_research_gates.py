@@ -127,6 +127,28 @@ def _validate_relevance(value: object) -> dict[str, object]:
     ):
         if _integer(relevance[key], f"relevance_pilot.{key}") < 0:
             raise GateValidationError(f"relevance_pilot.{key} must not be negative")
+    rank_result_count = _integer(
+        relevance["observed_rank_1_to_5_result_count"],
+        "relevance_pilot.observed_rank_1_to_5_result_count",
+    )
+    judgment_count = _integer(
+        relevance["observed_judgment_count"],
+        "relevance_pilot.observed_judgment_count",
+    )
+    relevant_count = _integer(
+        relevance["observed_relevant_count"],
+        "relevance_pilot.observed_relevant_count",
+    )
+    if judgment_count > rank_result_count:
+        raise GateValidationError(
+            "relevance_pilot.observed_judgment_count must not exceed "
+            "observed_rank_1_to_5_result_count"
+        )
+    if relevant_count > judgment_count:
+        raise GateValidationError(
+            "relevance_pilot.observed_relevant_count must not exceed "
+            "observed_judgment_count"
+        )
     _status(relevance["packet_status"], "relevance_pilot.packet_status", RELEVANCE_STATUSES)
     index = _object(
         relevance["representative_index"],
