@@ -1,0 +1,36 @@
+tests/test_cli_research.py
+  s_0a442347250965::t_adf69f314cc53f 1-8,10-121,147
+  s_0a442347250965::t_70f47f6f107a63 9,122-146
+src/yt_insights/cli.py
+  s_0a442347250965::t_112dbd22837c5e 826,835
+src/yt_insights/cli_research.py
+  s_0a442347250965::t_b1516995a8a9bf 48-54
+  s_0a442347250965::t_dddb6dba949229 79
+  s_0a442347250965::t_112dbd22837c5e 1-47,55-78,80-194
+src/yt_insights/research/workflow.py
+  s_0a442347250965::t_dddb6dba949229 83,90,98,173-174,180,192
+  s_0a442347250965::t_112dbd22837c5e 165
+  s_0a442347250965::t_1159970943df83 1-82,84-89,91-97,99-164,166-172,175-179,181-191,193-291
+tests/research/test_workflow.py
+  s_0a442347250965::t_acc5441bf5a958 114
+  s_0a442347250965::t_adf69f314cc53f 1-90,92-113,115-157
+  s_0a442347250965::t_bebee78cf4f3a9 91
+tests/test_cli_agent_commands.py
+  s_0a442347250965::t_dddb6dba949229 25
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "8de59ddc630caf84eb0ffe5211ceaccfcad7177e",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
