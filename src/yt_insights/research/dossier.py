@@ -554,7 +554,7 @@ def _publish_stage(
         if moved_prior:
             _restore_prior_dossier(parent_fd, destination.name, backup_name, expected_identity)
         raise
-    _remove_validated_prior(parent_fd, backup_name, expected_identity)
+    _retire_prior_dossier(parent_fd, backup_name, expected_identity)
 
 
 def _validate_prior_dossier(parent_fd: int, name: str, expected_identity: tuple[int, int]) -> None:
@@ -649,6 +649,21 @@ def _restore_prior_dossier(
     os.rename(backup_name, destination_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
     _require_directory_identity(parent_fd, destination_name, expected_identity)
     _fsync_directory(parent_fd)
+
+
+def _retire_prior_dossier(parent_fd: int, backup_name: str, expected_identity: tuple[int, int]) -> None:
+    """Move a committed backup aside before attempting non-fatal cleanup."""
+    tombstone_name = f"{backup_name}.cleanup-{uuid.uuid4().hex}"
+    try:
+        _require_directory_identity(parent_fd, backup_name, expected_identity)
+        os.rename(backup_name, tombstone_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        _require_directory_identity(parent_fd, tombstone_name, expected_identity)
+    except BaseException:
+        return
+    try:
+        _remove_validated_prior(parent_fd, tombstone_name, expected_identity)
+    except BaseException:
+        return
 
 
 def _remove_validated_prior(parent_fd: int, name: str, expected_identity: tuple[int, int]) -> None:

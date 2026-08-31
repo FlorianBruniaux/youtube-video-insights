@@ -411,3 +411,28 @@ def test_export_restores_forced_dossier_when_final_fsync_fails(
     assert {name: (target / name).read_bytes() for name in previous} == previous
     assert not list(tmp_path.glob(".dossier.staging-*"))
     assert not list(tmp_path.glob(".dossier.backup-*"))
+
+
+def test_export_keeps_committed_replacement_when_backup_cleanup_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Backup cleanup occurs after commit and cannot turn a successful export into failure."""
+    store = _completed_store(tmp_path)
+    target = tmp_path / "dossier"
+    export_dossier(_request(target), store=store, package_version="1.2.3")
+    previous = {name: (target / name).read_bytes() for name in ("manifest.json", "dossier.md")}
+    import yt_insights.research.dossier as dossier
+
+    def fail_cleanup(parent_fd: int, name: str, identity: tuple[int, int]) -> None:
+        raise OSError("injected backup cleanup failure")
+
+    monkeypatch.setattr(dossier, "_remove_validated_prior", fail_cleanup)
+
+    result = export_dossier(_request(target, force=True), store=store, package_version="1.2.4")
+
+    manifest = json.loads((result.directory / "manifest.json").read_text())
+    tombstones = list(tmp_path.glob(".dossier.backup-*.cleanup-*"))
+    assert manifest["package_version"] == "1.2.4"
+    assert result.directory == target
+    assert len(tombstones) == 1
+    assert {name: (tombstones[0] / name).read_bytes() for name in previous} == previous
