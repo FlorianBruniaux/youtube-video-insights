@@ -98,6 +98,7 @@ def _environment(tmp_path: Path) -> tuple[dict[str, str], Path, Path, Path]:
         "HOME": str(home),
         "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
         "FAKE_CLIENT_STATE": str(state),
+        "PYTHONDONTWRITEBYTECODE": "1",
     }
     return env, home, state, corpus
 
