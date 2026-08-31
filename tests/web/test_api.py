@@ -118,6 +118,21 @@ def test_public_integers_are_bounded_to_sqlite_signed_64_bit() -> None:
         )
 
 
+def test_public_integer_text_is_rejected_before_unbounded_conversion() -> None:
+    oversized_integer = "9" * 5_000
+
+    with pytest.raises(RequestValidationError):
+        parse_pagination({"offset": (oversized_integer,)})
+    with pytest.raises(RequestValidationError):
+        parse_decision(
+            (
+                '{"expected_revision":'
+                + oversized_integer
+                + ',"decision":"refresh","idempotency_key":"decision-1"}'
+            ).encode("ascii")
+        )
+
+
 def test_parse_start_session_rejects_unknown_fields_and_boolean_integers() -> None:
     with pytest.raises(RequestValidationError):
         parse_start_session(
@@ -435,6 +450,159 @@ def test_source_facade_bounds_the_video_sample_without_losing_the_fingerprint(
     assert payload["fingerprint"]
     assert payload["videos_truncated"] is True
     assert len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) < 20 * 1024
+
+
+def test_source_facade_rejects_more_than_one_thousand_selected_videos(
+    tmp_path: Path,
+) -> None:
+    paths = DataPaths.from_root(tmp_path / "private-data")
+    videos = tuple(
+        VideoInfo(
+            f"vid{i:08d}",
+            "Safe title",
+            "20260830",
+            "channel-id",
+            "Channel title",
+        )
+        for i in range(1_001)
+    )
+    base = _source_plan(paths)
+    plan = replace(
+        base,
+        selected_videos=videos,
+        selected_urls=tuple(video.watch_url for video in videos),
+        selected_count=len(videos),
+    )
+    calls: list[str] = []
+    facade = SourceAcquisitionFacade(
+        paths,
+        classify=lambda source: calls.append("classify") or SourceKind.CHANNEL,
+        fetch=lambda source: calls.append("fetch") or VideoListResult(),
+        build=lambda **kwargs: calls.append("build") or plan,
+        execute=lambda value: calls.append("execute") or AcquisitionReport(0, 0, 0, ()),
+    )
+    request = parse_source_preview(
+        _json_body({"source": plan.source, "language": "fr", "analyze": False})
+    )
+
+    result = facade.preview(request)
+
+    assert result == {"schema_version": 1, "error": {"code": "plan_too_large"}}
+    assert calls == ["classify", "fetch", "build"]
+    with pytest.raises(PlanChanged):
+        facade.prepare_acquisition("a" * 64)
+    assert calls == ["classify", "fetch", "build"]
+
+
+def test_source_facade_rejects_an_oversized_canonical_plan_before_caching(
+    tmp_path: Path,
+) -> None:
+    paths = DataPaths.from_root(tmp_path / "private-data")
+    base = _source_plan(paths)
+    oversized_video = replace(base.selected_videos[0], title="x" * 524_288)
+    plan = replace(
+        base,
+        selected_videos=(oversized_video,),
+        selected_urls=(oversized_video.watch_url,),
+    )
+    executed: list[AcquisitionPlan] = []
+    facade = SourceAcquisitionFacade(
+        paths,
+        classify=lambda source: SourceKind.CHANNEL,
+        fetch=lambda source: VideoListResult(),
+        build=lambda **kwargs: plan,
+        execute=lambda value: executed.append(value) or AcquisitionReport(0, 0, 0, ()),
+    )
+
+    result = facade.preview(
+        parse_source_preview(
+            _json_body({"source": plan.source, "language": "fr", "analyze": False})
+        )
+    )
+
+    assert result == {"schema_version": 1, "error": {"code": "plan_too_large"}}
+    assert str(paths.root) not in json.dumps(result)
+    assert executed == []
+
+
+def test_source_facade_evicts_oldest_plans_to_stay_within_total_byte_budget(
+    tmp_path: Path,
+) -> None:
+    paths = DataPaths.from_root(tmp_path / "private-data")
+    base = _source_plan(paths)
+    sources = (
+        "https://www.youtube.com/@first",
+        "https://www.youtube.com/@second",
+    )
+    plans = {
+        source: replace(
+            base,
+            source=source,
+            selected_videos=(
+                replace(
+                    base.selected_videos[0],
+                    video_id=f"vid{index:08d}",
+                    title=label * 3_000,
+                ),
+            ),
+        )
+        for index, (source, label) in enumerate(zip(sources, ("a", "b"), strict=True))
+    }
+    plans = {
+        source: replace(
+            plan,
+            selected_urls=(plan.selected_videos[0].watch_url,),
+        )
+        for source, plan in plans.items()
+    }
+    executed: list[str] = []
+    provider_calls: list[str] = []
+    facade = SourceAcquisitionFacade(
+        paths,
+        classify=lambda source: (
+            provider_calls.append(f"classify:{source}") or SourceKind.CHANNEL
+        ),
+        fetch=lambda source: (
+            provider_calls.append(f"fetch:{source}") or VideoListResult()
+        ),
+        build=lambda **kwargs: (
+            provider_calls.append(f"build:{kwargs['source']}")
+            or plans[str(kwargs["source"])]
+        ),
+        execute=lambda value: (
+            executed.append(value.source) or AcquisitionReport(0, 0, 0, ())
+        ),
+        max_plan_identity_bytes=10_000,
+        max_retained_identity_bytes=8_000,
+    )
+
+    fingerprints = [
+        str(
+            facade.preview(
+                parse_source_preview(
+                    _json_body({"source": source, "language": "fr", "analyze": False})
+                )
+            )["fingerprint"]
+        )
+        for source in sources
+    ]
+
+    provider_calls_before_missing_confirmation = list(provider_calls)
+    with pytest.raises(PlanChanged):
+        facade.prepare_acquisition(fingerprints[0])
+    assert provider_calls == provider_calls_before_missing_confirmation
+    assert executed == []
+    facade.prepare_acquisition(fingerprints[1])()
+    replayed = facade.preview(
+        parse_source_preview(
+            _json_body({"source": sources[0], "language": "fr", "analyze": False})
+        )
+    )
+    assert replayed["fingerprint"] == fingerprints[0]
+    facade.prepare_acquisition(fingerprints[0])()
+    with pytest.raises(PlanChanged):
+        facade.prepare_acquisition(fingerprints[1])
+    assert executed == [sources[1], sources[0]]
 
 
 def test_source_facade_executes_only_the_plan_matching_the_preview_fingerprint(

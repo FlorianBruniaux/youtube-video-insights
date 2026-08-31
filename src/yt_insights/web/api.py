@@ -30,9 +30,13 @@ from yt_insights.web.jobs import JobSnapshot
 _MAX_STRING = 500
 _MAX_PAGE_SIZE = 100
 _MAX_SEARCH_LIMIT = 20
+_MIN_SQLITE_INTEGER = -(2**63)
 _MAX_SQLITE_INTEGER = 2**63 - 1
 _MAX_STRUCTURED_BYTES = 24 * 1024
 _MAX_SAFE_PLAN_BYTES = 20 * 1024
+_MAX_SELECTED_VIDEOS = 1_000
+_MAX_PLAN_IDENTITY_BYTES = 524_288
+_MAX_RETAINED_IDENTITY_BYTES = 4_194_304
 _MAX_PREPARED_PLANS = 100
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _JOB_ID = re.compile(r"[A-Za-z0-9_-]{1,200}")
@@ -117,6 +121,12 @@ class SourcePreviewRequest:
 class SourceAcquisitionRequest:
     fingerprint: str
     idempotency_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedPlan:
+    plan: AcquisitionPlan
+    identity_size: int
 
 
 def parse_search(query: Mapping[str, tuple[str, ...]]) -> SearchQuery:
@@ -335,32 +345,65 @@ class SourceAcquisitionFacade:
         fetch: Callable[..., VideoListResult] = fetch_video_list,
         build: Callable[..., AcquisitionPlan] = build_acquisition_plan,
         execute: Callable[..., AcquisitionReport] = execute_acquisition,
+        max_selected_videos: int = _MAX_SELECTED_VIDEOS,
+        max_plan_identity_bytes: int = _MAX_PLAN_IDENTITY_BYTES,
+        max_retained_identity_bytes: int = _MAX_RETAINED_IDENTITY_BYTES,
         max_prepared_plans: int = _MAX_PREPARED_PLANS,
     ) -> None:
-        if (
-            isinstance(max_prepared_plans, bool)
-            or not isinstance(max_prepared_plans, int)
-            or max_prepared_plans < 1
+        capacities = (
+            max_selected_videos,
+            max_plan_identity_bytes,
+            max_retained_identity_bytes,
+            max_prepared_plans,
+        )
+        if any(
+            isinstance(capacity, bool) or not isinstance(capacity, int) or capacity < 1
+            for capacity in capacities
         ):
-            raise ValueError("prepared plan capacity must be a positive integer")
+            raise ValueError("prepared plan capacities must be positive integers")
         self._data_paths = data_paths
         self._classify = classify
         self._fetch = fetch
         self._build = build
         self._execute = execute
+        self._max_selected_videos = max_selected_videos
+        self._max_plan_identity_bytes = max_plan_identity_bytes
+        self._max_retained_identity_bytes = max_retained_identity_bytes
         self._max_prepared_plans = max_prepared_plans
         self._plan_lock = threading.Lock()
-        self._prepared_plans: OrderedDict[str, AcquisitionPlan] = OrderedDict()
+        self._prepared_plans: OrderedDict[str, _PreparedPlan] = OrderedDict()
+        self._retained_identity_bytes = 0
 
     def preview(self, request: SourcePreviewRequest) -> Mapping[str, object]:
         """Build a fresh preview and return no source or directory fields."""
         plan = self._plan(request)
-        fingerprint = _plan_fingerprint(plan)
+        if (
+            len(plan.selected_videos) > self._max_selected_videos
+            or len(plan.selected_urls) > self._max_selected_videos
+            or not 0 <= plan.selected_count <= self._max_selected_videos
+        ):
+            return _plan_too_large()
+        identity = _canonical_plan_bytes(plan)
+        identity_size = len(identity)
+        if (
+            identity_size > self._max_plan_identity_bytes
+            or identity_size > self._max_retained_identity_bytes
+        ):
+            return _plan_too_large()
+        fingerprint = _fingerprint(identity)
         with self._plan_lock:
-            self._prepared_plans.pop(fingerprint, None)
-            self._prepared_plans[fingerprint] = plan
-            while len(self._prepared_plans) > self._max_prepared_plans:
-                self._prepared_plans.popitem(last=False)
+            prior = self._prepared_plans.pop(fingerprint, None)
+            if prior is not None:
+                self._retained_identity_bytes -= prior.identity_size
+            while self._prepared_plans and (
+                len(self._prepared_plans) >= self._max_prepared_plans
+                or self._retained_identity_bytes + identity_size
+                > self._max_retained_identity_bytes
+            ):
+                _, evicted = self._prepared_plans.popitem(last=False)
+                self._retained_identity_bytes -= evicted.identity_size
+            self._prepared_plans[fingerprint] = _PreparedPlan(plan, identity_size)
+            self._retained_identity_bytes += identity_size
         return _safe_plan(plan, fingerprint=fingerprint)
 
     def prepare_acquisition(
@@ -370,11 +413,12 @@ class SourceAcquisitionFacade:
         if _SHA256.fullmatch(fingerprint) is None:
             raise PlanChanged()
         with self._plan_lock:
-            plan = self._prepared_plans.get(fingerprint)
-        if plan is None:
+            prepared = self._prepared_plans.get(fingerprint)
+        if prepared is None:
             raise PlanChanged()
 
         def operation() -> Mapping[str, object]:
+            plan = prepared.plan
             current = _plan_fingerprint(plan)
             if not hmac.compare_digest(current, fingerprint):
                 return {"schema_version": 1, "error": {"code": "plan_changed"}}
@@ -438,10 +482,12 @@ def _query_integer(
     if values is None:
         return default
     raw = values[0]
+    upper_bound = _MAX_SQLITE_INTEGER if maximum is None else maximum
+    if len(raw) > len(str(upper_bound)):
+        raise RequestValidationError()
     if re.fullmatch(r"0|[1-9][0-9]*", raw) is None:
         raise RequestValidationError()
     value = int(raw)
-    upper_bound = _MAX_SQLITE_INTEGER if maximum is None else maximum
     if value < minimum or value > upper_bound:
         raise RequestValidationError()
     return value
@@ -465,7 +511,11 @@ def _json_object(
         return parsed
 
     try:
-        payload = json.loads(body.decode("utf-8"), object_pairs_hook=pairs_hook)
+        payload = json.loads(
+            body.decode("utf-8"),
+            object_pairs_hook=pairs_hook,
+            parse_int=_json_integer,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RequestValidationError() from exc
     if not isinstance(payload, dict) or any(
@@ -476,6 +526,17 @@ def _json_object(
     if any(key not in payload for key in required_keys):
         raise RequestValidationError()
     return payload
+
+
+def _json_integer(raw: str) -> int:
+    negative = raw.startswith("-")
+    digits = raw[1:] if negative else raw
+    if len(digits) > 19:
+        raise RequestValidationError()
+    boundary = str(-_MIN_SQLITE_INTEGER if negative else _MAX_SQLITE_INTEGER)
+    if len(digits) == len(boundary) and digits > boundary:
+        raise RequestValidationError()
+    return int(raw)
 
 
 def _string(value: object) -> str:
@@ -606,13 +667,24 @@ def _plan_identity(plan: AcquisitionPlan) -> dict[str, object]:
 
 
 def _plan_fingerprint(plan: AcquisitionPlan) -> str:
-    encoded = json.dumps(
+    return _fingerprint(_canonical_plan_bytes(plan))
+
+
+def _canonical_plan_bytes(plan: AcquisitionPlan) -> bytes:
+    return json.dumps(
         _plan_identity(plan),
         ensure_ascii=False,
         separators=(",", ":"),
         sort_keys=True,
     ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+
+
+def _fingerprint(identity: bytes) -> str:
+    return hashlib.sha256(identity).hexdigest()
+
+
+def _plan_too_large() -> dict[str, object]:
+    return {"schema_version": 1, "error": {"code": "plan_too_large"}}
 
 
 def _safe_plan(

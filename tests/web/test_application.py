@@ -124,6 +124,7 @@ class FakeStore:
         self.get_calls: list[str] = []
         self.session = _session()
         self.missing = False
+        self.error: Exception | None = None
 
     def list_sessions(self, *, limit: int, offset: int) -> tuple[ResearchSession, ...]:
         self.calls.append((limit, offset))
@@ -131,8 +132,10 @@ class FakeStore:
 
     def get_session(self, session_id: str) -> ResearchSession:
         self.get_calls.append(session_id)
+        if self.error is not None:
+            raise self.error
         if self.missing or session_id != SESSION_ID:
-            raise ValueError("private missing session detail")
+            raise ValueError("session does not exist")
         return self.session
 
 
@@ -503,6 +506,24 @@ def test_domain_revision_conflict_inside_job_is_a_bounded_terminal_result(
     assert result == {"schema_version": 1, "error": {"code": "stale_revision"}}
 
 
+def test_unexpected_workflow_value_error_inside_job_is_operation_failed(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(state=ResearchState.DISCOVERING, revision=5)
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/discovery",
+            '{"expected_revision":5}',
+        )
+    )
+    services.workflow.error = ValueError("failed at /Users/private/workflow.sqlite3")
+
+    result = services.jobs.submissions[0][1]()
+
+    assert response.status == 202
+    assert result == {"schema_version": 1, "error": {"code": "operation_failed"}}
+
+
 def test_missing_or_incompatible_queued_session_fails_before_submission(
     services: SimpleNamespace,
 ) -> None:
@@ -559,6 +580,58 @@ def test_missing_or_stale_synchronous_mutation_fails_before_workflow(
     assert stale.status == 409
     assert stale.json_body["error"] == {"code": "stale_revision"}
     assert services.workflow.decision_calls == []
+
+
+def test_missing_session_and_unexpected_store_value_error_are_distinct(
+    services: SimpleNamespace,
+) -> None:
+    request = _post(
+        f"/api/v1/research/sessions/{SESSION_ID}/decisions",
+        '{"expected_revision":5,"decision":"refresh","idempotency_key":"decision-1"}',
+    )
+    services.store.missing = True
+    missing = services.app.handle(request)
+    services.store.missing = False
+    services.store.error = ValueError(
+        "database schema failed at /Users/private/research.sqlite3"
+    )
+    unexpected = services.app.handle(request)
+
+    assert missing.status == 404
+    assert missing.json_body == {
+        "schema_version": 1,
+        "error": {"code": "not_found"},
+    }
+    assert unexpected.status == 500
+    assert unexpected.json_body == {
+        "schema_version": 1,
+        "error": {"code": "internal_error"},
+    }
+    assert b"/Users/private" not in unexpected.body
+    assert services.workflow.decision_calls == []
+
+
+def test_unexpected_synchronous_workflow_value_error_is_internal(
+    services: SimpleNamespace,
+) -> None:
+    services.workflow.error = ValueError(
+        "workflow failed at /Users/private/research.sqlite3"
+    )
+
+    response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/decisions",
+            '{"expected_revision":5,"decision":"refresh",'
+            '"idempotency_key":"decision-1"}',
+        )
+    )
+
+    assert response.status == 500
+    assert response.json_body == {
+        "schema_version": 1,
+        "error": {"code": "internal_error"},
+    }
+    assert b"/Users/private" not in response.body
 
 
 def test_session_creation_replays_same_key_and_rejects_changed_payload(
@@ -755,6 +828,34 @@ def test_source_acquisition_replays_admission_and_rejects_changed_payload(
     assert changed.json_body["error"] == {"code": "idempotency_conflict"}
 
 
+def test_replayed_source_admission_survives_plan_eviction_but_a_new_key_does_not(
+    services: SimpleNamespace,
+) -> None:
+    payload = (
+        '{"fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+        'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+        '"idempotency_key":"source-acquisition-1"}'
+    )
+    first = services.app.handle(_post("/api/v1/sources/acquire", payload))
+    services.sources.changed = True
+
+    replayed = services.app.handle(_post("/api/v1/sources/acquire", payload))
+    missing = services.app.handle(
+        _post(
+            "/api/v1/sources/acquire",
+            '{"fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+            'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+            '"idempotency_key":"source-acquisition-2"}',
+        )
+    )
+
+    assert replayed == first
+    assert missing.status == 409
+    assert missing.json_body["error"] == {"code": "plan_changed"}
+    assert services.sources.prepare_calls == ["a" * 64, "a" * 64]
+    assert len(services.jobs.submissions) == 1
+
+
 def test_stale_revision_is_a_fixed_conflict(services: SimpleNamespace) -> None:
     services.workflow.error = ResearchRevisionConflict("private state")
     response = services.app.handle(
@@ -828,6 +929,30 @@ def test_invalid_and_unknown_routes_do_not_reach_dependencies(
     assert unsafe_session.status == 400
     assert unsafe_session.json_body["error"] == {"code": "invalid_request"}
     assert services.search.queries == []
+
+
+def test_oversized_query_and_json_integers_are_invalid_requests(
+    services: SimpleNamespace,
+) -> None:
+    oversized_integer = "9" * 5_000
+
+    query_response = services.app.handle(
+        WebRequest.get("/api/v1/sources", f"offset={oversized_integer}")
+    )
+    json_response = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/decisions",
+            '{"expected_revision":'
+            + oversized_integer
+            + ',"decision":"refresh","idempotency_key":"decision-1"}',
+        )
+    )
+
+    assert query_response.status == json_response.status == 400
+    assert query_response.json_body["error"] == {"code": "invalid_request"}
+    assert json_response.json_body["error"] == {"code": "invalid_request"}
+    assert services.catalog.calls == []
+    assert services.workflow.decision_calls == []
 
 
 def test_catalog_unavailability_uses_a_bounded_error(services: SimpleNamespace) -> None:

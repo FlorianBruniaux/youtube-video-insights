@@ -291,10 +291,8 @@ class WebApplication:
         if session_match is not None:
             _require_empty_query(request)
             session_id = validate_session_id(session_match.group(1))
-            try:
-                response = self._workflow.status(session_id)
-            except ValueError as exc:
-                raise ResourceNotFound() from exc
+            self._require_session(session_id)
+            response = self._workflow.status(session_id)
             return WebResponse.json(200, response.to_dict())
         job_match = _JOB_ROUTE.fullmatch(request.path)
         if job_match is not None:
@@ -348,21 +346,12 @@ class WebApplication:
                 session_id,
                 expected_revision=parsed_decision.expected_revision,
             )
-            try:
-                response = self._workflow.decide(
-                    session_id,
-                    expected_revision=parsed_decision.expected_revision,
-                    decision=parsed_decision.decision,
-                    idempotency_key=parsed_decision.idempotency_key,
-                )
-            except ResearchRevisionConflict:
-                raise
-            except ValueError as exc:
-                self._require_session_revision(
-                    session_id,
-                    expected_revision=parsed_decision.expected_revision,
-                )
-                raise WorkflowConflict() from exc
+            response = self._workflow.decide(
+                session_id,
+                expected_revision=parsed_decision.expected_revision,
+                decision=parsed_decision.decision,
+                idempotency_key=parsed_decision.idempotency_key,
+            )
             return WebResponse.json(200, response.to_dict())
         if action == "discovery":
             parsed_revision = parse_revision(request.body)
@@ -381,21 +370,12 @@ class WebApplication:
                 session_id,
                 expected_revision=parsed_approval.expected_revision,
             )
-            try:
-                response = self._workflow.approve(
-                    session_id,
-                    expected_revision=parsed_approval.expected_revision,
-                    video_ids=parsed_approval.video_ids,
-                    idempotency_key=parsed_approval.idempotency_key,
-                )
-            except ResearchRevisionConflict:
-                raise
-            except ValueError as exc:
-                self._require_session_revision(
-                    session_id,
-                    expected_revision=parsed_approval.expected_revision,
-                )
-                raise WorkflowConflict() from exc
+            response = self._workflow.approve(
+                session_id,
+                expected_revision=parsed_approval.expected_revision,
+                video_ids=parsed_approval.video_ids,
+                idempotency_key=parsed_approval.idempotency_key,
+            )
             return WebResponse.json(200, response.to_dict())
         if action == "acquisition":
             parsed_acquisition = parse_acquisition(request.body)
@@ -429,15 +409,10 @@ class WebApplication:
         if request_factory is None:
             return _error(503, "exports_unavailable")
         self._require_session(session_id)
-        try:
-            result = self._workflow.export(
-                request_factory(session_id, parsed_export.force),
-                package_version=self._package_version,
-            )
-        except ResearchRevisionConflict:
-            raise
-        except ValueError as exc:
-            raise WorkflowConflict() from exc
+        result = self._workflow.export(
+            request_factory(session_id, parsed_export.force),
+            package_version=self._package_version,
+        )
         return WebResponse.json(
             200,
             {
@@ -475,34 +450,9 @@ class WebApplication:
             except WorkflowConflict:
                 return _job_error("workflow_conflict")
             except ValueError:
-                return self._queued_value_error(
-                    session_id,
-                    expected_revision=expected_revision,
-                    compatible_states=compatible_states,
-                )
+                return _job_error("operation_failed")
 
         return self._queued(kind, guarded_operation)
-
-    def _queued_value_error(
-        self,
-        session_id: str,
-        *,
-        expected_revision: int,
-        compatible_states: frozenset[ResearchState],
-    ) -> Mapping[str, object]:
-        try:
-            self._require_session_state(
-                session_id,
-                expected_revision=expected_revision,
-                compatible_states=compatible_states,
-            )
-        except ResearchRevisionConflict:
-            return _job_error("stale_revision")
-        except ResourceNotFound:
-            return _job_error("not_found")
-        except WorkflowConflict:
-            return _job_error("workflow_conflict")
-        return _job_error("workflow_conflict")
 
     def _require_session_state(
         self,
@@ -533,18 +483,17 @@ class WebApplication:
         try:
             return self._research_store.get_session(session_id)
         except ValueError as exc:
-            raise ResourceNotFound() from exc
+            if type(exc) is ValueError and exc.args == ("session does not exist",):
+                raise ResourceNotFound() from exc
+            raise
 
     def _start_session(self, request: StartSessionRequest) -> WebResponse:
-        try:
-            response = self._workflow.start(
-                topic=request.topic,
-                queries=request.queries,
-                languages=request.languages,
-                freshness_profile=request.freshness_profile,
-            )
-        except ValueError as exc:
-            raise WorkflowConflict() from exc
+        response = self._workflow.start(
+            topic=request.topic,
+            queries=request.queries,
+            languages=request.languages,
+            freshness_profile=request.freshness_profile,
+        )
         return WebResponse.json(200, response.to_dict())
 
     def _admit_source_acquisition(
