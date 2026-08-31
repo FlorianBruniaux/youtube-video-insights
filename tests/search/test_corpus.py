@@ -371,7 +371,7 @@ def test_representative_selection_classifies_a_disappeared_source_and_continues(
 def test_scan_corpus_rejects_non_regular_sources_without_blocking(
     request: pytest.FixtureRequest,
 ) -> None:
-    temporary_root = tempfile.TemporaryDirectory(prefix="yt-insights-", dir="/private/tmp")
+    temporary_root = tempfile.TemporaryDirectory(prefix="yt-insights-")
     request.addfinalizer(temporary_root.cleanup)
     root = Path(temporary_root.name) / "output"
     transcript_dir = root / "alpha" / "transcripts"
