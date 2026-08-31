@@ -3,19 +3,19 @@
 from __future__ import annotations
 
 import ctypes
-from dataclasses import dataclass
 import errno
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import secrets
 import shutil
 import stat
 import subprocess
+from contextlib import suppress
+from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
-
 
 Client = Literal["claude", "codex"]
 Mode = Literal["dry-run", "apply", "verify"]
@@ -483,10 +483,8 @@ def _open_bound_root(home: Path) -> BoundRoot:
         if created and created_identity is not None:
             recovery_paths.append(str(home))
         if descriptor is not None:
-            try:
+            with suppress(OSError):
                 os.close(descriptor)
-            except OSError:
-                pass
         os.close(parent_fd)
         if recovery_paths:
             raise PublicationConflict(
@@ -751,7 +749,7 @@ def _stage_bytes_at(
         )
         os.close(descriptor)
         try:
-            recovery_paths = _remove_expected_entry(
+            cleanup_paths = _remove_expected_entry(
                 parent_fd,
                 parent,
                 stage_name,
@@ -759,12 +757,12 @@ def _stage_bytes_at(
                 purpose="stage-write-failure",
             )
         except PublicationConflict as cleanup_error:
-            recovery_paths = list(cleanup_error.recovery_paths)
+            cleanup_paths = list(cleanup_error.recovery_paths)
         except OSError:
-            recovery_paths = [str(parent / stage_name)]
+            cleanup_paths = [str(parent / stage_name)]
         raise PublicationConflict(
             str(error),
-            recovery_paths=tuple(recovery_paths),
+            recovery_paths=tuple(cleanup_paths),
         ) from error
     finally:
         if staged is not None:
@@ -775,10 +773,10 @@ def _stage_bytes_at(
             raise ValueError("staged file changed before publication")
         return stage_name, staged
     except Exception as error:
-        recovery_paths: list[str] = []
+        verification_recovery_paths: list[str] = []
         if staged is not None:
             try:
-                recovery_paths.extend(
+                verification_recovery_paths.extend(
                     _remove_expected_entry(
                         parent_fd,
                         parent,
@@ -788,12 +786,12 @@ def _stage_bytes_at(
                     )
                 )
             except PublicationConflict as cleanup_error:
-                recovery_paths.extend(cleanup_error.recovery_paths)
+                verification_recovery_paths.extend(cleanup_error.recovery_paths)
             except OSError:
-                recovery_paths.append(str(parent / stage_name))
+                verification_recovery_paths.append(str(parent / stage_name))
         raise PublicationConflict(
             str(error),
-            recovery_paths=tuple(recovery_paths),
+            recovery_paths=tuple(verification_recovery_paths),
         ) from error
 
 
@@ -852,7 +850,7 @@ def _quarantine_expected_entry(
             "foreign quarantined entry could not be moved to recovery",
             recovery_paths=(str(parent / quarantine),),
         ) from error
-    try:
+    with suppress(FileExistsError):
         os.link(
             recovery,
             name,
@@ -860,8 +858,6 @@ def _quarantine_expected_entry(
             dst_dir_fd=parent_fd,
             follow_symlinks=False,
         )
-    except FileExistsError:
-        pass
     raise PublicationConflict(
         "foreign entry replaced an owned publication target",
         recovery_paths=(str(parent / recovery),),
@@ -917,7 +913,7 @@ def _open_recovery_directory(parent_fd: int, parent: Path) -> tuple[int, list[st
             raise PublicationConflict(
                 "private recovery directory changed during publication",
                 recovery_paths=(str(parent / RECOVERY_DIRECTORY_NAME),),
-            )
+            ) from None
         return descriptor, []
 
 
@@ -929,7 +925,7 @@ def _recovery_entry_name(
     snapshot: FileSnapshot,
 ) -> str:
     identity = _sha256(
-        f"{name}\0{purpose}\0{snapshot.sha256}".encode("utf-8")
+        f"{name}\0{purpose}\0{snapshot.sha256}".encode()
     )[:16]
     for sequence in range(1, 10_000):
         candidate = f"{identity}-{sequence:04d}-{purpose}-{name}"
@@ -963,7 +959,7 @@ def _retain_quarantined_entry(
         recovery_path = parent / RECOVERY_DIRECTORY_NAME / recovery_name
         retained.append(str(recovery_path))
         if not _same_snapshot(recovered, quarantined.snapshot):
-            try:
+            with suppress(FileExistsError):
                 os.link(
                     recovery_name,
                     quarantined.original_name,
@@ -971,8 +967,6 @@ def _retain_quarantined_entry(
                     dst_dir_fd=parent_fd,
                     follow_symlinks=False,
                 )
-            except FileExistsError:
-                pass
             raise PublicationConflict(
                 "foreign content reached the private recovery directory",
                 recovery_paths=tuple(retained),
@@ -1287,10 +1281,8 @@ def _remove_created_files(created: list[CreatedFile]) -> list[str]:
 
 def _close_bound_root(root: BoundRoot, *, rollback: bool) -> None:
     for item in root.created_directories:
-        try:
+        with suppress(OSError):
             os.close(item.parent_fd)
-        except OSError:
-            pass
     try:
         os.close(root.fd)
     finally:
@@ -1318,31 +1310,29 @@ def _rollback_asset_transaction(transaction: AssetTransaction) -> list[str]:
 
 def _finish_asset_transaction(transaction: AssetTransaction) -> list[str]:
     cleanup_pending: list[str] = list(transaction.root.recovery_paths)
-    for item in transaction.replaced:
+    for replaced_file in transaction.replaced:
         try:
             cleanup_pending.extend(
                 _remove_expected_entry(
-                    item.parent_fd,
-                    item.path.parent,
-                    item.backup_name,
-                    item.backup,
+                    replaced_file.parent_fd,
+                    replaced_file.path.parent,
+                    replaced_file.backup_name,
+                    replaced_file.backup,
                     purpose="cleanup-tombstone",
                 )
             )
         except PublicationConflict as error:
             cleanup_pending.extend(error.recovery_paths)
         except OSError:
-            cleanup_pending.append(str(item.path.parent / item.backup_name))
+            cleanup_pending.append(
+                str(replaced_file.path.parent / replaced_file.backup_name)
+            )
         finally:
-            try:
-                os.close(item.parent_fd)
-            except OSError:
-                pass
-    for item in transaction.created:
-        try:
-            os.close(item.parent_fd)
-        except OSError:
-            pass
+            with suppress(OSError):
+                os.close(replaced_file.parent_fd)
+    for created_file in transaction.created:
+        with suppress(OSError):
+            os.close(created_file.parent_fd)
     try:
         _close_bound_root(transaction.root, rollback=False)
     except OSError:
@@ -1351,9 +1341,8 @@ def _finish_asset_transaction(transaction: AssetTransaction) -> list[str]:
 
 
 def _fsync_asset_transaction(transaction: AssetTransaction) -> None:
-    descriptors = {
-        item.parent_fd for item in (*transaction.created, *transaction.replaced)
-    }
+    descriptors = {item.parent_fd for item in transaction.created}
+    descriptors.update(item.parent_fd for item in transaction.replaced)
     descriptors.update(
         item.parent_fd for item in transaction.root.created_directories
     )
@@ -1498,9 +1487,15 @@ def _recheck_published_manifest(
         raise ValueError("ownership manifest changed during publication")
     if replaced is not None and not _same_snapshot(current, replaced.installed):
         raise ValueError("ownership manifest changed during publication")
-    if created is None and replaced is None:
-        if ownership.snapshot is None or not _same_snapshot(current, ownership.snapshot):
-            raise ValueError("ownership manifest changed during publication")
+    if (
+        created is None
+        and replaced is None
+        and (
+            ownership.snapshot is None
+            or not _same_snapshot(current, ownership.snapshot)
+        )
+    ):
+        raise ValueError("ownership manifest changed during publication")
 
 
 def _apply_asset_changes(
@@ -1547,6 +1542,8 @@ def _apply_asset_changes(
             )
         elif ownership.status == "valid":
             if current_manifest != desired_manifest:
+                if ownership.snapshot is None:
+                    raise ValueError("valid ownership manifest has no preimage")
                 transaction.replaced.append(
                     _replace_managed_file(
                         ownership.path,

@@ -27,7 +27,6 @@ from yt_insights.research.models import (
 )
 from yt_insights.research.store import ResearchStore
 
-
 NOW = datetime(2026, 8, 31, 10, 0, tzinfo=UTC)
 SESSION_ID = "01K4RESEARCH0000000000000000"
 VIDEO_ID = "abc123DEF45"

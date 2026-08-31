@@ -13,7 +13,6 @@ from enum import StrEnum
 from numbers import Real
 from typing import TypeVar
 
-
 _VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _T = TypeVar("_T")
@@ -71,7 +70,7 @@ def normalize_research_text(value: str) -> str:
 def discovery_fingerprint(
     *,
     topic: str,
-    queries: tuple["QuerySpec", ...],
+    queries: tuple[QuerySpec, ...],
     languages: tuple[str, ...],
     provider_name: str,
     provider_version: int,
@@ -140,7 +139,7 @@ class VideoEvidence:
     source_keys: tuple[str, ...]
     title: str
     published_at: date | None
-    rank: int
+    rank: float
     watch_url: str
 
     def __post_init__(self) -> None:

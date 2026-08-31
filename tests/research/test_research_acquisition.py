@@ -190,6 +190,6 @@ def test_outcomes_remain_available_when_later_explicit_refresh_fails(
     )
 
     assert outcomes == (expected,)
-    with pytest.raises(ValueError, match="search.*publication validation failed"):
+    with pytest.raises(ValueError, match=r"search.*publication validation failed"):
         acquisition.rebuild_and_publish_indexes(paths)
     assert outcomes == (expected,)

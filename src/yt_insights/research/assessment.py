@@ -8,15 +8,16 @@ the caller retry rather than receive mixed-generation evidence.
 
 from __future__ import annotations
 
-from contextlib import ExitStack, contextmanager
 import hashlib
 import json
 import os
-from pathlib import Path
 import re
 import stat
+from collections.abc import Iterator
+from contextlib import ExitStack, contextmanager
 from datetime import UTC, date, datetime, timedelta
-from typing import Iterator, Protocol
+from pathlib import Path
+from typing import Protocol, TypeVar
 
 from yt_insights.catalog import Catalog, CatalogError, ReadOnlyCatalog
 from yt_insights.search.models import SearchQuery
@@ -34,9 +35,9 @@ from .models import (
     VideoEvidence,
 )
 
-
 _ASSESSMENT_LIMIT = 20
 _YOUTUBE_CHANNEL_ID = re.compile(r"UC[A-Za-z0-9_-]{22}")
+_EvidenceT = TypeVar("_EvidenceT", PassageEvidence, VideoEvidence)
 
 
 class AssessmentRetryableError(RuntimeError):
@@ -75,7 +76,7 @@ class SQLiteEvidenceReader:
             )
         except AssessmentRetryableError:
             raise
-        except OSError as exc:
+        except OSError:
             raise AssessmentRetryableError("local evidence database is unavailable") from None
 
     def validate_snapshot(self, snapshot: DatabaseSnapshot) -> None:
@@ -147,7 +148,7 @@ class SQLiteEvidenceReader:
                     key=lambda item: (item[0], item[1].rank, item[1].passage_id),
                 )[:limit]
             )
-        except (SearchIndexError, OSError, ValueError, TypeError) as exc:
+        except (SearchIndexError, OSError, ValueError, TypeError):
             raise AssessmentRetryableError("local search evidence is unavailable") from None
 
     def search_videos(self, query: QuerySpec, *, limit: int) -> tuple[VideoEvidence, ...]:
@@ -156,7 +157,7 @@ class SQLiteEvidenceReader:
         try:
             with Catalog.open_read_only(self._catalog_database) as catalog:
                 return self._search_videos_from_catalog(catalog, query, limit=limit)
-        except (CatalogError, OSError, ValueError, TypeError) as exc:
+        except (CatalogError, OSError, ValueError, TypeError):
             raise AssessmentRetryableError("local catalogue evidence is unavailable") from None
 
     def _search_videos_from_catalog(
@@ -171,7 +172,11 @@ class SQLiteEvidenceReader:
                     video_id=result.video_id,
                     source_keys=result.sources,
                     title=result.title,
-                    published_at=result.published_at,
+                    published_at=(
+                        None
+                        if result.published_at is None
+                        else date.fromisoformat(result.published_at)
+                    ),
                     rank=result.rank,
                     watch_url=result.watch_url,
                 )
@@ -183,7 +188,7 @@ class SQLiteEvidenceReader:
                     "local evidence changed during assessment"
                 ) from None
             raise AssessmentRetryableError("local catalogue evidence is unavailable") from None
-        except (OSError, ValueError, TypeError) as exc:
+        except (OSError, ValueError, TypeError):
             raise AssessmentRetryableError("local catalogue evidence is unavailable") from None
 
 
@@ -297,9 +302,9 @@ def _database_generation(path: Path) -> str:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
         opened = os.fstat(descriptor)
         named = os.lstat(path)
-    except FileNotFoundError as exc:
+    except FileNotFoundError:
         raise AssessmentRetryableError("local evidence database is unavailable") from None
-    except OSError as exc:
+    except OSError:
         raise AssessmentRetryableError("local evidence database is unavailable") from None
     finally:
         if descriptor is not None:
@@ -342,8 +347,8 @@ def _require_utc(value: datetime, *, label: str) -> None:
 
 
 def _select_best(
-    selected: dict[str, tuple[int, PassageEvidence | VideoEvidence]],
-    candidates: tuple[PassageEvidence, ...] | tuple[VideoEvidence, ...],
+    selected: dict[str, tuple[int, _EvidenceT]],
+    candidates: tuple[_EvidenceT, ...],
     query_position: int,
     *,
     identity: str,
@@ -359,8 +364,8 @@ def _select_best(
 
 
 def _ordered_unique(
-    selected: dict[str, tuple[int, PassageEvidence | VideoEvidence]], *, identity: str
-) -> tuple[PassageEvidence, ...] | tuple[VideoEvidence, ...]:
+    selected: dict[str, tuple[int, _EvidenceT]], *, identity: str
+) -> tuple[_EvidenceT, ...]:
     return tuple(
         item[1]
         for item in sorted(

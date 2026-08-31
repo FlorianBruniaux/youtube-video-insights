@@ -26,7 +26,6 @@ from .models import (
 )
 from .store import ResearchStore
 
-
 _FORMAT_VERSION = 1
 _DOSSIER_NAME = "dossier.md"
 _MANIFEST_NAME = "manifest.json"

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime, timedelta, timezone
-from hashlib import sha256
 import os
-from pathlib import Path
 import shutil
 import sqlite3
+from datetime import UTC, date, datetime, timedelta, timezone
+from hashlib import sha256
+from pathlib import Path
 
 import pytest
 
@@ -24,9 +24,14 @@ from yt_insights.research.models import (
     VideoEvidence,
 )
 from yt_insights.search.corpus import CorpusManifest
-from yt_insights.search.models import DocumentRef, Passage, compute_document_id, compute_passage_id, youtube_url
+from yt_insights.search.models import (
+    DocumentRef,
+    Passage,
+    compute_document_id,
+    compute_passage_id,
+    youtube_url,
+)
 from yt_insights.search.sqlite_fts import SQLiteFtsIndex
-
 
 VIDEO_A = "VideoOne123"
 VIDEO_B = "VideoTwo456"
@@ -436,7 +441,7 @@ def test_sqlite_reader_rejects_either_replaced_database_after_multi_query_assess
 def test_sqlite_reader_reports_missing_or_invalid_search_database_without_query_text(
     tmp_path: Path, invalid: bool
 ) -> None:
-    search_database, catalog_database = _build_local_databases(tmp_path)
+    _search_database, catalog_database = _build_local_databases(tmp_path)
     database = tmp_path / ("invalid.sqlite3" if invalid else "missing.sqlite3")
     if invalid:
         database.write_bytes(b"not sqlite")

@@ -2,15 +2,14 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import shutil
+from pathlib import Path
 
-from click.testing import CliRunner
 import pytest
+from click.testing import CliRunner
 
 from yt_insights import assistant_setup
 from yt_insights.cli import cli
-
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 OWNERSHIP_MANIFEST = Path(".agents/.yt-insights-assistant-assets-v1.json")

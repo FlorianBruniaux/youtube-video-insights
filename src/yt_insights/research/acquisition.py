@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from yt_insights.acquisition import (
     AcquisitionItemStatus,
@@ -86,7 +86,7 @@ class ResearchAcquisitionService:
         )
 
         outcomes: list[CandidateAcquisitionOutcome] = []
-        for candidate, plan in zip(candidates, plans):
+        for candidate, plan in zip(candidates, plans, strict=True):
             report = self._executor(
                 plan,
                 cookies_from_browser=cookies_from_browser,

@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
-import re
-from typing import Callable, Protocol
+from typing import Protocol
 
 from yt_insights.downloader import VideoInfo, VideoListResult, fetch_video_list
 
-from .models import CandidateStatus, QuerySpec, ResearchCandidate, normalize_research_text
-
+from .models import (
+    CandidateStatus,
+    QuerySpec,
+    ResearchCandidate,
+    normalize_research_text,
+)
 
 _MAX_QUERIES = 8
 _MAX_CANDIDATES = 10

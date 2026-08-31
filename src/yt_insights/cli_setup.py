@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 import click
 
-from .assistant_setup import run_assistant_setup
+from .assistant_setup import Mode, run_assistant_setup
 
 
 @click.group("setup")
@@ -63,7 +64,7 @@ def assistants_command(
     selected = sum((dry_run, apply, verify))
     if selected > 1:
         raise click.UsageError("choose exactly one of --dry-run, --apply, or --verify")
-    mode = "apply" if apply else "verify" if verify else "dry-run"
+    mode: Mode = "apply" if apply else "verify" if verify else "dry-run"
     try:
         payload, exit_code = run_assistant_setup(
             client=client,
@@ -75,19 +76,21 @@ def assistants_command(
     except ValueError as error:
         if as_json:
             click.echo(json.dumps({"status": "invalid", "error": str(error)}, sort_keys=True))
-            raise click.exceptions.Exit(2)
+            raise click.exceptions.Exit(2) from None
         raise click.ClickException(str(error)) from error
 
     if as_json:
         click.echo(json.dumps(payload, sort_keys=True))
     else:
         click.echo(f"Assistant setup: {payload['status']}")
-        for operation in payload.get("operations", []):
+        operations = cast(list[dict[str, object]], payload.get("operations", []))
+        for operation in operations:
             target = operation.get("target", operation.get("client", ""))
             click.echo(f"  {operation['kind']}: {target} [{operation['status']}]")
-        if payload.get("conflicts"):
+        conflicts = cast(list[str], payload.get("conflicts", []))
+        if conflicts:
             click.echo("Conflicts:", err=True)
-            for conflict in payload["conflicts"]:
+            for conflict in conflicts:
                 click.echo(f"  {conflict}", err=True)
     if exit_code:
         raise click.exceptions.Exit(exit_code)
