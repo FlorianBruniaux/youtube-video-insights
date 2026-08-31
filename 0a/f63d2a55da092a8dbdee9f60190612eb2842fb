@@ -1,0 +1,24 @@
+tests/web/test_jobs.py
+  s_0a442347250965::t_4514c27d9b084e 7
+  s_0a442347250965::t_83482c18b43b68 1-6,8-206
+src/yt_insights/web/jobs.py
+  s_0a442347250965::t_574bcfbebae341 93,100-101
+  s_0a442347250965::t_cd7cbf81e013f6 1-92,94-99,102-145,151-192
+  s_0a442347250965::t_5fe8a1756f7385 146-150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "0af63d2a55da092a8dbdee9f60190612eb2842fb",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
