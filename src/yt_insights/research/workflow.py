@@ -37,6 +37,25 @@ _SCHEMA_VERSION = 1
 _DISCOVERY_PROVIDER_NAME = "yt-dlp"
 _DISCOVERY_PROVIDER_VERSION = 1
 _MAX_PUBLIC_ACQUISITION_ATTEMPTS = 100
+_PUBLIC_RESEARCH_ERROR_CODES = frozenset(
+    {
+        "acquisition_in_progress",
+        "acquisition_unavailable",
+        "discovery_unavailable",
+        "index_refresh_failed",
+        "local_index_unavailable",
+        "partial_acquisition_failed",
+        "retry_in_progress",
+    }
+)
+_PUBLIC_ACQUISITION_ERROR_CODES = frozenset(
+    {
+        "acquisition_unavailable",
+        "cache_read_failed",
+        "download_failed",
+        "no_transcript",
+    }
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,6 +91,33 @@ class ResearchResponse:
     def __post_init__(self) -> None:
         if not isinstance(self.acquisition_history, tuple):
             raise TypeError("acquisition history must be a tuple")
+        if (
+            self.error_code is not None
+            and self.error_code not in _PUBLIC_RESEARCH_ERROR_CODES
+        ):
+            object.__setattr__(self, "error_code", "research_unavailable")
+        safe_history = tuple(
+            PublicAcquisitionAttempt(
+                attempt.attempt_id,
+                attempt.status,
+                tuple(
+                    PublicAcquisitionItem(
+                        item.video_id,
+                        item.status,
+                        (
+                            item.error_code
+                            if item.error_code is None
+                            or item.error_code in _PUBLIC_ACQUISITION_ERROR_CODES
+                            else "acquisition_failed"
+                        ),
+                        item.source_sha256,
+                    )
+                    for item in attempt.items
+                ),
+            )
+            for attempt in self.acquisition_history
+        )
+        object.__setattr__(self, "acquisition_history", safe_history)
         if len(self.acquisition_history) > _MAX_PUBLIC_ACQUISITION_ATTEMPTS:
             object.__setattr__(
                 self,

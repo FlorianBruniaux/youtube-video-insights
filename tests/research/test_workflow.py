@@ -26,6 +26,7 @@ from yt_insights.research.models import (
 from yt_insights.research.store import ResearchStore
 from yt_insights.research.workflow import (
     PublicAcquisitionAttempt,
+    PublicAcquisitionItem,
     ResearchResponse,
     ResearchWorkflow,
 )
@@ -1362,6 +1363,46 @@ def test_status_exposes_safe_acquisition_history_grouped_by_attempt(tmp_path) ->
     assert "SECRET-PROFILE-CANARY" not in serialized
     assert "SECRET-IDEMPOTENCY-CANARY" not in repr(response)
     assert "SECRET-PROFILE-CANARY" not in repr(response)
+
+
+def test_public_error_codes_use_a_closed_secret_free_vocabulary(tmp_path) -> None:
+    workflow = _workflow(tmp_path, FakeEvidenceReader())
+    started = workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    secret = "SECRET-PRIVATE-ERROR-CANARY"
+    response = ResearchResponse(
+        started.session,
+        started.assessment,
+        None,
+        error_code=secret,
+        acquisition_history=(
+            PublicAcquisitionAttempt(
+                "attempt-001",
+                "failed_retryable",
+                (
+                    PublicAcquisitionItem(
+                        VIDEO_ID,
+                        CandidateStatus.FAILED_RETRYABLE,
+                        secret,
+                        None,
+                    ),
+                ),
+            ),
+        ),
+    )
+
+    payload = response.to_dict()
+
+    assert payload["error_code"] == "research_unavailable"
+    assert payload["acquisition_history"][0]["items"][0]["error_code"] == (
+        "acquisition_failed"
+    )
+    assert secret not in json.dumps(payload, sort_keys=True)
+    assert secret not in repr(response)
 
 
 def test_public_acquisition_history_is_bounded_and_reports_truncation(tmp_path) -> None:
