@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      base_sha:
+        description: Base commit SHA for the changed-line whitespace check
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -50,8 +55,7 @@ jobs:
 
       - name: Check changed-line whitespace
         env:
-          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
-          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event_name == 'push' && github.event.before || inputs.base_sha }}
         run: |
           set -eu
 
@@ -61,33 +65,14 @@ jobs:
             exit 1
           fi
 
+          base_is_commit=true
           case "$GITHUB_EVENT_NAME" in
-            pull_request)
-              if [ -z "$BASE_SHA" ] || [ "$BASE_SHA" = "$zero_sha" ]; then
-                echo "Invalid base SHA for $GITHUB_EVENT_NAME" >&2
-                exit 1
-              fi
+            pull_request|workflow_dispatch)
               ;;
             push)
               if [ "$BASE_SHA" = "$zero_sha" ]; then
-                default_ref="refs/remotes/origin/$DEFAULT_BRANCH"
-                if [ -z "$DEFAULT_BRANCH" ] || ! git show-ref --verify --quiet "$default_ref"; then
-                  echo "Default branch ref is unavailable for a zero-SHA push" >&2
-                  exit 1
-                fi
-                if ! BASE_SHA=$(git merge-base "$GITHUB_SHA" "$default_ref"); then
-                  echo "No merge base with the default branch for a zero-SHA push" >&2
-                  exit 1
-                fi
-              elif [ -z "$BASE_SHA" ]; then
-                echo "Invalid base SHA for $GITHUB_EVENT_NAME" >&2
-                exit 1
-              fi
-              ;;
-            workflow_dispatch)
-              if ! BASE_SHA=$(git rev-parse --verify HEAD^); then
-                echo "workflow_dispatch requires a parent commit for its explicit HEAD^ fallback" >&2
-                exit 1
+                BASE_SHA=$(git hash-object -w -t tree /dev/null)
+                base_is_commit=false
               fi
               ;;
             *)
@@ -96,8 +81,20 @@ jobs:
               ;;
           esac
 
-          if ! git cat-file -e "$BASE_SHA^{commit}"; then
+          if [ -z "$BASE_SHA" ]; then
+            echo "A base SHA is required for $GITHUB_EVENT_NAME" >&2
+            exit 1
+          fi
+          if [ "$BASE_SHA" = "$GITHUB_SHA" ]; then
+            echo "Base and target SHA must differ" >&2
+            exit 1
+          fi
+          if [ "$base_is_commit" = true ] && ! git cat-file -e "$BASE_SHA^{commit}"; then
             echo "Base SHA is not an available commit: $BASE_SHA" >&2
+            exit 1
+          fi
+          if [ "$base_is_commit" = true ] && ! git merge-base --is-ancestor "$BASE_SHA" "$GITHUB_SHA"; then
+            echo "Base SHA is not an ancestor of target SHA" >&2
             exit 1
           fi
 
