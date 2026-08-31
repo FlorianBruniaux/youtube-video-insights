@@ -203,9 +203,9 @@ requires one. Non-idempotent mutations also carry a client-generated
 idempotency key. The adapter validates the public request before invoking the
 workflow.
 
-Discovery and acquisition return `202` with a `job_id`. The browser polls the
-job resource with bounded backoff. Other successful mutations return their
-public snapshot directly.
+Source preview, research discovery, and acquisition return `202` with a
+`job_id`. The browser polls the job resource with bounded backoff. Other
+successful mutations return their public snapshot directly.
 
 ### Error envelope
 
@@ -308,7 +308,7 @@ public bind.
 
 ## 11. Frontend implementation
 
-Use Astro 5 with strict TypeScript and no component framework. Pages are
+Use Astro 7 with strict TypeScript and no component framework. Pages are
 pre-rendered and share:
 
 - semantic HTML landmarks;
