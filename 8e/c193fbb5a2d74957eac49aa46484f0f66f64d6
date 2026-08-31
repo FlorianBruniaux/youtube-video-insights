@@ -1,0 +1,23 @@
+plans/README.md
+  s_0a442347250965::t_f504640b6c787a 5,30,43-44,75-76
+plans/PARALLEL-SESSIONS.md
+  s_0a442347250965::t_f504640b6c787a 59
+llms.txt
+  s_0a442347250965::t_f504640b6c787a 137-138
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "8ec193fbb5a2d74957eac49aa46484f0f66f64d6",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
