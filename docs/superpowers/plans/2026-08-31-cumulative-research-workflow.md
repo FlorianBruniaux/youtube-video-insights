@@ -2,11 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+**Status:** Implemented locally; hosted and external gates remain tracked separately
+
 **Goal:** Add a persistent, catalogue-first research workflow that always asks whether local evidence is sufficient, previews fresh YouTube candidates when requested, acquires only approved videos, reassesses the enriched corpus, and exports a versioned evidence dossier.
 
 **Architecture:** A new `yt_insights.research` package owns immutable contracts, objective assessment, a separate SQLite session store, bounded discovery, orchestration, and deterministic dossiers. Existing search, catalogue, acquisition, export, and read-only MCP services remain authoritative for their current responsibilities. Claude Code and Codex call the same `yt-insights research` CLI contract through a new main-session skill.
 
-**Tech Stack:** Python 3.13, Click, SQLite, FTS5, yt-dlp subprocess adapter, pytest, Ruff, mypy strict, Markdown and JSON evidence artifacts.
+**Tech Stack:** Python 3.11+, Click, SQLite, FTS5, yt-dlp subprocess adapter, pytest, Ruff, Mypy on `src`, Markdown and JSON evidence artifacts.
 
 **Spec:** `docs/superpowers/specs/2026-08-31-cumulative-research-workflow-design.md`
 
@@ -59,7 +61,7 @@ Task 1 shared contracts                                               │
                                               │          │             │
                                               │          └ Task 7 acquisition
                                               └── Task 8 dossier       │
-                                                                          
+
 Task 7 + Task 8 ── Task 9 assistants ── Task 10 final verification ───┘
 ```
 

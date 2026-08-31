@@ -1,8 +1,8 @@
 # Cumulative YouTube Research Workflow Design
 
-**Status:** Proposed for review  
-**Date:** 2026-08-31  
-**Scope:** Local-first assisted research workflow for yt-insights  
+**Status:** Implemented locally; hosted and external gates remain tracked separately
+**Date:** 2026-08-31
+**Scope:** Local-first assisted research workflow for yt-insights
 **Primary interface:** `yt-insights research` CLI, reused by Claude Code and Codex
 
 ## 1. Goal
