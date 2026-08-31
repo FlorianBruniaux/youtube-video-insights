@@ -8,6 +8,7 @@ the caller retry rather than receive mixed-generation evidence.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -15,9 +16,9 @@ from pathlib import Path
 import re
 import stat
 from datetime import UTC, date, datetime, timedelta
-from typing import Protocol
+from typing import Iterator, Protocol
 
-from yt_insights.catalog import Catalog, CatalogError
+from yt_insights.catalog import Catalog, CatalogError, ReadOnlyCatalog
 from yt_insights.search.models import SearchQuery
 from yt_insights.search.service import SearchService
 from yt_insights.search.sqlite_fts import SearchIndexError, SQLiteFtsIndex
@@ -86,6 +87,14 @@ class SQLiteEvidenceReader:
         if current != snapshot:
             raise AssessmentRetryableError("local evidence changed during assessment")
 
+    @contextmanager
+    def assessment_scope(self) -> Iterator[EvidenceReader]:
+        """Keep one validated catalogue snapshot alive for an assessment."""
+        snapshot = self.capture_snapshot()
+        with Catalog.open_read_only(self._catalog_database) as catalog:
+            self.validate_snapshot(snapshot)
+            yield _CatalogEvidenceReader(self, catalog, snapshot)
+
     def search_passages(
         self, query: QuerySpec, *, languages: tuple[str, ...], limit: int
     ) -> tuple[PassageEvidence, ...]:
@@ -138,7 +147,16 @@ class SQLiteEvidenceReader:
         _require_bounded_limit(limit)
         try:
             with Catalog.open_read_only(self._catalog_database) as catalog:
-                results = catalog.search_videos(query.text, limit=limit)
+                return self._search_videos_from_catalog(catalog, query, limit=limit)
+        except (CatalogError, OSError, ValueError, TypeError) as exc:
+            raise AssessmentRetryableError("local catalogue evidence is unavailable") from None
+
+    def _search_videos_from_catalog(
+        self, catalog: ReadOnlyCatalog, query: QuerySpec, *, limit: int
+    ) -> tuple[VideoEvidence, ...]:
+        """Map one held read-only catalogue view to bounded evidence."""
+        try:
+            results = catalog.search_videos(query.text, limit=limit)
             return tuple(
                 VideoEvidence(
                     query=query.text,
@@ -151,8 +169,43 @@ class SQLiteEvidenceReader:
                 )
                 for result in results
             )
-        except (CatalogError, OSError, ValueError, TypeError) as exc:
+        except CatalogError as exc:
+            if "changed during access" in str(exc):
+                raise AssessmentRetryableError(
+                    "local evidence changed during assessment"
+                ) from None
             raise AssessmentRetryableError("local catalogue evidence is unavailable") from None
+        except (OSError, ValueError, TypeError) as exc:
+            raise AssessmentRetryableError("local catalogue evidence is unavailable") from None
+
+
+class _CatalogEvidenceReader:
+    """Assessment-scoped adapter that shares a held catalogue snapshot."""
+
+    def __init__(
+        self,
+        reader: SQLiteEvidenceReader,
+        catalog: ReadOnlyCatalog,
+        snapshot: DatabaseSnapshot,
+    ) -> None:
+        self._reader = reader
+        self._catalog = catalog
+        self._snapshot = snapshot
+
+    def capture_snapshot(self) -> DatabaseSnapshot:
+        return self._snapshot
+
+    def validate_snapshot(self, snapshot: DatabaseSnapshot) -> None:
+        self._reader.validate_snapshot(snapshot)
+
+    def search_passages(
+        self, query: QuerySpec, *, languages: tuple[str, ...], limit: int
+    ) -> tuple[PassageEvidence, ...]:
+        return self._reader.search_passages(query, languages=languages, limit=limit)
+
+    def search_videos(self, query: QuerySpec, *, limit: int) -> tuple[VideoEvidence, ...]:
+        _require_bounded_limit(limit)
+        return self._reader._search_videos_from_catalog(self._catalog, query, limit=limit)
 
 
 def assess_local(
@@ -173,45 +226,60 @@ def assess_local(
     if not isinstance(profile, FreshnessProfile):
         raise TypeError("profile must be a FreshnessProfile")
 
-    snapshot = evidence_reader.capture_snapshot()
-    selected_passages: dict[str, tuple[int, PassageEvidence]] = {}
-    selected_videos: dict[str, tuple[int, VideoEvidence]] = {}
-    zero_hit_queries: list[str] = []
-    for query_position, query in enumerate(queries):
-        passages = evidence_reader.search_passages(
-            query, languages=languages, limit=_ASSESSMENT_LIMIT
-        )
-        videos = evidence_reader.search_videos(query, limit=_ASSESSMENT_LIMIT)
-        if not passages and not videos:
-            zero_hit_queries.append(query.text)
-        _select_best(selected_passages, passages, query_position, identity="passage_id")
-        _select_best(selected_videos, videos, query_position, identity="video_id")
-    evidence_reader.validate_snapshot(snapshot)
+    with _assessment_scope(evidence_reader) as scoped_reader:
+        snapshot = scoped_reader.capture_snapshot()
+        selected_passages: dict[str, tuple[int, PassageEvidence]] = {}
+        selected_videos: dict[str, tuple[int, VideoEvidence]] = {}
+        zero_hit_queries: list[str] = []
+        for query_position, query in enumerate(queries):
+            passages = scoped_reader.search_passages(
+                query, languages=languages, limit=_ASSESSMENT_LIMIT
+            )
+            videos = scoped_reader.search_videos(query, limit=_ASSESSMENT_LIMIT)
+            if not passages and not videos:
+                zero_hit_queries.append(query.text)
+            _select_best(selected_passages, passages, query_position, identity="passage_id")
+            _select_best(selected_videos, videos, query_position, identity="video_id")
+        scoped_reader.validate_snapshot(snapshot)
 
-    passages = _ordered_unique(selected_passages, identity="passage_id")
-    videos = _ordered_unique(selected_videos, identity="video_id")
-    coverage = CoverageMetrics(
-        matched_passages=len(passages),
-        matched_videos=len({item.video_id for item in passages} | {item.video_id for item in videos}),
-        distinct_channels=len(
-            {
-                item.channel_id
-                for item in passages
-                if _YOUTUBE_CHANNEL_ID.fullmatch(item.channel_id) is not None
-            }
-        ),
-        queries_with_zero_hits=tuple(zero_hit_queries),
-        newest_source_published_at=_newest_publication_date(videos),
-        unknown_publication_date_count=sum(item.published_at is None for item in videos),
-    )
-    return ResearchAssessment(
-        created_at=now,
-        snapshot=snapshot,
-        coverage=coverage,
-        freshness=_freshness(profile, last_successful_discovery_at, now),
-        passages=passages,
-        videos=videos,
-    )
+        passages = _ordered_unique(selected_passages, identity="passage_id")
+        videos = _ordered_unique(selected_videos, identity="video_id")
+        coverage = CoverageMetrics(
+            matched_passages=len(passages),
+            matched_videos=len(
+                {item.video_id for item in passages}
+                | {item.video_id for item in videos}
+            ),
+            distinct_channels=len(
+                {
+                    item.channel_id
+                    for item in passages
+                    if _YOUTUBE_CHANNEL_ID.fullmatch(item.channel_id) is not None
+                }
+            ),
+            queries_with_zero_hits=tuple(zero_hit_queries),
+            newest_source_published_at=_newest_publication_date(videos),
+            unknown_publication_date_count=sum(item.published_at is None for item in videos),
+        )
+        return ResearchAssessment(
+            created_at=now,
+            snapshot=snapshot,
+            coverage=coverage,
+            freshness=_freshness(profile, last_successful_discovery_at, now),
+            passages=passages,
+            videos=videos,
+        )
+
+
+@contextmanager
+def _assessment_scope(evidence_reader: EvidenceReader) -> Iterator[EvidenceReader]:
+    """Use a reader's optional assessment lifecycle without burdening fakes."""
+    opener = getattr(evidence_reader, "assessment_scope", None)
+    if opener is None:
+        yield evidence_reader
+        return
+    with opener() as scoped_reader:
+        yield scoped_reader
 
 
 def _database_generation(path: Path) -> str:

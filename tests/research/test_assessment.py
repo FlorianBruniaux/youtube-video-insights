@@ -414,15 +414,11 @@ def test_sqlite_reader_rejects_either_replaced_database_after_multi_query_assess
             self, query: QuerySpec, *, languages: tuple[str, ...], limit: int
         ) -> tuple[PassageEvidence, ...]:
             results = super().search_passages(query, languages=languages, limit=limit)
-            if replace_search:
-                self._replace_database()
+            self._replace_database()
             return results
 
         def search_videos(self, query: QuerySpec, *, limit: int) -> tuple[VideoEvidence, ...]:
-            results = super().search_videos(query, limit=limit)
-            if not replace_search:
-                self._replace_database()
-            return results
+            return super().search_videos(query, limit=limit)
 
     with pytest.raises(AssessmentRetryableError, match="changed"):
         assess_local(
@@ -466,3 +462,88 @@ def test_sqlite_reader_reports_invalid_catalogue_without_query_text(tmp_path: Pa
         reader.search_videos(QuerySpec("private query text"), limit=20)
 
     assert "private query text" not in str(raised.value)
+
+
+def test_multi_query_assessment_keeps_one_catalogue_snapshot_and_closes_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    search_database, catalog_database = _build_local_databases(tmp_path)
+    original_open = Catalog.open_read_only
+    opened = 0
+    closed = 0
+
+    class CountingCatalog:
+        def __init__(self, catalog: object) -> None:
+            self._catalog = catalog
+
+        def __enter__(self) -> object:
+            return self._catalog.__enter__()  # type: ignore[union-attr]
+
+        def __exit__(self, *args: object) -> None:
+            nonlocal closed
+            closed += 1
+            self._catalog.__exit__(*args)  # type: ignore[union-attr]
+
+    def open_once(path: Path) -> CountingCatalog:
+        nonlocal opened
+        opened += 1
+        return CountingCatalog(original_open(path))
+
+    monkeypatch.setattr(Catalog, "open_read_only", staticmethod(open_once))
+    assessment = assess_local(
+        queries=(QuerySpec("local inference"), QuerySpec("evidence")),
+        profile=FreshnessProfile.FAST,
+        evidence_reader=SQLiteEvidenceReader(
+            search_database=search_database, catalog_database=catalog_database
+        ),
+        last_successful_discovery_at=None,
+        now=NOW,
+    )
+
+    assert opened == closed == 1
+    assert [item.video_id for item in assessment.videos] == [VIDEO_A, VIDEO_B]
+
+
+def test_assessment_scope_closes_catalogue_when_evidence_collection_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    search_database, catalog_database = _build_local_databases(tmp_path)
+    original_open = Catalog.open_read_only
+    closed = 0
+
+    class CountingCatalog:
+        def __init__(self, catalog: object) -> None:
+            self._catalog = catalog
+
+        def __enter__(self) -> object:
+            return self._catalog.__enter__()  # type: ignore[union-attr]
+
+        def __exit__(self, *args: object) -> None:
+            nonlocal closed
+            closed += 1
+            self._catalog.__exit__(*args)  # type: ignore[union-attr]
+
+    class FailingReader(SQLiteEvidenceReader):
+        def search_passages(
+            self, query: QuerySpec, *, languages: tuple[str, ...], limit: int
+        ) -> tuple[PassageEvidence, ...]:
+            raise AssessmentRetryableError("forced evidence failure")
+
+    monkeypatch.setattr(
+        Catalog,
+        "open_read_only",
+        staticmethod(lambda path: CountingCatalog(original_open(path))),
+    )
+
+    with pytest.raises(AssessmentRetryableError, match="forced evidence failure"):
+        assess_local(
+            queries=(QuerySpec("local inference"),),
+            profile=FreshnessProfile.FAST,
+            evidence_reader=FailingReader(
+                search_database=search_database, catalog_database=catalog_database
+            ),
+            last_successful_discovery_at=None,
+            now=NOW,
+        )
+
+    assert closed == 1
