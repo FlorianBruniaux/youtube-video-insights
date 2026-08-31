@@ -1,0 +1,25 @@
+.agents/skills/youtube-export/SKILL.md
+  s_0a442347250965::t_b3735439f13d4d 12
+tests/test_agent_assets.py
+  s_0a442347250965::t_04829501da17f3 112,117-119,152-165,189-197
+.claude/agents/youtube-corpus-researcher.md
+  s_0a442347250965::t_b3735439f13d4d 14-17
+.agents/skills/youtube-export/agents/openai.yaml
+  s_0a442347250965::t_b3735439f13d4d 5-9
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "ca597e4853aa4600375d0d7c3b0dc1068cfdfd51",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

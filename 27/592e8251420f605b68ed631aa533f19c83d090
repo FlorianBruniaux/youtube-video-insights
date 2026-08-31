@@ -1,0 +1,36 @@
+src/yt_insights/research/models.py
+  s_0a442347250965::t_6e42248ac97e09 1-356
+tests/test_paths.py
+  s_0a442347250965::t_d112946e80a077 19-21
+src/yt_insights/paths.py
+  s_0a442347250965::t_d4366a3cc993f3 21,36
+src/yt_insights/research/__init__.py
+  s_0a442347250965::t_6e42248ac97e09 1
+src/yt_insights/config.py
+  s_0a442347250965::t_d4366a3cc993f3 79,178,213,265
+tests/test_config.py
+  s_0a442347250965::t_d4366a3cc993f3 70
+  s_0a442347250965::t_d112946e80a077 40-43,47-69,71-72
+  s_0a442347250965::t_795120e1aa4063 44-46
+tests/research/test_models.py
+  s_0a442347250965::t_d72dc3e6b1ffdc 38-40
+  s_0a442347250965::t_17b5bd5a3d9ef4 1-37,41-291
+tests/research/__init__.py
+  s_0a442347250965::t_a6f4d0e73845b4 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "27592e8251420f605b68ed631aa533f19c83d090",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

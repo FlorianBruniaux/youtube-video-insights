@@ -1,0 +1,19 @@
+plans/evidence/2026-08-27-search-vertical-slice.md
+  s_0a442347250965::t_277a3bea0792cd 5,14,23-25,90-91,97,104,126,134-153,182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "5440464fca424899ea4b0b73be5d270a52342050",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

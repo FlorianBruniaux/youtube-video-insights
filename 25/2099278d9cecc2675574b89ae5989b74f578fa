@@ -1,0 +1,25 @@
+tests/research/test_dossier.py
+  s_0a442347250965::t_f766cb58e72c6e 6,27,42,65,189-235,324-355
+  s_0a442347250965::t_2a9ce0c64e0c68 163-179,291,313
+src/yt_insights/research/dossier.py
+  s_0a442347250965::t_a8039194fe65df 600-601,604-618,622-624,626-627,629-635
+  s_0a442347250965::t_ff599d40ce2e99 359-399,401-408,410,414,419-429,438-457,467-488,490-492,498-509,511,514,516,519-521,526-528,530-540,542-544,546-549,551-552,554-568
+  s_0a442347250965::t_3f5157e30b5daa 415-418
+  s_0a442347250965::t_80c8e69a74a8de 22,33-40,79-80,313
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "252099278d9cecc2675574b89ae5989b74f578fa",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

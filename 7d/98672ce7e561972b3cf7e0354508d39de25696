@@ -1,0 +1,28 @@
+tests/test_mcp_server.py
+  s_0a442347250965::t_8bf6d938bf47e3 665
+  s_0a442347250965::t_14f290c25268a2 579-605,646-656,658,661,663,667,669,673-681
+  s_0a442347250965::t_685bc19d5ca14d 517-578,620-645,657,659-660,662,664,666,668,670-672
+src/yt_insights/catalog.py
+  s_0a442347250965::t_7cd62d17668da0 8,16-17,39-40,1076-1077,1079-1082,1084-1121,1123,1147-1168,1179-1193,1197-1199,1201-1205,1213-1239,1269-1315,1348-1352,1363-1368,1425,1428-1435,1438-1440,1443-1444
+src/yt_insights/mcp_server.py
+  s_0a442347250965::t_7de41c04b3b1ff 367-370
+  s_0a442347250965::t_b4d39abc21d54e 364-366,371-376
+tests/test_catalog.py
+  s_0a442347250965::t_685bc19d5ca14d 513-563
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "7d98672ce7e561972b3cf7e0354508d39de25696",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

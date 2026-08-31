@@ -1,0 +1,51 @@
+tests/test_downloader.py
+  s_0a442347250965::t_eb7ae163016921 5-6,11-17,139-176
+.claude/hooks/yt-channel-router.sh
+  s_0a442347250965::t_466817121b0658 50
+.claude/skills/yt-add-channel.md
+  s_0a442347250965::t_04199de0afbaab 3,53-58,63-64
+.gitignore
+  s_0a442347250965::t_9fe7a4c78222f3 11-18
+CHANGELOG.md
+  s_0a442347250965::t_6a232ffa8e38bb 13-27,40-41
+CLAUDE.md
+  s_0a442347250965::t_8f76f324798cc2 122,128-131
+README.md
+  s_0a442347250965::t_53304b8b35406f 7-10,14-20,22-24,34-36,192-233,486-487,493-496,518
+docs/superpowers/plans/2026-08-26-youtube-catalog-vertical-slice.md
+  s_0a442347250965::t_e34b7ee09e1874 1-235
+docs/superpowers/specs/2026-08-26-youtube-newsletter-watch-design.md
+  s_0a442347250965::t_a8eef3f7dceb0c 1-367
+llms.txt
+  s_0a442347250965::t_658b8201d9bb10 1-118
+pyproject.toml
+  s_0a442347250965::t_2c6e6c05ed8329 4,8
+src/yt_insights/catalog.py
+  s_0a442347250965::t_7d08d16566ed9e 1-735
+src/yt_insights/cli.py
+  s_0a442347250965::t_9a54ed073dea9d 529-701
+src/yt_insights/downloader.py
+  s_0a442347250965::t_65540dfa3538eb 42-52,75-97
+tests/__init__.py
+  s_0a442347250965::t_1919a406f1d35b 1
+tests/test_catalog.py
+  s_0a442347250965::t_bf255c306d0df9 1-334
+tests/test_cli_catalog.py
+  s_0a442347250965::t_88a61514203b05 1-128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "aebd6a474244bdf000544a076675ba43481f90f5",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

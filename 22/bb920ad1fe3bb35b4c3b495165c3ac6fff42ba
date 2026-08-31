@@ -1,0 +1,50 @@
+src/yt_insights/research/store.py
+  s_0a442347250965::t_3f7555912a3688 1328-1374
+  s_0a442347250965::t_b842b33acf5e85 286-357
+tests/research/test_workflow.py
+  s_0a442347250965::t_f020d215e2c1fc 1069-1157,1240-1291,1330-1331
+  s_0a442347250965::t_edca2c88862bc4 994,1056-1059,1061
+  s_0a442347250965::t_9a136b30dcb9cf 16,25,1292-1329
+  s_0a442347250965::t_2eae610e88f5b5 1158-1239
+tests/test_cli_research.py
+  s_0a442347250965::t_f020d215e2c1fc 646-657,661-668
+  s_0df90997879182::t_5ae0d1a865ae99 669
+src/yt_insights/research/workflow.py
+  s_0a442347250965::t_b842b33acf5e85 30,50,70,103-117,166,173,180,214,248,273,298,450,458,522,534,543,672,698,737,758,798
+  s_0a442347250965::t_9ec15e62403ae0 39,71-75,974-976,983,1001
+  s_0a442347250965::t_8962d08a9c97e0 462
+  s_0a442347250965::t_045edfa3a5c6b1 466-468,470-474,476-479,508,510-514,638-641,644,653-659,684,708-711,713-718,743-757,762,765-787,969-973,977-982,985-1000,1002
+  s_d812a5cba40e21::t_31b85af199f841 788,984,1003-1004
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "22bb920ad1fe3bb35b4c3b495165c3ac6fff42ba",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_0df90997879182": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019fd73a-588d-7f03-ab50-494ca0e95848",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_d812a5cba40e21": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a033c4-cc98-74d2-adf5-63f175b8463b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

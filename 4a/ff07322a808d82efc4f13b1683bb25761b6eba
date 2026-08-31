@@ -1,0 +1,33 @@
+ROADMAP.md
+  s_0a442347250965::t_07f811bb41567b 119
+  s_0a442347250965::t_74332809551f12 120
+plans/README.md
+  s_0a442347250965::t_292720571c6404 34
+plans/evidence/2026-08-28-final-integration.md
+  s_0a442347250965::t_07f811bb41567b 84-85,87-89,93
+  s_0a442347250965::t_292720571c6404 106
+  s_0a442347250965::t_74332809551f12 71-83,86,90-92,94-105,107-111,118-120
+plans/2026-08-28-10-claude-codex-global-integration.md
+  s_0a442347250965::t_74332809551f12 569,573-577,588,592-597
+  s_0a442347250965::t_07f811bb41567b 7,42,113,517,526-530,687-688,690
+  s_0a442347250965::t_292720571c6404 522-523
+plans/evidence/global-candidate-62aa9ca/approval-source-candidate.json
+  s_0a442347250965::t_74332809551f12 1-4,7-10,16,19
+  s_0a442347250965::t_07f811bb41567b 5-6,11-15,17-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "4aff07322a808d82efc4f13b1683bb25761b6eba",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

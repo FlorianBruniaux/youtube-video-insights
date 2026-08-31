@@ -1,0 +1,24 @@
+scripts/check_agent_routing_fixture.py
+  s_0a442347250965::t_1fe5248b44080f 60,62
+  s_0a442347250965::t_74abdbac2c0a10 1-59,61,63-100
+tests/test_agent_routing_fixture.py
+  s_0a442347250965::t_c6caf9d66dd6a0 1-185
+tests/fixtures/agent-routing.json
+  s_0a442347250965::t_74abdbac2c0a10 1-182
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "8dc7e6c683f39d1ae3dd36ba26cfdaab8f1877d7",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

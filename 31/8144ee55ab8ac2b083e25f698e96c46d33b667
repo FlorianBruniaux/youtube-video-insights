@@ -1,0 +1,22 @@
+src/yt_insights/config.py
+  s_0a442347250965::t_4b4037f15edffe 43-49,84-86,90,95-99,108-118
+tests/test_config.py
+  s_0a442347250965::t_1281e209bd9fef 3,50-74
+  s_0a442347250965::t_2893702a5cfba2 75-76
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "318144ee55ab8ac2b083e25f698e96c46d33b667",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

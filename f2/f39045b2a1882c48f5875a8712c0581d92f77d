@@ -1,0 +1,29 @@
+tests/research/test_workflow.py
+  s_0a442347250965::t_42fc602fc50a3f 1495-1497,1503-1539,1541,1545-1546,1548-1549
+src/yt_insights/research/models.py
+  s_0a442347250965::t_8e0fae1a90bfd8 344-362
+src/yt_insights/research/store.py
+  s_0a442347250965::t_7ac85998a4b3bf 175-178,1093-1098,1117-1128
+  s_0a442347250965::t_fcb0c63139791d 46-49,145-149,179,1058
+  s_0a442347250965::t_84575ee881a66d 35,655-730
+  s_0a442347250965::t_ff9cd89c9e5100 731
+src/yt_insights/research/workflow.py
+  s_0a442347250965::t_dcae2581c7c736 27,183-194,196-198,200-204,266-268,1020-1021,1026,1029,1047
+  s_0a442347250965::t_b4e1e8c0f597fb 255,262,300,330,351,372
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "f2f39045b2a1882c48f5875a8712c0581d92f77d",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

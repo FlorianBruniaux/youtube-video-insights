@@ -1,0 +1,23 @@
+plans/evidence/2026-08-28-final-integration.md
+  s_0a442347250965::t_3315ac8b9f0da5 83-87,92,107-112
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_3315ac8b9f0da5 7-8,77
+ROADMAP.md
+  s_0a442347250965::t_3315ac8b9f0da5 119-120
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "ece96961425ad4fbab96057d7ab03417538fa220",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

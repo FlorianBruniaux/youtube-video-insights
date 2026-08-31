@@ -1,0 +1,21 @@
+src/yt_insights/cli_research.py
+  s_0a442347250965::t_57e4bbec2cdcc2 162-187
+tests/test_cli_research.py
+  s_0a442347250965::t_4b99731e736eea 932-1023
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "6d71a6c3dec6febaa172cb42e4c8547e431e04af",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

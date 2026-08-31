@@ -1,0 +1,30 @@
+tests/search/test_corpus.py
+  s_0a442347250965::t_ca9276b8ddd5e0 3,123-158
+  s_676bc5dc5d8082::t_626efd6cdba2f8 159-161
+src/yt_insights/search/corpus.py
+  s_0a442347250965::t_683aac5be54e82 74,78-82,84,88-97,109
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "36901785b9e4f38778f0ac5ae62ece785e29f9e2",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_676bc5dc5d8082": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04283-7410-7952-a84d-4418568a4c78",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

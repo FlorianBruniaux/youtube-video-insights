@@ -1,0 +1,144 @@
+tests/test_acquisition.py
+  s_0a442347250965::t_1b51d214db8928 3,13,789,941-943,974-976
+src/yt_insights/analyzer.py
+  s_0a442347250965::t_2fc11672bc497f 93,98
+src/yt_insights/backends/__init__.py
+  s_0a442347250965::t_2fc11672bc497f 18,24,188,250,421-422,424-425,427
+src/yt_insights/downloader.py
+  s_0a442347250965::t_a5d7394930144a 8,12-13,205,285,461,468
+  s_0a442347250965::t_b776ec94387d53 204,206,460,462
+  s_0a442347250965::t_2fc11672bc497f 101-106,115-119
+src/yt_insights/backends/mlx.py
+  s_0a442347250965::t_2fc11672bc497f 10,25-26
+src/yt_insights/mcp_server.py
+  s_0a442347250965::t_2fc11672bc497f 8,47,52-55,66,122
+  s_0a442347250965::t_47eeaece304335 12
+  s_0a442347250965::t_0113899021a026 13-17,125-129,152,156
+src/yt_insights/catalog.py
+  s_0a442347250965::t_a5d7394930144a 7,17,27,206,678,702,1586
+  s_0a442347250965::t_5e873d6d208a1b 18,624,628-630,632,693-694,696-699,707-708,927
+  s_0a442347250965::t_569abb9a1ad44e 791
+  s_0a442347250965::t_52dfeb3700cb0b 22,695
+  s_0a442347250965::t_971c04fd6045a6 1037-1039,1219-1221
+  s_95392a6b844626::t_5167f5efa4cc05 700
+src/yt_insights/cli_search.py
+  s_0a442347250965::t_36dd42038a097a 68-69,84-85,102
+src/yt_insights/search/chunker.py
+  s_0a442347250965::t_6c6f28a88416c4 5,17,37-39
+src/yt_insights/search/sqlite_fts.py
+  s_0a442347250965::t_a5d7394930144a 13-14,99
+  s_0a442347250965::t_2fc11672bc497f 642-643,645-647
+src/yt_insights/acquisition.py
+  s_0a442347250965::t_a5d7394930144a 6,11,15,20,24,27,41,872,976-997
+  s_0a442347250965::t_47eeaece304335 697-698,700-702
+  s_0a442347250965::t_2fc11672bc497f 807
+src/yt_insights/shorts.py
+  s_0a442347250965::t_a5d7394930144a 31,88,429
+tests/search/test_preflight.py
+  s_0a442347250965::t_1b51d214db8928 4,77,119-121
+src/yt_insights/cli_acquire.py
+  s_0a442347250965::t_2fc11672bc497f 76
+pyproject.toml
+  s_0a442347250965::t_9393c15bfc9e4c 68
+  s_0a442347250965::t_55240f9f18dde1 50-67,69
+src/yt_insights/wizard.py
+  s_0a442347250965::t_2fc11672bc497f 433
+  s_0a442347250965::t_a5d7394930144a 324
+scripts/smoke_wheel.py
+  s_0a442347250965::t_a5d7394930144a 14-16,200
+tests/search/test_sqlite_fts.py
+  s_0a442347250965::t_1b51d214db8928 4,10,97-98,507-511,656
+src/yt_insights/search/corpus.py
+  s_0a442347250965::t_a5d7394930144a 10-14,296
+  s_0a442347250965::t_971c04fd6045a6 16,309
+tests/test_catalog.py
+  s_0a442347250965::t_1b51d214db8928 4,531,1050-1058,1102-1103
+  s_0a442347250965::t_a813cc70c8f5fe 111-115,172-177,606-610,631-639,818-820,1125-1137,1196-1207,1252-1263,1294-1305,1343-1347,1389-1400,1419-1423,1474-1485
+src/yt_insights/config.py
+  s_0a442347250965::t_2fc11672bc497f 123,253
+  s_0a442347250965::t_b05070b337f72a 30
+src/yt_insights/backends/openai_compat.py
+  s_0a442347250965::t_461085232118f3 58,61,64-65
+  s_0a442347250965::t_36dd42038a097a 13,18,59-60
+src/yt_insights/vtt_parser.py
+  s_0a442347250965::t_47eeaece304335 79-81
+  s_0a442347250965::t_2fc11672bc497f 20-25,48,86-88
+tests/search/test_models.py
+  s_0a442347250965::t_1b51d214db8928 3,30,152,154,166
+scripts/prepare_search_relevance_evaluation.py
+  s_0a442347250965::t_a5d7394930144a 16-20,240
+src/yt_insights/exporter.py
+  s_0a442347250965::t_a5d7394930144a 9-12,622,697
+src/yt_insights/cli.py
+  s_0a442347250965::t_a5d7394930144a 18-24,163-169,183,187,191,199,202,222-224
+  s_0a442347250965::t_8d341f344b9614 320-321,330,343,386,388,391,397,400,404,407,412,444,453,455,458-459,465,469,474,477,483,488,494-496,505,511
+  s_0a442347250965::t_c01010c86c0626 225,246,258,262,277,293,296,302,315,512,554,601,838
+scripts/benchmark_search.py
+  s_0a442347250965::t_7c7afdbcb02059 11-13
+scripts/build_index.py
+  s_0a442347250965::t_ecb3da4659e74c 82
+scripts/check_agent_routing_fixture.py
+  s_0a442347250965::t_9089af7a20eec0 9-10
+scripts/validate_cumulative_research_gates.py
+  s_0a442347250965::t_f208830dfb1699 10
+scripts/verify_search_slice.py
+  s_0a442347250965::t_12034c314ec5f6 21-22
+src/yt_insights/backends/base.py
+  s_0a442347250965::t_8b913aadd1cf33 5-6
+src/yt_insights/doctor.py
+  s_0a442347250965::t_c7a1d9df9808cb 8-9
+src/yt_insights/paths.py
+  s_0a442347250965::t_acad32e3db6e01 24
+src/yt_insights/reporter.py
+  s_0a442347250965::t_61c755befa506d 139
+src/yt_insights/search/models.py
+  s_0a442347250965::t_10dd3992518aef 5,53
+src/yt_insights/search/preflight.py
+  s_0a442347250965::t_9f8078729c200b 5
+tests/search/test_cli_search.py
+  s_0a442347250965::t_84cf301b811005 9,13-16
+tests/search/test_corpus.py
+  s_0a442347250965::t_66c3ce899056a4 5,9-10
+tests/search/test_verify_search_slice.py
+  s_0a442347250965::t_b1458257ba2d51 5
+tests/test_analyzer.py
+  s_0a442347250965::t_0423e360d88333 8,12
+tests/test_backends.py
+  s_0a442347250965::t_af1df4f2097fc8 35,390
+tests/test_benchmark_search.py
+  s_0a442347250965::t_d611e32472a76c 7
+tests/test_cli_smoke.py
+  s_0a442347250965::t_77eb7ab3bad3a0 12,234-236
+tests/test_cumulative_research_gates.py
+  s_0a442347250965::t_896c55b6c2d7e2 6
+tests/test_exporter.py
+  s_0a442347250965::t_ef62671701e5bd 36,256
+tests/test_mcp_server.py
+  s_0a442347250965::t_fe3bacad8ae0e3 9,670
+tests/test_prepare_search_relevance_evaluation.py
+  s_0a442347250965::t_099f92718baffe 4,8
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "84f942613f8dff901b89cfd04a859952ff8012e7",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_95392a6b844626": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04821-7023-7112-aeb8-f4aa59348ce9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

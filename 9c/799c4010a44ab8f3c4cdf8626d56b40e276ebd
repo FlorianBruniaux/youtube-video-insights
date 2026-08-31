@@ -1,0 +1,48 @@
+tests/test_assistant_setup.py
+  s_0a442347250965::t_1d80dad667f745 570-629
+  s_0a442347250965::t_981a0268c49af5 510-569,630-677
+  s_0a442347250965::t_667badd0dbf418 6,15,122-131,407-507
+  s_0a442347250965::t_f3e03068d4ac9a 678-706
+  s_95392a6b844626::t_b28b484de375fe 508-509
+src/yt_insights/assistant_assets/skills/youtube-cumulative-research/SKILL.md
+  s_0a442347250965::t_b68577ff6b56ad 15,25
+src/yt_insights/assistant_setup.py
+  s_0a442347250965::t_a1e3f01f22b02f 589,594-598,616-619,632-636,643-653,657,666-671,676-681
+  s_0a442347250965::t_37f50a0e2621dd 38,40-44,64,313-314,373,376,394,397-399,462,466,569,572-574
+  s_0a442347250965::t_c7a2fe90252481 148-232,234,236,238,240-253
+  s_0a442347250965::t_c7f92c4e289aaf 297-301,303,308,312,319-372,374-375,377-380,384-393,395-396,400-424,508-516,519-533,535-557,559-562
+  s_0a442347250965::t_e28b4fb931a528 425-461,463-465,467-482,517-518,534
+  s_0a442347250965::t_d9413dcf0a980c 483-507,558
+  s_0a442347250965::t_2c9eef2dd4a277 381-383
+  s_0a442347250965::t_b68577ff6b56ad 6-7,10,20-22,32,35-37,39,45-63,65-71
+  s_0a442347250965::t_7de66f38c1ca02 711-714,726-730,734-738,748-757,759,763,773,777-782,799,803,806-807
+  s_0a442347250965::t_fb9b3f1e540f8e 563-564
+.agents/skills/youtube-cumulative-research/SKILL.md
+  s_0a442347250965::t_b68577ff6b56ad 15,25
+tests/test_agent_assets.py
+  s_0a442347250965::t_667badd0dbf418 206-212
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "9c799c4010a44ab8f3c4cdf8626d56b40e276ebd",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_95392a6b844626": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04821-7023-7112-aeb8-f4aa59348ce9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

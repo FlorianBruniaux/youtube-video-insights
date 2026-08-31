@@ -1,0 +1,25 @@
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_98bad0b8e686ee 4-6,19-20,27,29-30,42,50,55-57,71,95,143-144
+plans/README.md
+  s_0a442347250965::t_98bad0b8e686ee 5-6,29-30,83
+plans/2026-08-28-09-agent-ready-runtime.md
+  s_0a442347250965::t_560dbfa670c807 44,65,73,104,108,119,138,153,161,180,194,201,318,336,355,361,385,402,406,410,417,436,450,465,471,479,487,509,522,526,532,548,552,559,578-582,606,610,618,627,631
+plans/PARALLEL-SESSIONS.md
+  s_0a442347250965::t_98bad0b8e686ee 124-128,141-144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "9a96b36e6447754f59702d3a02264b3763c3042c",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

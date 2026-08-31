@@ -1,0 +1,41 @@
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_6d0ae971e0f99f 9,13-15,104,107
+plans/README.md
+  s_0a442347250965::t_e373e996bd8b91 41,44,47,76
+plans/evidence/2026-08-31-fresh-client-canaries.md
+  s_0a442347250965::t_14201eba9b5c20 1-50
+plans/specs/AGENT-PLATFORM.md
+  s_0a442347250965::t_e373e996bd8b91 133,136,139
+docs/superpowers/plans/2026-08-31-cumulative-research-workflow.md
+  s_0a442347250965::t_bd4cab761b975b 1465-1469
+llms.txt
+  s_0a442347250965::t_e373e996bd8b91 141-142,158,160,176
+  s_0a442347250965::t_bd4cab761b975b 153-154
+ROADMAP.md
+  s_0a442347250965::t_2e8c9e76f7934b 30,54,57,69,76
+  s_0a442347250965::t_bd4cab761b975b 101
+docs/claude-code.md
+  s_0a442347250965::t_e48a5dd90db367 16,128-129,135-139
+plans/PARALLEL-SESSIONS.md
+  s_0a442347250965::t_e373e996bd8b91 88,91,102,107
+README.md
+  s_0a442347250965::t_923ebacf48d0c1 806-809,843-845,850-855
+CHANGELOG.md
+  s_0a442347250965::t_4ea07084bbf493 30-31,43-46
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "4e43abe4ab58cf2e76d677ffd4d36f0647aa3e58",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

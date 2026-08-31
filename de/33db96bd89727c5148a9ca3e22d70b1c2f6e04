@@ -1,0 +1,21 @@
+tests/search/test_sqlite_fts.py
+  s_0a442347250965::t_761f8d8fdb36b6 272-314
+src/yt_insights/search/sqlite_fts.py
+  s_0a442347250965::t_a68b86351023f8 299-305,310-316,318-350,495-501,511-514
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "de33db96bd89727c5148a9ca3e22d70b1c2f6e04",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-terra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

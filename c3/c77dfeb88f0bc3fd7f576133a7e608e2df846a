@@ -1,0 +1,37 @@
+src/yt_insights/research/store.py
+  s_0a442347250965::t_7cb38e4d8820b1 1241-1247
+  s_0a442347250965::t_bc827b030c9880 624-625,632-633,1238-1240,1248-1255
+src/yt_insights/research/workflow.py
+  s_0a442347250965::t_d09cad361f2454 419-423,426-445
+tests/research/test_workflow.py
+  s_0a442347250965::t_593abfe8a9ccbb 1575-1824
+  s_0a442347250965::t_4ebdd00d4b2a11 21,164-185
+  s_0a442347250965::t_a930bf1eb6b5b6 118,128-129
+  s_c2174b9e521e6b::t_1f135f44e313ca 186-187
+src/yt_insights/research/models.py
+  s_0a442347250965::t_7f2fcc843fe412 292,301-302
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "c3c77dfeb88f0bc3fd7f576133a7e608e2df846a",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_c2174b9e521e6b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0540b-8786-76e1-9f39-ced61d0ad7b7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

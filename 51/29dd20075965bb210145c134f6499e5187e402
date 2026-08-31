@@ -1,0 +1,28 @@
+plans/PARALLEL-SESSIONS.md
+  s_0a442347250965::t_813ed3e3c2e57c 5-6,30
+  s_0a442347250965::t_ec7fd1c0aa9db7 143-144
+plans/2026-08-28-10-claude-codex-global-integration.md
+  s_0a442347250965::t_ec7fd1c0aa9db7 44,63,69,89,100,111,115,124,142,158,164,168,181,252,262,271,275
+ROADMAP.md
+  s_0a442347250965::t_ec7fd1c0aa9db7 6-7,110-111,159
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_ec7fd1c0aa9db7 71
+plans/README.md
+  s_0a442347250965::t_ec7fd1c0aa9db7 6-7,31
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "5129dd20075965bb210145c134f6499e5187e402",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

@@ -1,0 +1,30 @@
+src/yt_insights/research/store.py
+  s_0a442347250965::t_c6dc50fef6057a 743-746
+  s_c2174b9e521e6b::t_90ef52733b3a88 741-742
+tests/research/test_workflow.py
+  s_0a442347250965::t_c50d3cdf71f3be 1229-1314
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "b11873b716ad91c5b14de285a841b426208a2831",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_c2174b9e521e6b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0540b-8786-76e1-9f39-ced61d0ad7b7",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
