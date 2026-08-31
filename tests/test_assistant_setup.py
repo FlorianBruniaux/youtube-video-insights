@@ -236,13 +236,16 @@ def test_concurrent_target_creation_is_preserved(tmp_path: Path, monkeypatch) ->
     original_write = assistant_setup._write_asset
     raced = False
 
-    def create_target_before_publish(asset: assistant_setup.Asset) -> None:
+    def create_target_before_publish(
+        asset: assistant_setup.Asset,
+        root: assistant_setup.BoundRoot,
+    ) -> assistant_setup.CreatedFile:
         nonlocal raced
         if not raced:
             raced = True
-            asset.target.parent.mkdir(parents=True)
+            asset.target.parent.mkdir(parents=True, exist_ok=True)
             asset.target.write_text("concurrent customization\n", encoding="utf-8")
-        original_write(asset)
+        return original_write(asset, root)
 
     monkeypatch.setattr(assistant_setup, "_write_asset", create_target_before_publish)
 
@@ -654,12 +657,13 @@ def test_assets_only_mid_upgrade_failure_restores_assets_and_manifest(
         target: Path,
         content: bytes,
         expected: assistant_setup.FileSnapshot,
+        root: assistant_setup.BoundRoot,
     ) -> assistant_setup.ReplacedFile:
         nonlocal calls
         calls += 1
         if calls == 2:
             raise OSError("synthetic second upgrade failure")
-        return original_replace(target, content, expected)
+        return original_replace(target, content, expected, root)
 
     monkeypatch.setattr(
         assistant_setup,
@@ -690,11 +694,16 @@ def test_assets_only_publication_failure_restores_preimage_without_backup_leak(
     before = {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
     original_link = assistant_setup.os.link
 
-    def fail_new_publication(source: Path | str, destination: Path | str) -> None:
+    def fail_new_publication(
+        source: Path | str,
+        destination: Path | str,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
         source_path = Path(source)
-        if Path(destination) == target and f".{target.name}.new." in source_path.name:
+        if Path(destination) == Path(target.name) and f".{target.name}.new." in source_path.name:
             raise OSError("synthetic publication failure")
-        original_link(source, destination)
+        original_link(source, destination, *args, **kwargs)
 
     monkeypatch.setattr(assistant_setup.os, "link", fail_new_publication)
 
@@ -704,6 +713,208 @@ def test_assets_only_publication_failure_restores_preimage_without_backup_leak(
     assert json.loads(result.output)["status"] == "rolled_back"
     assert before == {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
     assert not tuple(home.rglob("*.backup.*"))
+
+
+def test_assets_only_substitution_between_link_and_snapshot_preserves_concurrent_file(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+
+    relative = "skills/youtube-cumulative-research/SKILL.md"
+    target = home / ".agents" / relative
+    changed_root = _changed_asset_root(tmp_path, relative, "packaged upgrade\n")
+    monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
+    manifest_before = (home / OWNERSHIP_MANIFEST).read_bytes()
+    original_link = assistant_setup.os.link
+    substituted = False
+
+    def substitute_after_link(
+        source: Path | str,
+        destination: Path | str,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        nonlocal substituted
+        original_link(source, destination, *args, **kwargs)
+        if (
+            not substituted
+            and Path(destination) == Path(target.name)
+            and f".{target.name}.new." in Path(source).name
+        ):
+            substituted = True
+            parent_fd = int(kwargs["dst_dir_fd"])
+            os.unlink(target.name, dir_fd=parent_fd)
+            descriptor = os.open(
+                target.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+                0o644,
+                dir_fd=parent_fd,
+            )
+            try:
+                os.write(descriptor, b"concurrent replacement\n")
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+
+    monkeypatch.setattr(assistant_setup.os, "link", substitute_after_link)
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    assert json.loads(result.output)["status"] == "rolled_back"
+    assert target.read_text(encoding="utf-8") == "concurrent replacement\n"
+    assert (home / OWNERSHIP_MANIFEST).read_bytes() == manifest_before
+    assert not tuple(target.parent.glob(f".{target.name}.new.*"))
+    assert not tuple(target.parent.glob(f".{target.name}.backup.*"))
+
+
+def test_assets_only_snapshot_failure_after_link_restores_exact_preimage(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+
+    relative = "skills/youtube-cumulative-research/SKILL.md"
+    target = home / ".agents" / relative
+    changed_root = _changed_asset_root(tmp_path, relative, "packaged upgrade\n")
+    monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
+    before = {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
+    original_link = assistant_setup.os.link
+    original_snapshot = assistant_setup._snapshot_at
+    publication_linked = False
+
+    def mark_publication(
+        source: Path | str,
+        destination: Path | str,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        nonlocal publication_linked
+        original_link(source, destination, *args, **kwargs)
+        if (
+            Path(destination) == Path(target.name)
+            and f".{target.name}.new." in Path(source).name
+        ):
+            publication_linked = True
+
+    def fail_target_snapshot(parent_fd: int, name: str):
+        if publication_linked and name == target.name:
+            raise OSError("synthetic post-link snapshot failure")
+        return original_snapshot(parent_fd, name)
+
+    monkeypatch.setattr(assistant_setup.os, "link", mark_publication)
+    monkeypatch.setattr(assistant_setup, "_snapshot_at", fail_target_snapshot)
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    assert json.loads(result.output)["status"] == "rolled_back"
+    assert before == {path: path.read_bytes() for path in home.rglob("*") if path.is_file()}
+    assert not tuple(target.parent.glob(f".{target.name}.new.*"))
+    assert not tuple(target.parent.glob(f".{target.name}.backup.*"))
+
+
+def test_assets_only_parent_symlink_swap_never_redirects_publication(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+
+    relative = "skills/youtube-cumulative-research/SKILL.md"
+    target = home / ".agents" / relative
+    original_bytes = target.read_bytes()
+    changed_root = _changed_asset_root(tmp_path, relative, "packaged upgrade\n")
+    monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
+    moved_parent = target.parent.with_name(f"{target.parent.name}.moved")
+    redirected = tmp_path / "redirected-parent"
+    redirected.mkdir()
+    original_link = assistant_setup.os.link
+    swapped = False
+
+    def swap_parent_before_link(
+        source: Path | str,
+        destination: Path | str,
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        nonlocal swapped
+        if (
+            not swapped
+            and Path(destination) == Path(target.name)
+            and f".{target.name}.new." in Path(source).name
+        ):
+            swapped = True
+            target.parent.rename(moved_parent)
+            target.parent.symlink_to(redirected, target_is_directory=True)
+        original_link(source, destination, *args, **kwargs)
+
+    monkeypatch.setattr(assistant_setup.os, "link", swap_parent_before_link)
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    assert json.loads(result.output)["status"] == "rolled_back"
+    assert not tuple(redirected.iterdir())
+    assert (moved_parent / target.name).read_bytes() == original_bytes
+    assert not tuple(moved_parent.glob(f".{target.name}.new.*"))
+    assert not tuple(moved_parent.glob(f".{target.name}.backup.*"))
+
+
+def test_assets_only_rollback_preserves_concurrent_replacement_and_retires_backup(
+    tmp_path: Path, monkeypatch
+) -> None:
+    env, home, _state, _corpus = _environment(tmp_path)
+    runner = CliRunner()
+    installed = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+    assert installed.exit_code == 0, installed.output
+
+    changed_root = tmp_path / "changed-assets-for-rollback"
+    shutil.copytree(
+        REPOSITORY_ROOT / "src" / "yt_insights" / "assistant_assets",
+        changed_root,
+    )
+    first_relative = "skills/youtube-acquire/SKILL.md"
+    second_relative = "skills/youtube-acquire/agents/openai.yaml"
+    (changed_root / first_relative).write_text("first upgrade\n", encoding="utf-8")
+    (changed_root / second_relative).write_text("second upgrade\n", encoding="utf-8")
+    monkeypatch.setattr(assistant_setup, "_asset_root", lambda: changed_root)
+    first_target = home / ".agents" / first_relative
+    manifest_before = (home / OWNERSHIP_MANIFEST).read_bytes()
+    original_replace = assistant_setup._replace_managed_file
+    calls = 0
+
+    def replace_then_race(
+        target: Path,
+        content: bytes,
+        expected: assistant_setup.FileSnapshot,
+        root: assistant_setup.BoundRoot,
+    ) -> assistant_setup.ReplacedFile:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            concurrent = first_target.with_name(".concurrent-replacement")
+            concurrent.write_text("concurrent replacement\n", encoding="utf-8")
+            os.replace(concurrent, first_target)
+            raise OSError("synthetic later upgrade failure")
+        return original_replace(target, content, expected, root)
+
+    monkeypatch.setattr(assistant_setup, "_replace_managed_file", replace_then_race)
+
+    result = runner.invoke(cli, _assets_only_arguments("--apply"), env=env)
+
+    assert result.exit_code != 0
+    assert json.loads(result.output)["status"] == "rolled_back"
+    assert first_target.read_text(encoding="utf-8") == "concurrent replacement\n"
+    assert (home / OWNERSHIP_MANIFEST).read_bytes() == manifest_before
+    assert not tuple(first_target.parent.glob(f".{first_target.name}.new.*"))
+    assert not tuple(first_target.parent.glob(f".{first_target.name}.backup.*"))
 
 
 def test_assets_only_never_resolves_or_invokes_mcp_tools(
@@ -784,12 +995,15 @@ def test_assets_only_write_failure_rolls_back_only_files_it_created(
     original_write = assistant_setup._write_asset
     calls = 0
 
-    def fail_second_write(asset: assistant_setup.Asset) -> assistant_setup.CreatedFile:
+    def fail_second_write(
+        asset: assistant_setup.Asset,
+        root: assistant_setup.BoundRoot,
+    ) -> assistant_setup.CreatedFile:
         nonlocal calls
         calls += 1
         if calls == 2:
             raise OSError("synthetic asset failure")
-        return original_write(asset)
+        return original_write(asset, root)
 
     monkeypatch.setattr(assistant_setup, "_write_asset", fail_second_write)
 

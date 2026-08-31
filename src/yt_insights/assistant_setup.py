@@ -8,9 +8,10 @@ import json
 import os
 from pathlib import Path
 import re
+import secrets
 import shutil
+import stat
 import subprocess
-import tempfile
 from typing import Literal
 
 
@@ -20,6 +21,8 @@ MCP_NAME = "yt-insights"
 OWNERSHIP_MANIFEST_RELATIVE = Path(".agents/.yt-insights-assistant-assets-v1.json")
 OWNERSHIP_SCHEMA_VERSION = 1
 _SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+_DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+_READ_FILE_FLAGS = os.O_RDONLY | os.O_NOFOLLOW
 
 
 @dataclass(frozen=True)
@@ -40,6 +43,8 @@ class FileSnapshot:
 @dataclass(frozen=True)
 class CreatedFile:
     path: Path
+    parent_fd: int
+    name: str
     installed: FileSnapshot
 
 
@@ -61,14 +66,38 @@ class OwnershipManifest:
 @dataclass(frozen=True)
 class ReplacedFile:
     path: Path
+    parent_fd: int
+    name: str
     installed: FileSnapshot
-    backup: Path
+    backup_name: str
+    backup: FileSnapshot
+
+
+@dataclass(frozen=True)
+class CreatedDirectory:
+    parent_fd: int
+    name: str
+    device: int
+    inode: int
+
+
+@dataclass
+class BoundRoot:
+    home: Path
+    fd: int
+    parent_fd: int
+    name: str
+    device: int
+    inode: int
+    created_home: bool
+    created_directories: list[CreatedDirectory]
 
 
 @dataclass
 class AssetTransaction:
     created: list[CreatedFile]
     replaced: list[ReplacedFile]
+    root: BoundRoot
 
 
 def _asset_root() -> Path:
@@ -293,125 +322,459 @@ def _remove_registration(client: Client, executable: Path) -> None:
     subprocess.run(command, check=False, capture_output=True, text=True)
 
 
-def _write_asset(asset: Asset) -> CreatedFile:
-    return _write_bytes_exclusive(asset.target, asset.source.read_bytes())
-
-
-def _write_bytes_exclusive(target: Path, content: bytes) -> CreatedFile:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{target.name}.", dir=target.parent
-    )
-    temporary = Path(temporary_name)
+def _snapshot_at(parent_fd: int, name: str) -> tuple[FileSnapshot, bytes]:
+    descriptor = os.open(name, _READ_FILE_FLAGS, dir_fd=parent_fd)
     try:
-        with os.fdopen(descriptor, "wb") as handle:
-            handle.write(content)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary, 0o644)
-        os.link(temporary, target)
-        installed, _ = _snapshot_file(target)
-        return CreatedFile(target, installed)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise ValueError("managed file is not a regular file")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        raw = b"".join(chunks)
+        after = os.fstat(descriptor)
+        entry = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        identity_before = (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        )
+        identity_after = (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        )
+        identity_entry = (
+            entry.st_dev,
+            entry.st_ino,
+            entry.st_size,
+            entry.st_mtime_ns,
+        )
+        if identity_before != identity_after or identity_after != identity_entry:
+            raise ValueError("managed file changed during inspection")
+        return (
+            FileSnapshot(
+                device=after.st_dev,
+                inode=after.st_ino,
+                size=after.st_size,
+                mtime_ns=after.st_mtime_ns,
+                sha256=_sha256(raw),
+            ),
+            raw,
+        )
     finally:
-        temporary.unlink(missing_ok=True)
+        os.close(descriptor)
 
 
-def _stage_bytes(target: Path, content: bytes, *, suffix: str) -> Path:
-    target.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{target.name}.{suffix}.", dir=target.parent
-    )
-    temporary = Path(temporary_name)
+def _open_absolute_directory(path: Path) -> int:
+    if not path.is_absolute():
+        raise ValueError("directory path must be absolute")
+    descriptor = os.open("/", _DIRECTORY_FLAGS)
     try:
-        with os.fdopen(descriptor, "wb") as handle:
+        for part in path.parts[1:]:
+            child = os.open(part, _DIRECTORY_FLAGS, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _open_bound_root(home: Path) -> BoundRoot:
+    parent_fd = _open_absolute_directory(home.parent)
+    created = False
+    try:
+        try:
+            descriptor = os.open(home.name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+        except FileNotFoundError:
+            os.mkdir(home.name, 0o755, dir_fd=parent_fd)
+            created = True
+            descriptor = os.open(home.name, _DIRECTORY_FLAGS, dir_fd=parent_fd)
+        current = os.fstat(descriptor)
+        return BoundRoot(
+            home=home,
+            fd=descriptor,
+            parent_fd=parent_fd,
+            name=home.name,
+            device=current.st_dev,
+            inode=current.st_ino,
+            created_home=created,
+            created_directories=[],
+        )
+    except Exception:
+        if created:
+            try:
+                os.rmdir(home.name, dir_fd=parent_fd)
+            except OSError:
+                pass
+        os.close(parent_fd)
+        raise
+
+
+def _assert_root_current(root: BoundRoot) -> None:
+    current = os.stat(root.name, dir_fd=root.parent_fd, follow_symlinks=False)
+    if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (
+        root.device,
+        root.inode,
+    ):
+        raise ValueError("assistant home changed during publication")
+
+
+def _record_created_directory(
+    root: BoundRoot,
+    parent_fd: int,
+    name: str,
+    child_fd: int,
+) -> None:
+    child = os.fstat(child_fd)
+    root.created_directories.append(
+        CreatedDirectory(
+            parent_fd=os.dup(parent_fd),
+            name=name,
+            device=child.st_dev,
+            inode=child.st_ino,
+        )
+    )
+
+
+def _open_parent_at(root: BoundRoot, target: Path, *, create: bool) -> int:
+    relative_parent = target.parent.relative_to(root.home)
+    descriptor = os.dup(root.fd)
+    try:
+        for part in relative_parent.parts:
+            try:
+                child = os.open(part, _DIRECTORY_FLAGS, dir_fd=descriptor)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(part, 0o755, dir_fd=descriptor)
+                child = os.open(part, _DIRECTORY_FLAGS, dir_fd=descriptor)
+                _record_created_directory(root, descriptor, part, child)
+            os.close(descriptor)
+            descriptor = child
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _assert_parent_current(parent_fd: int, parent: Path) -> None:
+    bound = os.fstat(parent_fd)
+    current = os.stat(parent, follow_symlinks=False)
+    if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (
+        bound.st_dev,
+        bound.st_ino,
+    ):
+        raise ValueError("managed asset parent changed during publication")
+
+
+def _unique_entry_name(parent_fd: int, prefix: str) -> str:
+    for _ in range(128):
+        name = f".{prefix}.{secrets.token_hex(12)}"
+        try:
+            os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return name
+    raise RuntimeError("could not reserve a temporary entry name")
+
+
+def _stage_bytes_at(parent_fd: int, target_name: str, content: bytes) -> tuple[str, FileSnapshot]:
+    stage_name = _unique_entry_name(parent_fd, f"{target_name}.new")
+    descriptor = os.open(
+        stage_name,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=parent_fd,
+    )
+    staged: FileSnapshot | None = None
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
             handle.write(content)
             handle.flush()
             os.fsync(handle.fileno())
-        os.chmod(temporary, 0o644)
+        os.fchmod(descriptor, 0o644)
+        current = os.fstat(descriptor)
+        staged = FileSnapshot(
+            device=current.st_dev,
+            inode=current.st_ino,
+            size=current.st_size,
+            mtime_ns=current.st_mtime_ns,
+            sha256=_sha256(content),
+        )
     except Exception:
-        temporary.unlink(missing_ok=True)
+        current = os.fstat(descriptor)
+        partial = FileSnapshot(
+            device=current.st_dev,
+            inode=current.st_ino,
+            size=current.st_size,
+            mtime_ns=current.st_mtime_ns,
+            sha256="",
+        )
+        os.close(descriptor)
+        _unlink_if_snapshot(parent_fd, stage_name, partial)
         raise
-    return temporary
+    finally:
+        if staged is not None:
+            os.close(descriptor)
+    try:
+        verified, _ = _snapshot_at(parent_fd, stage_name)
+        if not _same_snapshot(verified, staged):
+            raise ValueError("staged file changed before publication")
+        return stage_name, staged
+    except Exception:
+        if staged is not None:
+            _unlink_if_snapshot(parent_fd, stage_name, staged)
+        raise
 
 
-def _reserve_backup_path(target: Path) -> Path:
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{target.name}.backup.", dir=target.parent
-    )
-    os.close(descriptor)
-    backup = Path(temporary_name)
-    backup.unlink()
-    return backup
-
-
-def _restore_backup_without_overwrite(backup: Path, target: Path) -> bool:
-    if target.exists() or target.is_symlink():
+def _entry_matches_snapshot(parent_fd: int, name: str, expected: FileSnapshot) -> bool:
+    try:
+        current = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
         return False
-    os.link(backup, target)
+    return stat.S_ISREG(current.st_mode) and (
+        current.st_dev,
+        current.st_ino,
+        current.st_size,
+        current.st_mtime_ns,
+    ) == (
+        expected.device,
+        expected.inode,
+        expected.size,
+        expected.mtime_ns,
+    )
+
+
+def _unlink_if_snapshot(parent_fd: int, name: str, expected: FileSnapshot) -> bool:
+    if not _entry_matches_snapshot(parent_fd, name, expected):
+        return False
+    os.unlink(name, dir_fd=parent_fd)
     return True
+
+
+def _entry_exists(parent_fd: int, name: str) -> bool:
+    try:
+        os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    return True
+
+
+def _publish_staged_at(
+    parent_fd: int,
+    parent: Path,
+    stage_name: str,
+    staged: FileSnapshot,
+    target_name: str,
+) -> FileSnapshot:
+    try:
+        os.link(
+            stage_name,
+            target_name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+            follow_symlinks=False,
+        )
+        installed, _ = _snapshot_at(parent_fd, target_name)
+        if not _same_snapshot(installed, staged):
+            raise ValueError("published file does not match staged inode")
+        _assert_parent_current(parent_fd, parent)
+        return installed
+    except Exception:
+        _unlink_if_snapshot(parent_fd, target_name, staged)
+        raise
+
+
+def _write_asset(asset: Asset, root: BoundRoot) -> CreatedFile:
+    return _write_bytes_exclusive(asset.target, asset.source.read_bytes(), root)
+
+
+def _write_bytes_exclusive(
+    target: Path,
+    content: bytes,
+    root: BoundRoot,
+) -> CreatedFile:
+    parent_fd = _open_parent_at(root, target, create=True)
+    stage_name = ""
+    staged: FileSnapshot | None = None
+    try:
+        stage_name, staged = _stage_bytes_at(parent_fd, target.name, content)
+        installed = _publish_staged_at(
+            parent_fd,
+            target.parent,
+            stage_name,
+            staged,
+            target.name,
+        )
+        _unlink_if_snapshot(parent_fd, stage_name, staged)
+        return CreatedFile(target, parent_fd, target.name, installed)
+    except Exception:
+        if stage_name and staged is not None:
+            _unlink_if_snapshot(parent_fd, stage_name, staged)
+        os.close(parent_fd)
+        raise
+
+
+def _retire_backup_or_restore(
+    parent_fd: int,
+    target_name: str,
+    backup_name: str,
+    backup: FileSnapshot,
+) -> None:
+    if not _entry_exists(parent_fd, target_name):
+        try:
+            os.link(
+                backup_name,
+                target_name,
+                src_dir_fd=parent_fd,
+                dst_dir_fd=parent_fd,
+                follow_symlinks=False,
+            )
+        except FileExistsError:
+            pass
+    _unlink_if_snapshot(parent_fd, backup_name, backup)
 
 
 def _replace_managed_file(
     target: Path,
     content: bytes,
     expected: FileSnapshot,
+    root: BoundRoot,
 ) -> ReplacedFile:
-    staged = _stage_bytes(target, content, suffix="new")
-    backup = _reserve_backup_path(target)
+    parent_fd = _open_parent_at(root, target, create=False)
+    stage_name = ""
+    staged: FileSnapshot | None = None
+    backup_name = ""
+    backup: FileSnapshot | None = None
     moved = False
     try:
-        current, _ = _snapshot_file(target)
+        stage_name, staged = _stage_bytes_at(parent_fd, target.name, content)
+        backup_name = _unique_entry_name(parent_fd, f"{target.name}.backup")
+        current, _ = _snapshot_at(parent_fd, target.name)
         if not _same_snapshot(current, expected):
             raise ValueError("managed file changed before upgrade")
-        os.replace(target, backup)
+        os.rename(
+            target.name,
+            backup_name,
+            src_dir_fd=parent_fd,
+            dst_dir_fd=parent_fd,
+        )
         moved = True
-        backup_snapshot, _ = _snapshot_file(backup)
-        if not _same_snapshot(backup_snapshot, expected):
-            _restore_backup_without_overwrite(backup, target)
+        backup, _ = _snapshot_at(parent_fd, backup_name)
+        if not _same_snapshot(backup, expected):
             raise ValueError("managed file changed during upgrade")
-        os.link(staged, target)
-        installed, _ = _snapshot_file(target)
+        installed = _publish_staged_at(
+            parent_fd,
+            target.parent,
+            stage_name,
+            staged,
+            target.name,
+        )
+        _unlink_if_snapshot(parent_fd, stage_name, staged)
         return ReplacedFile(
             path=target,
+            parent_fd=parent_fd,
+            name=target.name,
             installed=installed,
+            backup_name=backup_name,
             backup=backup,
         )
     except Exception:
-        if moved:
-            restored = _restore_backup_without_overwrite(backup, target)
-            if restored:
-                backup.unlink(missing_ok=True)
+        if staged is not None:
+            _unlink_if_snapshot(parent_fd, target.name, staged)
+        if backup is None and backup_name and _entry_matches_snapshot(
+            parent_fd,
+            backup_name,
+            expected,
+        ):
+            backup = expected
+            moved = True
+        if moved and backup is not None:
+            _retire_backup_or_restore(
+                parent_fd,
+                target.name,
+                backup_name,
+                backup,
+            )
+        if stage_name and staged is not None:
+            _unlink_if_snapshot(parent_fd, stage_name, staged)
+        os.close(parent_fd)
         raise
-    finally:
-        staged.unlink(missing_ok=True)
-        if not moved:
-            backup.unlink(missing_ok=True)
 
 
 def _rollback_replaced_files(replaced: list[ReplacedFile]) -> None:
     for item in reversed(replaced):
+        _unlink_if_snapshot(item.parent_fd, item.name, item.installed)
+        _retire_backup_or_restore(
+            item.parent_fd,
+            item.name,
+            item.backup_name,
+            item.backup,
+        )
+        os.close(item.parent_fd)
+
+
+def _remove_created_files(created: list[CreatedFile]) -> None:
+    for item in reversed(created):
+        _unlink_if_snapshot(item.parent_fd, item.name, item.installed)
+        os.close(item.parent_fd)
+
+
+def _cleanup_created_directories(root: BoundRoot) -> None:
+    for item in reversed(root.created_directories):
         try:
-            current, _ = _snapshot_file(item.path)
-        except FileNotFoundError:
-            current = None
-        except (OSError, ValueError):
-            continue
-        if current is not None and not _same_snapshot(current, item.installed):
-            continue
-        if current is not None:
-            item.path.unlink()
-        if _restore_backup_without_overwrite(item.backup, item.path):
-            item.backup.unlink(missing_ok=True)
+            current = os.stat(item.name, dir_fd=item.parent_fd, follow_symlinks=False)
+            if stat.S_ISDIR(current.st_mode) and (current.st_dev, current.st_ino) == (
+                item.device,
+                item.inode,
+            ):
+                os.rmdir(item.name, dir_fd=item.parent_fd)
+        except OSError:
+            pass
+        finally:
+            os.close(item.parent_fd)
 
 
-def _rollback_asset_transaction(transaction: AssetTransaction, home: Path) -> None:
+def _close_bound_root(root: BoundRoot, *, rollback: bool) -> None:
+    if rollback:
+        _cleanup_created_directories(root)
+        if root.created_home:
+            try:
+                current = os.stat(
+                    root.name,
+                    dir_fd=root.parent_fd,
+                    follow_symlinks=False,
+                )
+                if stat.S_ISDIR(current.st_mode) and (
+                    current.st_dev,
+                    current.st_ino,
+                ) == (root.device, root.inode):
+                    os.rmdir(root.name, dir_fd=root.parent_fd)
+            except OSError:
+                pass
+    else:
+        for item in root.created_directories:
+            os.close(item.parent_fd)
+    os.close(root.fd)
+    os.close(root.parent_fd)
+
+
+def _rollback_asset_transaction(transaction: AssetTransaction) -> None:
     _rollback_replaced_files(transaction.replaced)
-    _remove_created_files(transaction.created, home)
+    _remove_created_files(transaction.created)
+    _close_bound_root(transaction.root, rollback=True)
 
 
 def _finish_asset_transaction(transaction: AssetTransaction) -> None:
     for item in transaction.replaced:
-        item.backup.unlink(missing_ok=True)
+        _unlink_if_snapshot(item.parent_fd, item.backup_name, item.backup)
+        os.close(item.parent_fd)
+    for item in transaction.created:
+        os.close(item.parent_fd)
+    _close_bound_root(transaction.root, rollback=False)
 
 
 def _manifest_bytes(assets: dict[str, str]) -> bytes:
@@ -425,21 +788,24 @@ def _manifest_bytes(assets: dict[str, str]) -> bytes:
 def _recheck_asset_preimages(
     assets: tuple[Asset, ...],
     states: dict[Path, AssetState],
-    home: Path,
+    root: BoundRoot,
 ) -> None:
     for asset in assets:
         state = states[asset.target]
-        if _has_unsafe_parent(asset.target, home) or asset.target.is_symlink():
-            raise ValueError("managed asset path changed before publication")
-        if state.status == "missing":
-            if asset.target.exists():
-                raise ValueError("managed asset appeared before publication")
-            continue
-        if state.live is None:
-            raise ValueError("managed asset has no preimage")
-        current, _ = _snapshot_file(asset.target)
-        if not _same_snapshot(current, state.live):
-            raise ValueError("managed asset changed before publication")
+        parent_fd = _open_parent_at(root, asset.target, create=state.status == "missing")
+        try:
+            if state.status == "missing":
+                if _entry_exists(parent_fd, asset.target.name):
+                    raise ValueError("managed asset appeared before publication")
+                continue
+            if state.live is None:
+                raise ValueError("managed asset has no preimage")
+            current, _ = _snapshot_at(parent_fd, asset.target.name)
+            if not _same_snapshot(current, state.live):
+                raise ValueError("managed asset changed before publication")
+            _assert_parent_current(parent_fd, asset.target.parent)
+        finally:
+            os.close(parent_fd)
 
 
 def _recheck_published_assets(
@@ -451,7 +817,21 @@ def _recheck_published_assets(
     replaced = {item.path: item for item in transaction.replaced}
     for asset in assets:
         state = states[asset.target]
-        current, _ = _snapshot_file(asset.target)
+        installed = created.get(asset.target) or replaced.get(asset.target)
+        if installed is not None:
+            parent_fd = installed.parent_fd
+            name = installed.name
+            close_parent = False
+        else:
+            parent_fd = _open_parent_at(transaction.root, asset.target, create=False)
+            name = asset.target.name
+            close_parent = True
+        try:
+            current, _ = _snapshot_at(parent_fd, name)
+            _assert_parent_current(parent_fd, asset.target.parent)
+        finally:
+            if close_parent:
+                os.close(parent_fd)
         if current.sha256 != state.source_sha256:
             raise ValueError("managed asset changed during publication")
         if state.status == "identical":
@@ -467,17 +847,25 @@ def _recheck_published_assets(
                 raise ValueError("managed asset changed during publication")
 
 
-def _recheck_manifest_preimage(ownership: OwnershipManifest) -> bytes | None:
-    if ownership.status == "missing":
-        if ownership.path.exists() or ownership.path.is_symlink():
-            raise ValueError("ownership manifest appeared before publication")
-        return None
-    if ownership.status != "valid" or ownership.snapshot is None:
-        raise ValueError("ownership manifest is invalid")
-    current, raw = _snapshot_file(ownership.path)
-    if not _same_snapshot(current, ownership.snapshot):
-        raise ValueError("ownership manifest changed before publication")
-    return raw
+def _recheck_manifest_preimage(
+    ownership: OwnershipManifest,
+    root: BoundRoot,
+) -> bytes | None:
+    parent_fd = _open_parent_at(root, ownership.path, create=ownership.status == "missing")
+    try:
+        if ownership.status == "missing":
+            if _entry_exists(parent_fd, ownership.path.name):
+                raise ValueError("ownership manifest appeared before publication")
+            return None
+        if ownership.status != "valid" or ownership.snapshot is None:
+            raise ValueError("ownership manifest is invalid")
+        current, raw = _snapshot_at(parent_fd, ownership.path.name)
+        if not _same_snapshot(current, ownership.snapshot):
+            raise ValueError("ownership manifest changed before publication")
+        _assert_parent_current(parent_fd, ownership.path.parent)
+        return raw
+    finally:
+        os.close(parent_fd)
 
 
 def _recheck_published_manifest(
@@ -485,9 +873,6 @@ def _recheck_published_manifest(
     desired: bytes,
     transaction: AssetTransaction,
 ) -> None:
-    current, raw = _snapshot_file(ownership.path)
-    if raw != desired:
-        raise ValueError("ownership manifest changed during publication")
     created = next(
         (item for item in transaction.created if item.path == ownership.path),
         None,
@@ -496,6 +881,23 @@ def _recheck_published_manifest(
         (item for item in transaction.replaced if item.path == ownership.path),
         None,
     )
+    installed = created or replaced
+    if installed is not None:
+        parent_fd = installed.parent_fd
+        name = installed.name
+        close_parent = False
+    else:
+        parent_fd = _open_parent_at(transaction.root, ownership.path, create=False)
+        name = ownership.path.name
+        close_parent = True
+    try:
+        current, raw = _snapshot_at(parent_fd, name)
+        _assert_parent_current(parent_fd, ownership.path.parent)
+    finally:
+        if close_parent:
+            os.close(parent_fd)
+    if raw != desired:
+        raise ValueError("ownership manifest changed during publication")
     if created is not None and not _same_snapshot(current, created.installed):
         raise ValueError("ownership manifest changed during publication")
     if replaced is not None and not _same_snapshot(current, replaced.installed):
@@ -512,14 +914,16 @@ def _apply_asset_changes(
     ownership: OwnershipManifest,
     home: Path,
 ) -> AssetTransaction:
-    transaction = AssetTransaction(created=[], replaced=[])
+    root = _open_bound_root(home)
+    transaction = AssetTransaction(created=[], replaced=[], root=root)
     try:
-        _recheck_asset_preimages(assets, states, home)
-        current_manifest = _recheck_manifest_preimage(ownership)
+        _assert_root_current(root)
+        _recheck_asset_preimages(assets, states, root)
+        current_manifest = _recheck_manifest_preimage(ownership, root)
         for asset in assets:
             state = states[asset.target]
             if state.status == "missing":
-                transaction.created.append(_write_asset(asset))
+                transaction.created.append(_write_asset(asset, root))
             elif state.status == "upgrade":
                 if state.live is None:
                     raise ValueError("managed upgrade has no preimage")
@@ -528,6 +932,7 @@ def _apply_asset_changes(
                         asset.target,
                         asset.source.read_bytes(),
                         state.live,
+                        root,
                     )
                 )
 
@@ -542,7 +947,7 @@ def _apply_asset_changes(
         desired_manifest = _manifest_bytes(manifest_assets)
         if ownership.status == "missing":
             transaction.created.append(
-                _write_bytes_exclusive(ownership.path, desired_manifest)
+                _write_bytes_exclusive(ownership.path, desired_manifest, root)
             )
         elif ownership.status == "valid":
             if current_manifest != desired_manifest:
@@ -551,36 +956,17 @@ def _apply_asset_changes(
                         ownership.path,
                         desired_manifest,
                         ownership.snapshot,
+                        root,
                     )
                 )
         else:
             raise ValueError("ownership manifest is invalid")
         _recheck_published_manifest(ownership, desired_manifest, transaction)
+        _assert_root_current(root)
     except Exception:
-        _rollback_asset_transaction(transaction, home)
+        _rollback_asset_transaction(transaction)
         raise
     return transaction
-
-
-def _remove_created_files(created: list[CreatedFile], home: Path) -> None:
-    for item in reversed(created):
-        target = item.path
-        try:
-            current, _ = _snapshot_file(target)
-        except FileNotFoundError:
-            continue
-        except (OSError, ValueError):
-            continue
-        if not _same_snapshot(current, item.installed):
-            continue
-        target.unlink()
-        parent = target.parent
-        while parent != home and home in parent.parents:
-            try:
-                parent.rmdir()
-            except OSError:
-                break
-            parent = parent.parent
 
 
 def _operation_payload(
@@ -770,7 +1156,7 @@ def run_assistant_setup(
         base.update(status="blocked", conflicts=conflicts, existing_clients=existing_clients)
         return base, 1
 
-    transaction = AssetTransaction(created=[], replaced=[])
+    transaction: AssetTransaction | None = None
     registered: list[Client] = []
     attempted: list[Client] = []
     try:
@@ -796,7 +1182,8 @@ def run_assistant_setup(
     except Exception as error:
         for name in reversed(attempted):
             _remove_registration(name, executables[name])
-        _rollback_asset_transaction(transaction, target_home)
+        if transaction is not None:
+            _rollback_asset_transaction(transaction)
         base.update(status="rolled_back", error=str(error))
         return base, 1
 
