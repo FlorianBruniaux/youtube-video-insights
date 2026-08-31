@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import json
-from datetime import UTC, date, datetime
+from datetime import date
 
 import pytest
 from click.testing import CliRunner
 
 from yt_insights.cli import cli
+from yt_insights.paths import DataPaths
+from yt_insights.research.acquisition import CandidateAcquisitionOutcome
 from yt_insights.research.assessment import AssessmentRetryableError
 from yt_insights.research.discovery import DiscoveryResult
 from yt_insights.research.models import (
@@ -19,7 +21,6 @@ from yt_insights.research.models import (
 )
 from yt_insights.research.store import ResearchStore
 from yt_insights.research.workflow import ResearchWorkflow
-
 
 VIDEO_ID = "abc123DEF45"
 
@@ -76,6 +77,25 @@ class FakeDiscoveryProvider:
         return DiscoveryResult("yt-dlp", 1, self.candidates, (), True)
 
 
+class FakeAcquisitionService:
+    def __init__(self, outcomes: tuple[CandidateAcquisitionOutcome, ...]) -> None:
+        self.outcomes = outcomes
+        self.calls: list[tuple[tuple[str, ...], str, str | None]] = []
+
+    def acquire_approved(
+        self,
+        candidates: tuple[ResearchCandidate, ...],
+        *,
+        data_paths: DataPaths,
+        language: str,
+        cookies_from_browser: str | None = None,
+    ) -> tuple[CandidateAcquisitionOutcome, ...]:
+        self.calls.append(
+            (tuple(candidate.video_id for candidate in candidates), language, cookies_from_browser)
+        )
+        return self.outcomes
+
+
 def _candidate(video_id: str) -> ResearchCandidate:
     return ResearchCandidate(
         video_id=video_id,
@@ -91,16 +111,28 @@ def _candidate(video_id: str) -> ResearchCandidate:
 
 
 def _configure_discovery_workflow(
-    tmp_path, monkeypatch, candidates: tuple[ResearchCandidate, ...]
+    tmp_path,
+    monkeypatch,
+    candidates: tuple[ResearchCandidate, ...],
+    *,
+    acquisition_service: object | None = None,
+    index_refresher: object | None = None,
 ) -> FakeDiscoveryProvider:
     from yt_insights import cli_research
 
     provider = FakeDiscoveryProvider(candidates)
+    kwargs: dict[str, object] = {}
+    if acquisition_service is not None:
+        kwargs["acquisition_service"] = acquisition_service
+    if index_refresher is not None:
+        kwargs["index_refresher"] = index_refresher
     workflow = ResearchWorkflow(
         store=ResearchStore(tmp_path / "research.sqlite3"),
         evidence_reader=FakeEvidenceReader(),
         discovery_provider=provider,
+        data_paths=DataPaths.from_root(tmp_path / "data"),
         session_id_factory=lambda: "01K4RESEARCH0000000000000000",
+        **kwargs,
     )
     monkeypatch.setattr(cli_research, "_workflow", lambda: workflow)
     return provider
@@ -499,3 +531,220 @@ def test_research_sufficient_stale_decision_and_unknown_status_are_bounded(
         "error": {"code": "research_session_unavailable"},
         "schema_version": 1,
     }
+
+
+def test_research_acquire_cli_uses_exact_approved_batch_and_returns_question(
+    tmp_path, monkeypatch
+) -> None:
+    video_id = "zyx987WVUT0"
+    candidate = _candidate(video_id)
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+    refresh_calls: list[DataPaths] = []
+    _configure_discovery_workflow(
+        tmp_path,
+        monkeypatch,
+        (candidate,),
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: refresh_calls.append(paths),
+    )
+    runner = CliRunner()
+    session_id = _discover_candidates(runner)
+    approved = runner.invoke(
+        cli,
+        [
+            "research",
+            "approve",
+            session_id,
+            video_id,
+            "--revision",
+            "3",
+            "--idempotency-key",
+            "approve-key",
+            "--json",
+        ],
+    )
+    assert approved.exit_code == 0, approved.output
+
+    acquired = runner.invoke(
+        cli,
+        [
+            "research",
+            "acquire",
+            session_id,
+            "--revision",
+            "4",
+            "--idempotency-key",
+            "acquire-key",
+            "--lang",
+            "en",
+            "--cookies-from-browser",
+            "firefox",
+            "--json",
+        ],
+    )
+
+    assert acquired.exit_code == 0, acquired.output
+    payload = json.loads(acquired.output)
+    assert payload["session"]["state"] == "awaiting_sufficiency_confirmation"
+    assert payload["required_user_action"] == "confirm_sufficiency_or_refresh"
+    assert acquisition.calls == [((video_id,), "en", "firefox")]
+    assert len(refresh_calls) == 1
+
+
+def test_research_acquire_cli_rejects_stale_revision_without_network(
+    tmp_path, monkeypatch
+) -> None:
+    video_id = "zyx987WVUT0"
+    candidate = _candidate(video_id)
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+    _configure_discovery_workflow(
+        tmp_path,
+        monkeypatch,
+        (candidate,),
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: None,
+    )
+    runner = CliRunner()
+    session_id = _discover_candidates(runner)
+    runner.invoke(
+        cli,
+        [
+            "research",
+            "approve",
+            session_id,
+            video_id,
+            "--revision",
+            "3",
+            "--idempotency-key",
+            "approve-key",
+            "--json",
+        ],
+    )
+
+    stale = runner.invoke(
+        cli,
+        [
+            "research",
+            "acquire",
+            session_id,
+            "--revision",
+            "3",
+            "--idempotency-key",
+            "stale-acquire-key",
+            "--json",
+        ],
+    )
+
+    assert stale.exit_code == 1
+    assert json.loads(stale.output) == {
+        "error": {"code": "research_acquisition_unavailable"},
+        "schema_version": 1,
+    }
+    assert acquisition.calls == []
+
+
+def test_research_retry_cli_reindexes_without_reacquiring(tmp_path, monkeypatch) -> None:
+    video_id = "zyx987WVUT0"
+    candidate = _candidate(video_id)
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+    refresh_count = 0
+
+    def flaky_refresh(paths: DataPaths) -> None:
+        nonlocal refresh_count
+        refresh_count += 1
+        if refresh_count == 1:
+            raise RuntimeError("private index error")
+
+    _configure_discovery_workflow(
+        tmp_path,
+        monkeypatch,
+        (candidate,),
+        acquisition_service=acquisition,
+        index_refresher=flaky_refresh,
+    )
+    runner = CliRunner()
+    session_id = _discover_candidates(runner)
+    runner.invoke(
+        cli,
+        [
+            "research",
+            "approve",
+            session_id,
+            video_id,
+            "--revision",
+            "3",
+            "--idempotency-key",
+            "approve-key",
+            "--json",
+        ],
+    )
+    failed = runner.invoke(
+        cli,
+        [
+            "research",
+            "acquire",
+            session_id,
+            "--revision",
+            "4",
+            "--idempotency-key",
+            "acquire-key",
+            "--json",
+        ],
+    )
+    assert failed.exit_code == 1
+
+    retried = runner.invoke(
+        cli,
+        [
+            "research",
+            "retry",
+            session_id,
+            "--revision",
+            "6",
+            "--idempotency-key",
+            "retry-key",
+            "--json",
+        ],
+    )
+
+    assert retried.exit_code == 0, retried.output
+    assert json.loads(retried.output)["session"]["state"] == "awaiting_sufficiency_confirmation"
+    assert len(acquisition.calls) == 1
+    assert refresh_count == 2
+
+
+def test_research_acquisition_gate_warnings_are_bounded_and_do_not_block() -> None:
+    from yt_insights.cli_research import _gate_warnings
+
+    assert _gate_warnings() == (
+        "gate_relevance_pilot_unknown",
+        "gate_global_activation_not_ready",
+        "gate_code_sha_unverified",
+    )

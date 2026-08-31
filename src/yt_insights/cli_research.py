@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from uuid import uuid4
 
 import click
 
 from .catalog import Catalog
 from .config import load_config
+from .research.acquisition import ResearchAcquisitionService
 from .research.assessment import SQLiteEvidenceReader
 from .research.discovery import YtDlpDiscoveryProvider
 from .research.models import FreshnessProfile
 from .research.store import ResearchStore
-from .research.workflow import ResearchResponse, ResearchWorkflow, validate_start_request
-
+from .research.workflow import (
+    ResearchResponse,
+    ResearchWorkflow,
+    validate_start_request,
+)
 
 _QUESTION = "Is this evidence sufficient, or should I search YouTube for newer sources?"
 
@@ -47,11 +52,18 @@ def _workflow() -> ResearchWorkflow:
         store=store,
         evidence_reader=reader,
         discovery_provider=YtDlpDiscoveryProvider(existing_ids=existing_video_ids),
+        acquisition_service=ResearchAcquisitionService(),
+        data_paths=paths,
         session_id_factory=lambda: uuid4().hex,
     )
 
 
-def _emit(response: ResearchResponse, *, as_json: bool) -> None:
+def _emit(
+    response: ResearchResponse,
+    *,
+    as_json: bool,
+    warnings: tuple[str, ...] = (),
+) -> None:
     payload = response.to_dict()
     if payload["error_code"] == "local_index_unavailable":
         _error(
@@ -67,9 +79,28 @@ def _emit(response: ResearchResponse, *, as_json: bool) -> None:
             message="Candidate discovery is unavailable. Retry from the current session state.",
         )
         return
+    if payload["error_code"] == "acquisition_unavailable":
+        _error(
+            as_json=as_json,
+            code="acquisition_unavailable",
+            message="Approved source acquisition failed. Retry from the persisted session state.",
+        )
+        return
+    if payload["error_code"] == "index_refresh_failed":
+        _error(
+            as_json=as_json,
+            code="index_refresh_failed",
+            message="The acquired sources were kept, but index publication failed. Retry reindexing.",
+        )
+        return
     if as_json:
+        if warnings:
+            payload["warnings"] = list(warnings)
         click.echo(_json(payload))
         return
+
+    for warning in warnings:
+        click.echo(f"Warning: {warning}", err=True)
 
     session = payload["session"]
     assert isinstance(session, dict)
@@ -343,3 +374,117 @@ def cancel_command(
         )
         return
     _emit(response, as_json=as_json)
+
+
+@research_group.command("acquire")
+@click.argument("session_id")
+@click.option("--revision", required=True, help="Current session revision.")
+@click.option("--idempotency-key", required=True, help="Unique key for this acquisition.")
+@click.option("--lang", "language", default="fr", show_default=True)
+@click.option("--cookies-from-browser", default=None, metavar="BROWSER")
+@click.option("--json", "as_json", is_flag=True, help="Emit stable machine-readable JSON.")
+def acquire_command(
+    session_id: str,
+    revision: str,
+    idempotency_key: str,
+    language: str,
+    cookies_from_browser: str | None,
+    as_json: bool,
+) -> None:
+    """Acquire only the exact candidates approved at the current revision."""
+    try:
+        expected_revision = _revision(revision)
+        if not idempotency_key or not language.strip():
+            raise ValueError
+    except (TypeError, ValueError):
+        _error(
+            as_json=as_json,
+            code="invalid_acquisition_request",
+            message="Research acquisition request is invalid.",
+        )
+        return
+    try:
+        response = _workflow().acquire(
+            session_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+            language=language,
+            cookies_from_browser=cookies_from_browser,
+        )
+    except (OSError, RuntimeError, ValueError, TypeError):
+        _error(
+            as_json=as_json,
+            code="research_acquisition_unavailable",
+            message="Research acquisition is unavailable, invalid, or stale.",
+        )
+        return
+    _emit(response, as_json=as_json, warnings=_gate_warnings())
+
+
+@research_group.command("retry")
+@click.argument("session_id")
+@click.option("--revision", required=True, help="Current session revision.")
+@click.option("--idempotency-key", required=True, help="Unique key for this retry.")
+@click.option("--json", "as_json", is_flag=True, help="Emit stable machine-readable JSON.")
+def retry_command(
+    session_id: str,
+    revision: str,
+    idempotency_key: str,
+    as_json: bool,
+) -> None:
+    """Resume only the retry target recorded by the failed session."""
+    try:
+        expected_revision = _revision(revision)
+        if not idempotency_key:
+            raise ValueError
+    except (TypeError, ValueError):
+        _error(
+            as_json=as_json,
+            code="invalid_retry_request",
+            message="Research retry request is invalid.",
+        )
+        return
+    try:
+        response = _workflow().retry(
+            session_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+    except (OSError, RuntimeError, ValueError, TypeError):
+        _error(
+            as_json=as_json,
+            code="research_retry_unavailable",
+            message="Research retry is unavailable, invalid, or stale.",
+        )
+        return
+    _emit(response, as_json=as_json, warnings=_gate_warnings())
+
+
+def _gate_warnings() -> tuple[str, ...]:
+    """Return bounded non-PASS Task 0 statuses when checked-in evidence exists."""
+    evidence_path = (
+        Path(__file__).resolve().parents[2]
+        / "plans"
+        / "evidence"
+        / "2026-08-31-cumulative-research-gates.json"
+    )
+    try:
+        if not evidence_path.is_file() or evidence_path.stat().st_size > 1_000_000:
+            return ()
+        payload = json.loads(evidence_path.read_text(encoding="utf-8"))
+        gates = payload["gates"]
+        if not isinstance(gates, dict):
+            return ()
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return ()
+
+    warnings: list[str] = []
+    for name in ("relevance_pilot", "discovery_probe", "refresh_performance"):
+        status = gates.get(name)
+        if status != "PASS" and isinstance(status, str) and status in {"UNKNOWN", "FAIL"}:
+            warnings.append(f"gate_{name}_{status.casefold()}")
+    if gates.get("global_activation_ready") is not True:
+        warnings.append("gate_global_activation_not_ready")
+    if isinstance(payload.get("code_sha"), str):
+        warnings.append("gate_code_sha_unverified")
+    return tuple(warnings)

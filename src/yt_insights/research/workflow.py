@@ -2,15 +2,24 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Callable, Literal
+from typing import Literal
 
+from yt_insights.acquisition import rebuild_and_publish_indexes
+from yt_insights.paths import DataPaths
+
+from .acquisition import ResearchAcquisitionService
 from .assessment import AssessmentRetryableError, EvidenceReader, assess_local
 from .discovery import DiscoveryProvider, DiscoveryResult
 from .models import (
+    CandidateStatus,
     FreshnessProfile,
     QuerySpec,
+    ResearchAcquisitionOutcome,
     ResearchAssessment,
     ResearchCandidate,
     ResearchSession,
@@ -19,7 +28,6 @@ from .models import (
     normalize_research_text,
 )
 from .store import ResearchStore
-
 
 _SCHEMA_VERSION = 1
 _DISCOVERY_PROVIDER_NAME = "yt-dlp"
@@ -65,12 +73,18 @@ class ResearchWorkflow:
         store: ResearchStore,
         evidence_reader: EvidenceReader,
         discovery_provider: DiscoveryProvider | None = None,
+        acquisition_service: ResearchAcquisitionService | None = None,
+        data_paths: DataPaths | None = None,
+        index_refresher: Callable[[DataPaths], object] = rebuild_and_publish_indexes,
         now: Callable[[], datetime] = lambda: datetime.now(UTC),
         session_id_factory: Callable[[], str],
     ) -> None:
         self._store = store
         self._evidence_reader = evidence_reader
         self._discovery_provider = discovery_provider
+        self._acquisition_service = acquisition_service
+        self._data_paths = data_paths
+        self._index_refresher = index_refresher
         self._now = now
         self._session_id_factory = session_id_factory
 
@@ -177,7 +191,7 @@ class ResearchWorkflow:
             return self._record_discovery_failure(session_id, expected_revision)
         try:
             result = provider.discover(session.queries, limit=10)
-        except Exception:
+        except (OSError, RuntimeError, TypeError, ValueError):
             return self._record_discovery_failure(session_id, expected_revision)
         if not _valid_discovery_result(result):
             return self._record_discovery_failure(session_id, expected_revision)
@@ -245,6 +259,234 @@ class ResearchWorkflow:
             session,
             self._store.get_latest_assessment(session_id),
             self._store.list_candidates(session_id) or None,
+        )
+
+    def acquire(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+        language: str,
+        cookies_from_browser: str | None = None,
+    ) -> ResearchResponse:
+        """Acquire only the current approved snapshot, then refresh and reassess."""
+        if not isinstance(idempotency_key, str) or not idempotency_key:
+            raise ValueError("idempotency key is required")
+        if not isinstance(language, str) or not language.strip():
+            raise ValueError("language is required")
+        if self._acquisition_service is None or self._data_paths is None:
+            raise RuntimeError("research acquisition is not configured")
+
+        session = self._store.get_session(session_id)
+        history = self._store.get_session_history(session_id)
+        prior_attempt = next(
+            (
+                attempt
+                for attempt in history.acquisition_attempts
+                if attempt.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+        if prior_attempt is not None:
+            if (
+                prior_attempt.session_id != session_id
+                or prior_attempt.revision != expected_revision
+                or prior_attempt.attempt_id
+                != _acquisition_attempt_id(
+                    session_id,
+                    expected_revision,
+                    idempotency_key,
+                    prior_attempt.video_ids,
+                    language=language,
+                    cookies_from_browser=cookies_from_browser,
+                )
+            ):
+                raise ValueError("idempotency key payload differs")
+            if prior_attempt.status == "completed":
+                return self.status(session_id)
+
+        if session.revision != expected_revision:
+            raise ValueError("session revision is stale")
+        if session.state is not ResearchState.ACQUIRING:
+            raise ValueError("session is not awaiting acquisition")
+        approved = tuple(
+            candidate
+            for candidate in self._store.list_candidates(session_id)
+            if candidate.status is CandidateStatus.APPROVED
+        )
+        if not 1 <= len(approved) <= 5:
+            raise ValueError("session has no valid approved candidate batch")
+        video_ids = tuple(candidate.video_id for candidate in approved)
+        if prior_attempt is not None and prior_attempt.video_ids != video_ids:
+            raise ValueError("idempotency key payload differs")
+        attempt_id = (
+            prior_attempt.attempt_id
+            if prior_attempt is not None
+            else _acquisition_attempt_id(
+                session_id,
+                expected_revision,
+                idempotency_key,
+                video_ids,
+                language=language,
+                cookies_from_browser=cookies_from_browser,
+            )
+        )
+        attempt = self._store.start_acquisition_attempt(
+            session_id,
+            expected_revision=expected_revision,
+            video_ids=video_ids,
+            idempotency_key=idempotency_key,
+            attempt_id=attempt_id,
+        )
+        if attempt.status == "completed":
+            return self.status(session_id)
+
+        try:
+            acquired = self._acquisition_service.acquire_approved(
+                approved,
+                data_paths=self._data_paths,
+                language=language,
+                cookies_from_browser=cookies_from_browser,
+            )
+            if tuple(outcome.video_id for outcome in acquired) != video_ids:
+                raise ValueError("acquisition outcomes do not match the approved batch")
+            outcomes = tuple(
+                ResearchAcquisitionOutcome(
+                    attempt.attempt_id,
+                    outcome.video_id,
+                    outcome.status,
+                    outcome.error_code,
+                    outcome.source_sha256,
+                )
+                for outcome in acquired
+            )
+            reindexing = self._store.record_acquisition_batch(
+                session_id,
+                expected_revision=expected_revision,
+                attempt_id=attempt.attempt_id,
+                outcomes=outcomes,
+            )
+        except (OSError, RuntimeError, TypeError, ValueError):
+            failed = self._store.record_failure(
+                session_id,
+                expected_revision=expected_revision,
+                retry_target=ResearchState.ACQUIRING,
+                error_code="acquisition_unavailable",
+            )
+            return ResearchResponse(
+                failed,
+                self._store.get_latest_assessment(session_id),
+                self._store.list_candidates(session_id) or None,
+                "acquisition_unavailable",
+            )
+
+        should_refresh = any(
+            outcome.status in {CandidateStatus.ACQUIRED, CandidateStatus.ALREADY_PRESENT}
+            for outcome in outcomes
+        )
+        return self._finish_reindexing(reindexing, refresh=should_refresh)
+
+    def retry(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+    ) -> ResearchResponse:
+        """Resume only the retry target recorded on the failed session."""
+        if not isinstance(idempotency_key, str) or not idempotency_key:
+            raise ValueError("idempotency key is required")
+        session = self._store.get_session(session_id)
+        history = self._store.get_session_history(session_id)
+        if any(
+            decision.idempotency_key == idempotency_key
+            and decision.action == "retry"
+            for decision in history.decisions
+        ):
+            return self.status(session_id)
+        if session.revision != expected_revision:
+            raise ValueError("session revision is stale")
+        if session.state is not ResearchState.FAILED_RETRYABLE:
+            raise ValueError("session is not retryable")
+        target = session.retry_target
+        resumed = self._store.retry(
+            session_id,
+            expected_revision=expected_revision,
+            idempotency_key=idempotency_key,
+        )
+        if target is ResearchState.REINDEXING:
+            return self._finish_reindexing(resumed, refresh=True)
+        if target is ResearchState.ASSESSING:
+            return self._assess_session(resumed)
+        if target is ResearchState.DISCOVERING:
+            return self.discover(session_id, expected_revision=resumed.revision)
+        return self.status(session_id)
+
+    def _finish_reindexing(
+        self,
+        session: ResearchSession,
+        *,
+        refresh: bool,
+    ) -> ResearchResponse:
+        if self._data_paths is None:
+            raise RuntimeError("research acquisition is not configured")
+        if refresh:
+            try:
+                self._index_refresher(self._data_paths)
+            except (OSError, RuntimeError, TypeError, ValueError):
+                failed = self._store.record_failure(
+                    session.session_id,
+                    expected_revision=session.revision,
+                    retry_target=ResearchState.REINDEXING,
+                    error_code="index_refresh_failed",
+                )
+                return ResearchResponse(
+                    failed,
+                    self._store.get_latest_assessment(session.session_id),
+                    self._store.list_candidates(session.session_id) or None,
+                    "index_refresh_failed",
+                )
+        assessing = self._store.complete_reindexing(
+            session.session_id,
+            expected_revision=session.revision,
+        )
+        return self._assess_session(assessing)
+
+    def _assess_session(self, session: ResearchSession) -> ResearchResponse:
+        try:
+            assessment = assess_local(
+                queries=session.queries,
+                profile=session.freshness_profile,
+                evidence_reader=self._evidence_reader,
+                last_successful_discovery_at=self._store.last_successful_discovery_at(
+                    session.discovery_fingerprint
+                ),
+                now=_utc_now(self._now),
+                languages=session.languages,
+            )
+        except AssessmentRetryableError:
+            failed = self._store.record_failure(
+                session.session_id,
+                expected_revision=session.revision,
+                retry_target=ResearchState.ASSESSING,
+                error_code="local_index_unavailable",
+            )
+            return ResearchResponse(
+                failed,
+                self._store.get_latest_assessment(session.session_id),
+                self._store.list_candidates(session.session_id) or None,
+                "local_index_unavailable",
+            )
+        stored = self._store.record_assessment(
+            session.session_id,
+            expected_revision=session.revision,
+            assessment=assessment,
+        )
+        return ResearchResponse(
+            stored,
+            assessment,
+            self._store.list_candidates(session.session_id) or None,
         )
 
     def _record_discovery_failure(
@@ -316,6 +558,31 @@ def _valid_discovery_result(value: object) -> bool:
         and all(isinstance(error, str) for error in value.errors)
         and isinstance(value.completed, bool)
     )
+
+
+def _acquisition_attempt_id(
+    session_id: str,
+    expected_revision: int,
+    idempotency_key: str,
+    video_ids: tuple[str, ...],
+    *,
+    language: str,
+    cookies_from_browser: str | None,
+) -> str:
+    payload = json.dumps(
+        {
+            "idempotency_key": idempotency_key,
+            "language": language,
+            "cookies_from_browser": cookies_from_browser,
+            "revision": expected_revision,
+            "session_id": session_id,
+            "video_ids": list(video_ids),
+        },
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    return "acq-" + hashlib.sha256(payload.encode("utf-8")).hexdigest()[:28]
 
 
 def _session_payload(session: ResearchSession) -> dict[str, object]:

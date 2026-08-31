@@ -6,6 +6,8 @@ from datetime import UTC, date, datetime
 
 import pytest
 
+from yt_insights.paths import DataPaths
+from yt_insights.research.acquisition import CandidateAcquisitionOutcome
 from yt_insights.research.assessment import AssessmentRetryableError
 from yt_insights.research.discovery import DiscoveryResult
 from yt_insights.research.models import (
@@ -14,12 +16,11 @@ from yt_insights.research.models import (
     FreshnessProfile,
     PassageEvidence,
     QuerySpec,
-    VideoEvidence,
     ResearchCandidate,
+    VideoEvidence,
 )
 from yt_insights.research.store import ResearchStore
 from yt_insights.research.workflow import ResearchWorkflow
-
 
 NOW = datetime(2026, 8, 31, 12, tzinfo=UTC)
 SESSION_ID = "01K4RESEARCH0000000000000000"
@@ -110,13 +111,75 @@ def _workflow(
     tmp_path,
     reader: FakeEvidenceReader,
     provider: FakeDiscoveryProvider | None = None,
+    *,
+    acquisition_service: object | None = None,
+    index_refresher: object | None = None,
 ) -> ResearchWorkflow:
+    kwargs: dict[str, object] = {}
+    if acquisition_service is not None:
+        kwargs["acquisition_service"] = acquisition_service
+    if index_refresher is not None:
+        kwargs["index_refresher"] = index_refresher
     return ResearchWorkflow(
         store=ResearchStore(tmp_path / "research.sqlite3", now=lambda: NOW),
         evidence_reader=reader,
         discovery_provider=provider,
+        data_paths=DataPaths.from_root(tmp_path / "data"),
         now=lambda: NOW,
         session_id_factory=lambda: SESSION_ID,
+        **kwargs,
+    )
+
+
+class FakeAcquisitionService:
+    def __init__(
+        self,
+        outcomes: tuple[CandidateAcquisitionOutcome, ...],
+        *,
+        before_network: object | None = None,
+    ) -> None:
+        self.outcomes = outcomes
+        self.before_network = before_network
+        self.calls: list[tuple[tuple[ResearchCandidate, ...], str, str | None]] = []
+
+    def acquire_approved(
+        self,
+        candidates: tuple[ResearchCandidate, ...],
+        *,
+        data_paths: DataPaths,
+        language: str,
+        cookies_from_browser: str | None = None,
+    ) -> tuple[CandidateAcquisitionOutcome, ...]:
+        if callable(self.before_network):
+            self.before_network()
+        self.calls.append((candidates, language, cookies_from_browser))
+        return self.outcomes
+
+
+def _prepare_approved_session(
+    workflow: ResearchWorkflow,
+    provider: FakeDiscoveryProvider,
+    *,
+    approved_ids: tuple[str, ...],
+) -> None:
+    workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=("fr",),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+    workflow.decide(
+        SESSION_ID,
+        expected_revision=1,
+        decision="refresh",
+        idempotency_key="refresh-key",
+    )
+    workflow.discover(SESSION_ID, expected_revision=2)
+    workflow.approve(
+        SESSION_ID,
+        expected_revision=3,
+        video_ids=approved_ids,
+        idempotency_key="approve-key",
     )
 
 
@@ -212,7 +275,7 @@ def test_discover_persists_exact_snapshot_only_after_explicit_refresh(tmp_path) 
         path: hashlib.sha256(path.read_bytes()).hexdigest()
         for path in (corpus_path, catalog_path, index_path)
     }
-    started = workflow.start(
+    workflow.start(
         topic="Local evidence",
         queries=("Local query",),
         languages=(),
@@ -393,3 +456,262 @@ def test_candidates_approve_and_cancel_use_current_snapshot_and_revision(tmp_pat
             expected_revision=4,
             idempotency_key="cancel-active",
         )
+
+
+def test_acquire_reserves_before_network_and_reassesses_only_the_approved_ids(
+    tmp_path,
+) -> None:
+    first = _candidate(video_id="zyx987WVUT0")
+    second = _candidate(video_id="zyx987WVUT1")
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (first, second), (), True)
+    )
+    refresh_calls: list[DataPaths] = []
+    workflow: ResearchWorkflow
+
+    def assert_attempt_is_durable() -> None:
+        history = workflow._store.get_session_history(SESSION_ID)  # type: ignore[attr-defined]
+        assert len(history.acquisition_attempts) == 1
+        assert history.acquisition_attempts[0].status == "running"
+        assert history.acquisition_outcomes == ()
+
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                first.video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        ),
+        before_network=assert_attempt_is_durable,
+    )
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: refresh_calls.append(paths),
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(first.video_id,),
+    )
+
+    response = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="acquire-key",
+        language="fr",
+        cookies_from_browser="firefox",
+    )
+
+    assert [candidate.video_id for candidate in acquisition.calls[0][0]] == [first.video_id]
+    assert acquisition.calls[0][1:] == ("fr", "firefox")
+    assert len(refresh_calls) == 1
+    assert response.session.state.value == "awaiting_sufficiency_confirmation"
+    assert response.session.revision == 7
+    assert response.required_user_action == "confirm_sufficiency_or_refresh"
+    history = workflow._store.get_session_history(SESSION_ID)  # type: ignore[attr-defined]
+    assert history.acquisition_attempts[0].status == "completed"
+    assert history.acquisition_outcomes[0].video_id == first.video_id
+
+
+def test_acquire_rejects_stale_revision_before_attempt_or_network(tmp_path) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                candidate.video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: None,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+
+    with pytest.raises(ValueError, match="revision is stale"):
+        workflow.acquire(
+            SESSION_ID,
+            expected_revision=3,
+            idempotency_key="stale-acquire-key",
+            language="fr",
+        )
+
+    assert acquisition.calls == []
+    assert workflow._store.get_session_history(SESSION_ID).acquisition_attempts == ()  # type: ignore[attr-defined]
+
+
+def test_acquire_replay_returns_committed_result_without_redownload(tmp_path) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                candidate.video_id,
+                CandidateStatus.ALREADY_PRESENT,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+    refresh_calls: list[DataPaths] = []
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: refresh_calls.append(paths),
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+    completed = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="acquire-key",
+        language="fr",
+    )
+
+    replayed = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="acquire-key",
+        language="fr",
+    )
+
+    assert replayed.to_dict() == completed.to_dict()
+    assert len(acquisition.calls) == 1
+    assert len(refresh_calls) == 1
+    with pytest.raises(ValueError, match="payload differs"):
+        workflow.acquire(
+            SESSION_ID,
+            expected_revision=4,
+            idempotency_key="acquire-key",
+            language="en",
+        )
+    assert len(acquisition.calls) == 1
+
+
+def test_acquire_key_conflict_is_rejected_before_network(tmp_path) -> None:
+    candidate = _candidate()
+    other = _candidate(video_id="zyx987WVUT1")
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate, other), (), True)
+    )
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                candidate.video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=lambda paths: None,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+    workflow._store.start_acquisition_attempt(  # type: ignore[attr-defined]
+        SESSION_ID,
+        expected_revision=4,
+        video_ids=(other.video_id,),
+        idempotency_key="conflicting-key",
+        attempt_id="preexisting-attempt",
+    )
+
+    with pytest.raises(ValueError, match="payload differs"):
+        workflow.acquire(
+            SESSION_ID,
+            expected_revision=4,
+            idempotency_key="conflicting-key",
+            language="fr",
+        )
+
+    assert acquisition.calls == []
+
+
+def test_reindex_failure_is_retryable_without_redownloading(tmp_path) -> None:
+    candidate = _candidate()
+    provider = FakeDiscoveryProvider(
+        DiscoveryResult("yt-dlp", 1, (candidate,), (), True)
+    )
+    acquisition = FakeAcquisitionService(
+        (
+            CandidateAcquisitionOutcome(
+                candidate.video_id,
+                CandidateStatus.ACQUIRED,
+                None,
+                "b" * 64,
+            ),
+        )
+    )
+    refresh_attempts = 0
+
+    def flaky_refresh(paths: DataPaths) -> None:
+        nonlocal refresh_attempts
+        refresh_attempts += 1
+        if refresh_attempts == 1:
+            raise RuntimeError("private index failure")
+
+    workflow = _workflow(
+        tmp_path,
+        FakeEvidenceReader(),
+        provider,
+        acquisition_service=acquisition,
+        index_refresher=flaky_refresh,
+    )
+    _prepare_approved_session(
+        workflow,
+        provider,
+        approved_ids=(candidate.video_id,),
+    )
+
+    failed = workflow.acquire(
+        SESSION_ID,
+        expected_revision=4,
+        idempotency_key="acquire-key",
+        language="fr",
+    )
+    resumed = workflow.retry(
+        SESSION_ID,
+        expected_revision=6,
+        idempotency_key="retry-key",
+    )
+
+    assert failed.session.state.value == "failed_retryable"
+    assert failed.session.retry_target.value == "reindexing"
+    assert failed.error_code == "index_refresh_failed"
+    assert resumed.session.state.value == "awaiting_sufficiency_confirmation"
+    assert resumed.required_user_action == "confirm_sufficiency_or_refresh"
+    assert len(acquisition.calls) == 1
+    assert refresh_attempts == 2
