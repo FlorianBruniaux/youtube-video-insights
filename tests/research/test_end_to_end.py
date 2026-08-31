@@ -789,8 +789,13 @@ def test_real_indexes_reject_stale_reads_roll_back_refresh_and_exclude_dossier(
         search_database=data_paths.search_database,
         catalog_database=data_paths.catalog_database,
     )
+    dossier_only_marker = b"stored contradictions"
+    source_vtts = tuple(data_paths.root.rglob("*.vtt"))
+    assert dossier_only_marker in dossier_bytes
+    assert source_vtts
+    assert all(dossier_only_marker not in source.read_bytes() for source in source_vtts)
     assert post_export_reader.search_passages(
-        QuerySpec("stored contradictions"),
+        QuerySpec(dossier_only_marker.decode("ascii")),
         languages=("en",),
         limit=20,
     ) == ()
