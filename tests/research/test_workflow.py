@@ -292,6 +292,23 @@ def test_discover_keeps_partial_candidates_reviewable(tmp_path) -> None:
     }
 
 
+def test_cancel_rejects_the_sufficiency_confirmation_state(tmp_path) -> None:
+    workflow = _workflow(tmp_path, FakeEvidenceReader())
+    workflow.start(
+        topic="Local evidence",
+        queries=("Local query",),
+        languages=(),
+        freshness_profile=FreshnessProfile.FAST,
+    )
+
+    with pytest.raises(ValueError, match="awaiting candidate approval"):
+        workflow.cancel(
+            SESSION_ID,
+            expected_revision=1,
+            idempotency_key="cancel-sufficiency",
+        )
+
+
 def test_candidates_approve_and_cancel_use_current_snapshot_and_revision(tmp_path) -> None:
     candidate = _candidate()
     provider = FakeDiscoveryProvider(
@@ -322,7 +339,7 @@ def test_candidates_approve_and_cancel_use_current_snapshot_and_revision(tmp_pat
 
     assert listed.candidates == (candidate,)
     assert approved.to_dict()["session"]["state"] == "acquiring"
-    with pytest.raises(ValueError, match="transition"):
+    with pytest.raises(ValueError, match="awaiting candidate approval"):
         workflow.cancel(
             SESSION_ID,
             expected_revision=4,

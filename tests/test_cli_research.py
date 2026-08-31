@@ -361,6 +361,36 @@ def test_research_cancel_accepts_only_the_waiting_candidate_state(
     assert json.loads(cancelled.output)["session"]["state"] == "cancelled"
 
 
+def test_research_cancel_rejects_sufficiency_confirmation_state(
+    tmp_path, monkeypatch
+) -> None:
+    _configure_discovery_workflow(tmp_path, monkeypatch, (_candidate("zyx987WVUT0"),))
+    runner = CliRunner()
+    started = runner.invoke(cli, ["research", "start", "Local evidence", "--json"])
+    assert started.exit_code == 0, started.output
+    session_id = json.loads(started.output)["session"]["session_id"]
+
+    cancelled = runner.invoke(
+        cli,
+        [
+            "research",
+            "cancel",
+            session_id,
+            "--revision",
+            "1",
+            "--idempotency-key",
+            "cancel-sufficiency",
+            "--json",
+        ],
+    )
+
+    assert cancelled.exit_code == 1
+    assert json.loads(cancelled.output) == {
+        "error": {"code": "research_candidate_decision_unavailable"},
+        "schema_version": 1,
+    }
+
+
 def test_research_sufficient_stale_decision_and_unknown_status_are_bounded(
     tmp_path, monkeypatch
 ) -> None:

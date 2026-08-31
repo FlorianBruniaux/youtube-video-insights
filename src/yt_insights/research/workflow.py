@@ -229,7 +229,10 @@ class ResearchWorkflow:
         expected_revision: int,
         idempotency_key: str,
     ) -> ResearchResponse:
-        """Cancel a session only while it waits for a human choice."""
+        """Cancel a session only while it awaits candidate approval."""
+        session = self._store.get_session(session_id)
+        if session.state is not ResearchState.AWAITING_CANDIDATES:
+            raise ValueError("session is not awaiting candidate approval")
         session = self._store.cancel(
             session_id,
             expected_revision=expected_revision,
