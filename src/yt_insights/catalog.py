@@ -19,7 +19,7 @@ from contextlib import AbstractContextManager, contextmanager, suppress
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, cast
+from typing import Any
 from urllib.parse import urlparse
 
 from .cleaner import clean_vtt
@@ -692,7 +692,10 @@ class Catalog:
 
     @property
     def _connection(self) -> sqlite3.Connection:
-        return cast(sqlite3.Connection, self._connection_or_none)
+        connection = self._connection_or_none
+        if connection is None:
+            raise CatalogError("catalog database is closed")
+        return connection
 
     @_connection.setter
     def _connection(self, connection: sqlite3.Connection | None) -> None:

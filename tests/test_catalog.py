@@ -117,6 +117,16 @@ def test_read_only_catalog_rejects_duplicate_heavy_generators_after_1000_items(
     assert items_yielded == 1_001
 
 
+def test_closed_catalog_fails_closed_and_close_remains_idempotent(tmp_path: Path) -> None:
+    catalog = Catalog(tmp_path / "catalog.sqlite3")
+    catalog.close()
+
+    with pytest.raises(CatalogError, match="closed"):
+        catalog.stats()
+
+    catalog.close()
+
+
 class CatalogImportTests(unittest.TestCase):
     def test_import_never_follows_symlinked_layout_or_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
