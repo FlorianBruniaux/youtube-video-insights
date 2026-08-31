@@ -18,6 +18,7 @@ class DataPaths:
     exports: Path
     catalog_database: Path
     search_database: Path
+    research_database: Path
 
     @classmethod
     def from_root(cls, root: Path) -> "DataPaths":
@@ -32,4 +33,5 @@ class DataPaths:
             exports=resolved / "exports",
             catalog_database=resolved / "catalog.sqlite3",
             search_database=resolved / ".search" / "search-v1.sqlite3",
+            research_database=resolved / ".research" / "research-v1.sqlite3",
         )

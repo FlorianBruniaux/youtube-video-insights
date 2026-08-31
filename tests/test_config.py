@@ -37,6 +37,39 @@ def test_direct_config_derives_data_paths_from_a_custom_data_root(tmp_path: Path
     assert paths.clips == custom_root / "clips"
 
 
+def test_research_output_root_is_optional_and_is_never_derived_from_cwd(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", tmp_path / "missing.toml")
+    unrelated_directory = tmp_path / "unrelated"
+    unrelated_directory.mkdir()
+    monkeypatch.chdir(unrelated_directory)
+
+    assert load_config({"data_root": tmp_path / "corpus"}).research_output_root is None
+
+
+def test_research_output_root_accepts_cli_and_environment_values(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setattr(config_module, "_CONFIG_PATH", tmp_path / "missing.toml")
+    configured_root = tmp_path / "tracked"
+
+    config = load_config(
+        {"data_root": tmp_path / "corpus", "research_output_root": configured_root}
+    )
+
+    assert config.research_output_root == configured_root
+
+    environment_root = tmp_path / "from-environment"
+    monkeypatch.setenv("YT_INSIGHTS_RESEARCH_OUTPUT_ROOT", str(environment_root))
+    assert load_config({}).research_output_root == environment_root
+
+
+def test_config_template_documents_research_output_root_without_secrets() -> None:
+    assert "research_output_root" in config_module.CONFIG_TOML_TEMPLATE
+    assert str(Path.home()) not in config_module.CONFIG_TOML_TEMPLATE
+
+
 def test_direct_config_honors_an_explicit_legacy_directory_override(tmp_path: Path) -> None:
     custom_root = tmp_path / "custom-corpus"
     transcript_override = Path("output/transcripts")

@@ -16,6 +16,9 @@ def test_data_paths_derive_every_database_and_artifact_directory(tmp_path: Path)
     assert paths.exports == tmp_path / "corpus" / "exports"
     assert paths.catalog_database == tmp_path / "corpus" / "catalog.sqlite3"
     assert paths.search_database == tmp_path / "corpus" / ".search" / "search-v1.sqlite3"
+    assert paths.research_database == (
+        tmp_path / "corpus" / ".research" / "research-v1.sqlite3"
+    ).resolve()
 
 
 def test_data_paths_resolve_roots_without_using_the_current_directory(tmp_path: Path, monkeypatch) -> None:

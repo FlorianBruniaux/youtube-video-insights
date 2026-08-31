@@ -76,6 +76,7 @@ class Config:
     timeout: int = 120
     concurrency: int = 0
     data_root: Path = field(default_factory=lambda: Path("output"))
+    research_output_root: Path | None = None
     transcripts_dir: Path | None = field(
         default_factory=lambda: _omitted_legacy_path("transcripts_dir")
     )
@@ -174,6 +175,7 @@ def load_config(overrides: dict) -> Config:
         "YT_INSIGHTS_TIMEOUT": "timeout",
         "YT_INSIGHTS_CONCURRENCY": "concurrency",
         "YT_INSIGHTS_DATA_ROOT": "data_root",
+        "YT_INSIGHTS_RESEARCH_OUTPUT_ROOT": "research_output_root",
         "YT_INSIGHTS_TRANSCRIPTS_DIR": "transcripts_dir",
         "YT_INSIGHTS_INSIGHTS_DIR": "insights_dir",
         "YT_INSIGHTS_SHORTS_DIR": "shorts_dir",
@@ -208,6 +210,7 @@ def _apply_dict(cfg: Config, data: dict, source: str) -> Config:
     int_fields = {"max_transcript_chars", "max_tokens", "timeout", "concurrency"}
     path_fields = {
         "data_root",
+        "research_output_root",
         "transcripts_dir",
         "insights_dir",
         "shorts_dir",
@@ -259,6 +262,7 @@ CONFIG_TOML_TEMPLATE = """\
 # timeout = 120
 # concurrency = 0       # 0 = auto; Ollama/MLX are always serialized
 # data_root = "output"
+# research_output_root = "/absolute/path/to/tracked/research"  # Optional dossier root
 # transcripts_dir = "output/transcripts"  # Legacy named override
 # insights_dir = "output/insights"        # Legacy named override
 # shorts_dir = "output/shorts"            # Legacy named override
