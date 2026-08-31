@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 import sqlite3
 
 import pytest
@@ -32,9 +32,9 @@ def _store(tmp_path: object) -> ResearchStore:
     return ResearchStore(tmp_path / "research.sqlite3", now=lambda: NOW)  # type: ignore[operator]
 
 
-def _create(store: ResearchStore) -> object:
+def _create(store: ResearchStore, *, session_id: str = SESSION_ID) -> object:
     return store.create_session(
-        session_id=SESSION_ID,
+        session_id=session_id,
         topic="Local AI inference",
         queries=(QuerySpec("local LLM inference"),),
         languages=("en",),
@@ -134,6 +134,21 @@ def test_assessment_sufficiency_and_refresh_transitions_are_revision_checked(tmp
         store.decide_sufficiency(SESSION_ID, expected_revision=1, sufficient=True, idempotency_key="refresh")
 
 
+def test_idempotent_decision_replay_returns_its_committed_result_after_progress(tmp_path: object) -> None:
+    """A replay must return the decision result, not the session's later state."""
+    store = _store(tmp_path)
+    _create(store)
+    store.record_assessment(SESSION_ID, expected_revision=0, assessment=_assessment())
+    decided = store.decide_sufficiency(SESSION_ID, expected_revision=1, sufficient=False, idempotency_key="refresh")
+    store.record_candidates(SESSION_ID, expected_revision=2, candidates=(_candidate(),), provider_name="p", provider_version=1, errors=())
+
+    replayed = store.decide_sufficiency(SESSION_ID, expected_revision=1, sufficient=False, idempotency_key="refresh")
+
+    assert decided.state is ResearchState.DISCOVERING
+    assert replayed == decided
+    assert store.get_session(SESSION_ID).state is ResearchState.AWAITING_CANDIDATES
+
+
 def test_sufficient_assessment_completes_without_discovery(tmp_path: object) -> None:
     """Changing the sufficient branch must not enter discovery."""
     store = _store(tmp_path)
@@ -167,6 +182,8 @@ def test_candidate_acquisition_and_reindexing_lifecycle_is_durable(tmp_path: obj
     assert acquiring.state is ResearchState.ACQUIRING
     attempt = store.start_acquisition_attempt(SESSION_ID, expected_revision=4, video_ids=(VIDEO_ID,), idempotency_key="attempt-key", attempt_id="attempt-1")
     assert store.start_acquisition_attempt(SESSION_ID, expected_revision=4, video_ids=(VIDEO_ID,), idempotency_key="attempt-key", attempt_id="attempt-1") == attempt
+    with pytest.raises(ValueError, match="idempotency"):
+        store.start_acquisition_attempt(SESSION_ID, expected_revision=4, video_ids=(VIDEO_ID,), idempotency_key="attempt-key", attempt_id="attempt-other")
     reindexing = store.record_acquisition_batch(
         SESSION_ID,
         expected_revision=4,
@@ -212,19 +229,105 @@ def test_failure_retry_and_waiting_cancellation_use_only_allowed_targets(tmp_pat
     """Wrong retry target or cancellation from active work must not become a state change."""
     store = _store(tmp_path)
     _create(store)
-    failed = store.record_failure(SESSION_ID, expected_revision=0, retry_target=ResearchState.DISCOVERING, error_code="provider_timeout")
+    failed = store.record_failure(SESSION_ID, expected_revision=0, retry_target=ResearchState.ASSESSING, error_code="provider_timeout")
     assert failed.state is ResearchState.FAILED_RETRYABLE
-    assert failed.retry_target is ResearchState.DISCOVERING
+    assert failed.retry_target is ResearchState.ASSESSING
     with pytest.raises(ValueError, match="error code"):
-        store.record_failure(SESSION_ID, expected_revision=1, retry_target=ResearchState.DISCOVERING, error_code="é")
-    discovering = store.retry(SESSION_ID, expected_revision=1, idempotency_key="retry")
-    assert discovering.state is ResearchState.DISCOVERING
+        store.record_failure(SESSION_ID, expected_revision=1, retry_target=ResearchState.ASSESSING, error_code="é")
+    assessing = store.retry(SESSION_ID, expected_revision=1, idempotency_key="retry")
+    assert assessing.state is ResearchState.ASSESSING
     with pytest.raises(ValueError, match="transition"):
-        store.cancel(SESSION_ID, expected_revision=2, idempotency_key="cancel")
-    waiting = store.record_candidates(SESSION_ID, expected_revision=2, candidates=(_candidate(),), provider_name="p", provider_version=1, errors=())
-    cancelled = store.cancel(SESSION_ID, expected_revision=3, idempotency_key="cancel")
+        store.cancel(SESSION_ID, expected_revision=2, idempotency_key="cancel-active")
+    store.record_assessment(SESSION_ID, expected_revision=2, assessment=_assessment())
+    with pytest.raises(ValueError, match="transition"):
+        store.record_failure(SESSION_ID, expected_revision=3, retry_target=ResearchState.DISCOVERING, error_code="must_not_bypass_confirmation")
+    awaiting = store.get_session(SESSION_ID)
+    assert awaiting.state is ResearchState.AWAITING_SUFFICIENCY
+    refreshing = store.decide_sufficiency(SESSION_ID, expected_revision=3, sufficient=False, idempotency_key="refresh")
+    waiting = store.record_candidates(SESSION_ID, expected_revision=4, candidates=(_candidate(),), provider_name="p", provider_version=1, errors=())
+    cancelled = store.cancel(SESSION_ID, expected_revision=5, idempotency_key="cancel")
+    assert refreshing.state is ResearchState.DISCOVERING
     assert waiting.state is ResearchState.AWAITING_CANDIDATES
     assert cancelled.state is ResearchState.CANCELLED
+
+
+def test_existing_v1_metadata_with_wrong_columns_is_rejected(tmp_path: object) -> None:
+    """A schema version row alone cannot authorize reads from a different layout."""
+    database = tmp_path / "research.sqlite3"
+    table_names = (
+        "research_sessions", "research_queries", "research_languages", "research_assessments",
+        "research_candidates", "research_decisions", "research_acquisition_attempts",
+        "research_acquisition_outcomes", "research_events",
+    )
+    with sqlite3.connect(database) as connection:  # type: ignore[arg-type]
+        connection.execute("CREATE TABLE schema_meta(version INTEGER NOT NULL)")
+        connection.execute("INSERT INTO schema_meta VALUES (1)")
+        for table_name in table_names:
+            connection.execute(f"CREATE TABLE {table_name}(wrong_column TEXT)")
+
+    with pytest.raises(ValueError, match="schema"):
+        ResearchStore(database)  # type: ignore[arg-type]
+
+
+def test_existing_v1_schema_with_missing_unique_and_foreign_key_is_rejected(tmp_path: object) -> None:
+    """Matching columns do not compensate for removed identity and cascade constraints."""
+    store = _store(tmp_path)
+    database = tmp_path / "research.sqlite3"
+    del store
+    with sqlite3.connect(database) as connection:  # type: ignore[arg-type]
+        connection.execute("DROP TABLE research_queries")
+        connection.execute(
+            """CREATE TABLE research_queries(
+                session_id TEXT NOT NULL, ordinal INTEGER NOT NULL,
+                query_text TEXT NOT NULL, normalized_query TEXT NOT NULL
+            )"""
+        )
+
+    with pytest.raises(ValueError, match="schema"):
+        ResearchStore(database)  # type: ignore[arg-type]
+
+
+def test_failure_only_retries_the_same_active_workflow_stage(tmp_path: object) -> None:
+    """Each retryable stage can resume itself, but cannot jump ahead in the workflow."""
+    store = _store(tmp_path)
+    _create(store)
+    store.record_assessment(SESSION_ID, expected_revision=0, assessment=_assessment())
+    store.decide_sufficiency(SESSION_ID, expected_revision=1, sufficient=False, idempotency_key="refresh")
+    with pytest.raises(ValueError, match="retry target"):
+        store.record_failure(SESSION_ID, expected_revision=2, retry_target=ResearchState.ACQUIRING, error_code="bad_jump")
+    failed = store.record_failure(SESSION_ID, expected_revision=2, retry_target=ResearchState.DISCOVERING, error_code="discover_error")
+    assert store.retry(SESSION_ID, expected_revision=3, idempotency_key="retry-discovery").state is ResearchState.DISCOVERING
+    store.record_candidates(SESSION_ID, expected_revision=4, candidates=(_candidate(),), provider_name="p", provider_version=1, errors=())
+    store.approve_candidates(SESSION_ID, expected_revision=5, video_ids=(VIDEO_ID,), idempotency_key="approve")
+    failed = store.record_failure(SESSION_ID, expected_revision=6, retry_target=ResearchState.ACQUIRING, error_code="acquire_error")
+    assert failed.retry_target is ResearchState.ACQUIRING
+    assert store.retry(SESSION_ID, expected_revision=7, idempotency_key="retry-acquiring").state is ResearchState.ACQUIRING
+    store.start_acquisition_attempt(SESSION_ID, expected_revision=8, video_ids=(VIDEO_ID,), idempotency_key="attempt", attempt_id="attempt-1")
+    store.record_acquisition_batch(SESSION_ID, expected_revision=8, attempt_id="attempt-1", outcomes=(ResearchAcquisitionOutcome("attempt-1", VIDEO_ID, CandidateStatus.ACQUIRED, None, "c" * 64),))
+    failed = store.record_failure(SESSION_ID, expected_revision=9, retry_target=ResearchState.REINDEXING, error_code="index_error")
+    assert failed.retry_target is ResearchState.REINDEXING
+    assert store.retry(SESSION_ID, expected_revision=10, idempotency_key="retry-reindex").state is ResearchState.REINDEXING
+
+
+def test_discovery_order_uses_utc_not_offset_text_order(tmp_path: object) -> None:
+    """A later UTC discovery with a lexically smaller local offset timestamp must win."""
+    early_local = datetime(2026, 8, 31, 10, 30, tzinfo=timezone(timedelta(hours=2)))
+    later_utc = datetime(2026, 8, 31, 9, 0, tzinfo=UTC)
+    clock_values = [datetime(2026, 8, 31, 8, 0, tzinfo=UTC)] * 9 + [early_local]
+    clock_values += [datetime(2026, 8, 31, 8, 0, tzinfo=UTC)] * 9 + [later_utc]
+    values = iter(clock_values)
+    store = ResearchStore(tmp_path / "research.sqlite3", now=lambda: next(values))  # type: ignore[operator]
+
+    _create(store, session_id="01K4RESEARCH0000000000001")
+    store.record_assessment("01K4RESEARCH0000000000001", expected_revision=0, assessment=_assessment())
+    store.decide_sufficiency("01K4RESEARCH0000000000001", expected_revision=1, sufficient=False, idempotency_key="one")
+    store.record_candidates("01K4RESEARCH0000000000001", expected_revision=2, candidates=(_candidate(),), provider_name="p", provider_version=1, errors=())
+    _create(store, session_id="01K4RESEARCH0000000000002")
+    store.record_assessment("01K4RESEARCH0000000000002", expected_revision=0, assessment=_assessment())
+    store.decide_sufficiency("01K4RESEARCH0000000000002", expected_revision=1, sufficient=False, idempotency_key="two")
+    store.record_candidates("01K4RESEARCH0000000000002", expected_revision=2, candidates=(_candidate(),), provider_name="p", provider_version=1, errors=())
+
+    assert store.last_successful_discovery_at("a" * 64) == later_utc
 
 
 def test_acquisition_outcome_rejects_unbounded_error_text_without_mutating(tmp_path: object) -> None:
