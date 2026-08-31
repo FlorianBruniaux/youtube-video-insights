@@ -1,0 +1,29 @@
+docs/superpowers/plans/2026-08-31-local-web-api.md
+  s_0a442347250965::t_d5af8f4f680bd4 1-126,128-195,203-239,241-246,248,250,252-269,271,273-417
+  s_0a442347250965::t_a44c503c4d89f6 127,196-198,240,247,249,251,270,272
+  s_0a442347250965::t_e152744e7e6d2e 199-202
+docs/superpowers/plans/2026-08-31-local-astro-frontend.md
+  s_0a442347250965::t_a44c503c4d89f6 47
+  s_0a442347250965::t_d5af8f4f680bd4 1-8,10-46,48-72,74,80-83,87-202,204-211,213-237,239,248-257,259-435
+  s_0a442347250965::t_0db7bd8da0a7e0 9,73,75-79,84-86
+  s_0a442347250965::t_e152744e7e6d2e 203,212,238,240-247,258
+docs/superpowers/specs/2026-08-31-local-astro-web-ui-design.md
+  s_0a442347250965::t_a44c503c4d89f6 206-208
+  s_0a442347250965::t_0db7bd8da0a7e0 311
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "0949e57cc16cab5a763e9186dc7f7ea474f51b44",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
