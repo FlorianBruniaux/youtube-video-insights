@@ -3,11 +3,12 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 from yt_insights.acquisition import (
     AcquisitionItemReport,
     AcquisitionItemStatus,
     AcquisitionReport,
-    IndexRefreshReport,
     build_acquisition_plan,
 )
 from yt_insights.paths import DataPaths
@@ -32,7 +33,7 @@ def _candidate(video_id: str, title: str) -> ResearchCandidate:
     )
 
 
-def test_acquire_approved_maps_structured_items_and_refreshes_once(tmp_path: Path) -> None:
+def test_acquire_approved_maps_structured_items_without_refreshing(tmp_path: Path) -> None:
     paths = DataPaths.from_root(tmp_path / "corpus")
     candidates = (
         _candidate("aaa123DEF45", "Acquired"),
@@ -41,7 +42,6 @@ def test_acquire_approved_maps_structured_items_and_refreshes_once(tmp_path: Pat
     )
     planned_urls: list[str] = []
     executed: list[tuple[str, bool, str | None]] = []
-    refreshed: list[DataPaths] = []
 
     def plan_builder(**kwargs: object):
         planned_urls.append(str(kwargs["source"]))
@@ -77,14 +77,9 @@ def test_acquire_approved_maps_structured_items_and_refreshes_once(tmp_path: Pat
             items=(item_by_id[video_id],),
         )
 
-    def refresh(data_paths: DataPaths):
-        refreshed.append(data_paths)
-        return IndexRefreshReport(True, True)
-
     service = ResearchAcquisitionService(
         plan_builder=plan_builder,
         executor=executor,
-        index_refresher=refresh,
     )
 
     outcomes = service.acquire_approved(
@@ -111,7 +106,8 @@ def test_acquire_approved_maps_structured_items_and_refreshes_once(tmp_path: Pat
             "ccc123DEF45", CandidateStatus.FAILED_RETRYABLE, "download_failed", None
         ),
     )
-    assert refreshed == [paths]
+    assert not paths.catalog_database.exists()
+    assert not paths.search_database.exists()
 
 
 def test_acquire_approved_does_not_refresh_without_a_ready_transcript(
@@ -134,12 +130,7 @@ def test_acquire_approved_does_not_refresh_without_a_ready_transcript(
             ),
         )
 
-    service = ResearchAcquisitionService(
-        executor=executor,
-        index_refresher=lambda paths: (_ for _ in ()).throw(
-            AssertionError("refresh must not run")
-        ),
-    )
+    service = ResearchAcquisitionService(executor=executor)
 
     assert service.acquire_approved(
         (candidate,), data_paths=DataPaths.from_root(tmp_path / "corpus"), language="fr"
@@ -151,3 +142,54 @@ def test_acquire_approved_does_not_refresh_without_a_ready_transcript(
             None,
         ),
     )
+
+
+def test_outcomes_remain_available_when_later_explicit_refresh_fails(
+    tmp_path: Path, monkeypatch
+) -> None:
+    import yt_insights.acquisition as acquisition
+
+    paths = DataPaths.from_root(tmp_path / "corpus")
+    paths.transcripts.mkdir(parents=True)
+    (paths.transcripts / "20260820 - Acquired [aaa123DEF45].fr.vtt").write_text(
+        "WEBVTT\nEvidence\n", encoding="utf-8"
+    )
+    candidate = _candidate("aaa123DEF45", "Acquired")
+    expected = CandidateAcquisitionOutcome(
+        candidate.video_id,
+        CandidateStatus.ACQUIRED,
+        None,
+        "a" * 64,
+    )
+
+    def executor(plan, **kwargs):
+        return AcquisitionReport(
+            selected=1,
+            transcripts_ready=1,
+            insights_ready=0,
+            failures=(),
+            items=(
+                AcquisitionItemReport(
+                    candidate.video_id,
+                    AcquisitionItemStatus.ACQUIRED,
+                    source_sha256="a" * 64,
+                ),
+            ),
+        )
+
+    monkeypatch.setattr(
+        acquisition,
+        "_validate_published_search_pair",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            ValueError("forced later refresh failure")
+        ),
+    )
+
+    outcomes = ResearchAcquisitionService(executor=executor).acquire_approved(
+        (candidate,), data_paths=paths, language="fr"
+    )
+
+    assert outcomes == (expected,)
+    with pytest.raises(ValueError, match="search.*publication validation failed"):
+        acquisition.rebuild_and_publish_indexes(paths)
+    assert outcomes == (expected,)

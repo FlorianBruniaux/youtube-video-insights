@@ -9,10 +9,8 @@ from yt_insights.acquisition import (
     AcquisitionItemStatus,
     AcquisitionPlan,
     AcquisitionReport,
-    IndexRefreshReport,
     build_acquisition_plan,
     execute_acquisition,
-    rebuild_and_publish_indexes,
 )
 from yt_insights.downloader import VideoInfo
 from yt_insights.paths import DataPaths
@@ -37,20 +35,16 @@ _CANDIDATE_STATUS_BY_ITEM_STATUS = {
 
 
 class ResearchAcquisitionService:
-    """Run one acquisition plan per approved candidate and refresh once."""
+    """Run one acquisition plan per approved candidate without publishing indexes."""
 
     def __init__(
         self,
         *,
         plan_builder: Callable[..., AcquisitionPlan] = build_acquisition_plan,
         executor: Callable[..., AcquisitionReport] = execute_acquisition,
-        index_refresher: Callable[[DataPaths], IndexRefreshReport] = (
-            rebuild_and_publish_indexes
-        ),
     ) -> None:
         self._plan_builder = plan_builder
         self._executor = executor
-        self._index_refresher = index_refresher
 
     def acquire_approved(
         self,
@@ -92,7 +86,6 @@ class ResearchAcquisitionService:
         )
 
         outcomes: list[CandidateAcquisitionOutcome] = []
-        transcript_ready = False
         for candidate, plan in zip(candidates, plans):
             report = self._executor(
                 plan,
@@ -110,8 +103,5 @@ class ResearchAcquisitionService:
                     source_sha256=item.source_sha256,
                 )
             )
-            transcript_ready = transcript_ready or item.source_sha256 is not None
 
-        if transcript_ready:
-            self._index_refresher(data_paths)
         return tuple(outcomes)
