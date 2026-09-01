@@ -39,6 +39,7 @@ cumulative-research architecture is also available as a reproducible
 | Resume research | `uv run yt-insights research status SESSION_ID --json` | Revision, evidence, candidates, required action, and the latest 100 acquisition attempts |
 | Export an evidence dossier | `uv run yt-insights research export SESSION_ID --output /absolute/path --json` | Deterministic `dossier.md` and `manifest.json`, kept outside source indexes |
 | Query from an LLM client | `uv run --extra mcp yt-insights-mcp` | Four read-only corpus, video, and passage tools |
+| Open the local web app | `uv run yt-insights serve` | Loopback-only dashboard, search, sources, research decisions, jobs, and exports |
 
 Analysis uses a local or cloud LLM. Catalog import, transcript indexing, and
 both search commands do not. Repeated runs reuse analysis caches and avoid
@@ -217,6 +218,19 @@ uv sync --extra mcp --extra dev
 The versioned `uv.lock` fixes the complete application environment. See
 [INSTALL.md](INSTALL.md) for a standard `venv` and editable-install alternative.
 
+The wheel already contains the compiled web interface. Running it needs Python,
+not Node.js:
+
+```bash
+uv run yt-insights serve
+# Keep the browser closed when starting from an agent or terminal multiplexer.
+uv run yt-insights serve --no-open
+```
+
+The server binds only to `127.0.0.1` and does not provide remote access, user
+accounts, CORS, or a hosted sharing URL. Browser mutations require a per-process
+token fetched from the same origin. Stop the process with `Ctrl-C`.
+
 For a machine with no local LLM (no Ollama, no GPU), see [INSTALL.md](INSTALL.md): it covers every backend option step by step (Anthropic API key, Ollama, cc-bridge, any other OpenAI-compatible provider).
 
 ---
@@ -258,6 +272,23 @@ uv run yt-insights suggest-shorts --index-only
 # Download a specific clip segment (no full-video download)
 uv run yt-insights generate-short VIDEO_ID --start 00:05:10 --end 00:05:55 --title "hook-context-engineering"
 ```
+
+### Local web research flow
+
+`yt-insights serve` exposes the same durable data and workflow as the CLI:
+
+1. Search the existing transcript index.
+2. Preview a YouTube video, playlist, or channel and inspect every selected ID.
+3. Confirm acquisition explicitly and follow the accepted background job.
+4. Start a research session from local evidence.
+5. Answer `Is the current evidence sufficient?` before any discovery.
+6. If discovery is requested, approve one to five exact candidates or cancel.
+7. Open the deterministic export from the exports screen.
+
+Failed jobs are never resubmitted automatically. A stale session reloads the
+durable snapshot and asks for the decision again. If the UI reports that the
+search index is unavailable, run `uv run yt-insights catalog import-corpus
+CORPUS`, then `uv run yt-insights index --all`, and restart the server.
 
 Expected output, with paths shortened to keep the example readable:
 
@@ -970,6 +1001,12 @@ Open a PR. No CLA is required. Run `uv sync --extra mcp --extra dev`, then the
 following checks before submitting a change:
 
 ```bash
+pnpm --dir web install --frozen-lockfile
+pnpm --dir web test
+pnpm --dir web check
+pnpm --dir web build
+python scripts/verify_web_build.py
+pnpm --dir web test:e2e
 uv run --extra mcp --extra dev pytest -q
 uv run --extra dev ruff check src tests scripts
 uv run --extra dev mypy src

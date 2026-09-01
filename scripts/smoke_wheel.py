@@ -7,13 +7,18 @@ import argparse
 import json
 import os
 import shutil
+import signal
+import socket
 import subprocess
 import sys
 import tempfile
+import time
 import uuid
 from contextlib import contextmanager, suppress
 from hashlib import sha256
 from pathlib import Path
+from urllib.error import URLError
+from urllib.request import urlopen
 from zipfile import ZipFile
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -211,9 +216,11 @@ def _verify_wheel(
     }
     expected_assets = {
         source.relative_to(build_source / "src").as_posix()
-        for source in (
-            build_source / "src" / "yt_insights" / "assistant_assets"
-        ).rglob("*")
+        for asset_root in (
+            build_source / "src" / "yt_insights" / "assistant_assets",
+            build_source / "src" / "yt_insights" / "web" / "static",
+        )
+        for source in asset_root.rglob("*")
         if source.is_file()
     }
     with ZipFile(wheel) as archive:
@@ -229,6 +236,70 @@ def _verify_wheel(
     if stale_sentinel in record or any(stale_sentinel in member for member in members):
         raise SmokeFailure("Persistent checkout build cache leaked into the wheel.")
     return len(expected_modules)
+
+
+def _smoke_web_server(
+    cli: Path,
+    venv: Path,
+    *,
+    workspace: Path,
+    environment: dict[str, str],
+) -> None:
+    """Start the installed loopback UI with a PATH that contains no Node.js."""
+    restricted_path = os.pathsep.join((str(venv / "bin"), "/usr/bin", "/bin"))
+    if shutil.which("node", path=restricted_path) is not None:
+        raise SmokeFailure("The web smoke PATH unexpectedly contains Node.js.")
+    runtime_environment = environment | {"PATH": restricted_path}
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = int(probe.getsockname()[1])
+    process = subprocess.Popen(
+        [str(cli), "serve", "--no-open", "--port", str(port)],
+        cwd=workspace,
+        env=runtime_environment,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                raise SmokeFailure(
+                    "Installed web server exited before readiness.\n"
+                    f"stdout:\n{stdout}\nstderr:\n{stderr}"
+                )
+            try:
+                with urlopen(f"http://127.0.0.1:{port}/", timeout=1) as page:
+                    html = page.read().decode("utf-8")
+                with urlopen(
+                    f"http://127.0.0.1:{port}/api/v1/status",
+                    timeout=1,
+                ) as status:
+                    payload = json.loads(status.read())
+                if "<main" not in html or payload.get("status") != "ok":
+                    raise SmokeFailure(
+                        "Installed web server returned an invalid page or status."
+                    )
+                return
+            except (OSError, URLError):
+                time.sleep(0.1)
+        raise SmokeFailure("Installed web server did not become ready in 10 seconds.")
+    finally:
+        if process.poll() is None:
+            process.send_signal(signal.SIGINT)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+        if process.returncode not in (0, -signal.SIGINT):
+            stdout, stderr = process.communicate()
+            raise SmokeFailure(
+                f"Installed web server exited with {process.returncode}.\n"
+                f"stdout:\n{stdout}\nstderr:\n{stderr}"
+            )
 
 
 def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, object]:
@@ -304,6 +375,7 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
             "index",
             "research",
             "search",
+            "serve",
             "setup",
         )
         for command_name in commands:
@@ -507,6 +579,13 @@ def smoke(*, offline: bool, wheel_out_dir: Path | None = None) -> dict[str, obje
             environment=clean_environment,
         )
 
+        _smoke_web_server(
+            base_cli,
+            base_venv,
+            workspace=workspace,
+            environment=runtime_environment,
+        )
+
         missing_mcp = _run(
             [str(base_mcp)],
             cwd=workspace,
@@ -587,6 +666,7 @@ asyncio.run(check())
             "commands": list(commands),
             "research_commands": list(research_commands),
             "cumulative_research_skill": True,
+            "web_without_node": True,
             "tools": list(MCP_TOOLS),
             "verified_modules": verified_modules,
             "offline": offline,

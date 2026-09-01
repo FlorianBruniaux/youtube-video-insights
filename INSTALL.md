@@ -36,6 +36,42 @@ La seconde commande démarre un serveur stdio. Elle attend qu’un client MCP
 ouvre et pilote le flux. Sans l’extra, `yt-insights-mcp` s’arrête avec une
 instruction d’installation courte et sans traceback.
 
+## Lancer l'interface web locale
+
+L'interface Astro compilée est incluse dans le package Python. Node.js n'est
+pas requis pour l'utiliser :
+
+```bash
+uv run yt-insights serve
+uv run yt-insights serve --no-open
+```
+
+La première commande ouvre le navigateur après la prise du port. `--no-open`
+convient à un agent, un terminal distant ou un démarrage manuel. Le serveur
+écoute exclusivement sur `127.0.0.1`; ce n'est ni une version hébergée ni une
+interface partageable sur le réseau. Il n'active pas CORS. Les écritures
+utilisent un token éphémère récupéré par le navigateur sur la même origine.
+`Ctrl-C` ferme le serveur et sa file de jobs.
+
+Le parcours complet est le suivant : chercher d'abord dans le corpus, prévisualiser
+les IDs d'une source avant acquisition, lancer une session, répondre à la
+question de suffisance, puis approuver un à cinq candidats exacts ou annuler.
+Les jobs échoués ne sont jamais relancés automatiquement. Un conflit de révision
+recharge l'état durable et redemande la décision.
+
+Si l'interface signale un index manquant, alignez d'abord le catalogue et
+l'index sur le même `data_root` :
+
+```bash
+uv run yt-insights catalog import-corpus /chemin/vers/le/corpus
+uv run yt-insights index --all
+uv run yt-insights serve --no-open
+```
+
+Node.js 24.16.0 et pnpm 11.23.0 sont requis uniquement pour contribuer au
+frontend. Les versions sont fixées dans `web/package.json` et
+`web/pnpm-lock.yaml`.
+
 ## Fixer le corpus pour tous les répertoires
 
 Un agent lancé depuis un autre projet ne doit pas dépendre de son répertoire
@@ -435,6 +471,12 @@ Les commandes suivantes ne téléchargent aucune vidéo et ne contactent aucun
 LLM :
 
 ```bash
+pnpm --dir web install --frozen-lockfile
+pnpm --dir web test
+pnpm --dir web check
+pnpm --dir web build
+python scripts/verify_web_build.py
+pnpm --dir web test:e2e
 uv run --extra mcp --extra dev pytest -q
 uv lock --check
 git diff --check

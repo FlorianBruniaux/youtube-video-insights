@@ -10,6 +10,16 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Local Astro research interface served by `yt-insights serve` on
+  `127.0.0.1`. It includes dashboard health, transcript search, bounded source
+  inventory, preview-confirmed acquisition, durable research decisions and
+  jobs, exact candidate approval or cancellation, exports, light and dark
+  themes, and no automatic mutation retry. Compiled assets ship in the Python
+  wheel, so installed use does not require Node.js.
+- Deterministic browser delivery gates: strict fixture-backed Playwright flows,
+  static CSP-oriented scans, semantic HTML assertions, Python-to-TypeScript
+  fixture verification, reproducible generated-asset hashes, and wheel content
+  checks. Node.js 24.16.0 and pnpm 11.23.0 are contributor-only build tools.
 - Durable `yt-insights research` workflow with catalogue-first assessment,
   deterministic freshness profiles, mandatory sufficiency questions, revisions,
   idempotent decisions, resume, bounded retry, and a separate

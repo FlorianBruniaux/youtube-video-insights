@@ -596,8 +596,11 @@ describe("cumulative research workspace", () => {
     await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
 
     root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
-    await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
-    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      const button = root.querySelector<HTMLButtonElement>("[data-start-discovery]");
+      expect(button).not.toBeNull();
+      expect(button?.disabled).toBe(false);
+    });
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
     root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
 

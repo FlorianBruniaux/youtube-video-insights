@@ -1,6 +1,6 @@
 # État d'implémentation
 
-**Mise à jour :** 2026-08-31
+**Mise à jour :** 2026-09-01
 
 **Workflow cumulatif :** implémenté, validation locale `PASS`
 
@@ -8,12 +8,13 @@
 
 **GitHub CI hébergée :** `PASS` sur `000e9b4`
 
-Le SHA assemblé a passé localement `844` tests et `10` subtests, Ruff sur
-`src tests scripts`, Mypy sur les 44 fichiers source, et `git diff --check`.
-Le [run GitHub Actions 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
-a ensuite passé sur `000e9b4`, avec les jobs Python 3.11, Python 3.12 et
-packaging/runtime au vert. Cette preuve hébergée est liée à `000e9b4` et ne
-valide pas les commits ultérieurs. Mypy n'a pas été exécuté avec `--strict`.
+Le lot web courant a passé localement `1 073` tests Python et `10` subtests,
+`155` tests frontend, `3` parcours Playwright, Ruff sur `src tests scripts`,
+Mypy sur les 53 fichiers source, Astro Check sur 51 fichiers et
+`git diff --check`. Le [run GitHub Actions 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
+a passé sur l'ancien SHA `000e9b4`, avec les jobs Python 3.11, Python 3.12 et
+packaging/runtime au vert. Cette preuve hébergée ne valide pas le lot web
+courant. Mypy n'a pas été exécuté avec `--strict`.
 
 ## Vue d'ensemble
 
@@ -40,6 +41,10 @@ flowchart TD
     MCP --> FTS
     SKILL[4 skills portables] --> CLI[CLI commune]
     CLI --> A
+    WEB[Astro local, light + dark] --> API[API Python /api/v1]
+    API --> CAT
+    API --> FTS
+    API --> R
 ```
 
 Source reproductible :
@@ -61,12 +66,18 @@ Le JPG du README reste inchangé car sa source de génération n'est pas suivie.
 | MCP | `list_corpora`, `search_videos`, `search_passages`, `get_passage` | Lecture seule |
 | Assistants | Quatre skills projet et assets wheel Claude Code/Codex | Quatrième skill non installé globalement |
 | Setup | `--dry-run`, `--apply`, `--verify`, plus `--assets-only` | Une écriture globale demande toujours une transaction approuvée |
+| Web local | Dashboard, recherche, sources, sessions, jobs et exports en thème clair ou sombre | Boucle locale `127.0.0.1` uniquement, aucun hébergement ou compte utilisateur |
 
 Le contrat actuel expose `acquisition_history`, limité aux 100 dernières
 tentatives, et `acquisition_history_truncated`. Chaque tentative contient
 `attempt_id`, `status` et `items`; chaque item contient `video_id`, `status`,
 `error_code` et `source_sha256`. Les clés d'idempotence, sélecteurs de cookies,
 transcripts et diagnostics bruts restent absents.
+
+L'interface installée démarre avec `yt-insights serve`; la commande
+`yt-insights serve --no-open` supprime uniquement l'ouverture automatique du navigateur. Dans les
+deux cas, l'écoute reste limitée à `127.0.0.1` et les assets Astro viennent du
+package Python, sans runtime Node.js.
 
 ## Cycle utilisateur
 
@@ -116,6 +127,12 @@ explicitement approuvée.
 
 ```bash
 uv sync --extra mcp --extra dev
+pnpm --dir web install --frozen-lockfile
+pnpm --dir web test
+pnpm --dir web check
+pnpm --dir web build
+python scripts/verify_web_build.py
+pnpm --dir web test:e2e
 uv run --extra mcp --extra dev pytest -q
 uv run --extra dev ruff check src tests scripts
 uv run --extra dev mypy src
@@ -155,7 +172,7 @@ ne doivent pas être invoqués par `--assets-only`.
 
 ## Non livré
 
-Interface web, extension navigateur, API hébergée, MCP writable, recherche
+Interface web hébergée, extension navigateur, API distante, MCP writable, recherche
 vectorielle ou hybride, base graphe et acquisition automatique restent hors du
 produit actuel. Leurs déclencheurs sont définis dans la
 [roadmap](../ROADMAP.md).

@@ -19,8 +19,51 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  web:
+    name: Local web interface
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: 24.16.0
+
+      - name: Set up pinned pnpm
+        run: |
+          corepack enable
+          corepack prepare pnpm@11.23.0 --activate
+
+      - name: Install frozen frontend dependencies
+        run: pnpm --dir web install --frozen-lockfile
+
+      - name: Install Playwright Chromium
+        run: pnpm --dir web exec playwright install --with-deps chromium
+
+      - name: Test frontend units
+        run: pnpm --dir web test
+
+      - name: Check Astro and TypeScript
+        run: pnpm --dir web check
+
+      - name: Build committed frontend assets
+        run: pnpm --dir web build
+
+      - name: Verify reproducible frontend assets
+        run: python3 scripts/verify_web_build.py
+
+      - name: Test local browser flow
+        run: pnpm --dir web test:e2e
+
   quality:
     name: Quality (Python ${{ matrix.python-version }})
+    needs: web
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -52,6 +95,11 @@ jobs:
 
       - name: Install locked dependencies
         run: uv sync --locked --extra dev --extra mcp
+
+      - name: Verify Python-to-browser fixture
+        run: >-
+          uv run --no-sync python
+          web/tests/fixtures/generate_backend_source_acquisition.py --check
 
       - name: Check changed-line whitespace
         env:
@@ -111,6 +159,7 @@ jobs:
 
   verification:
     name: Packaging and runtime verification
+    needs: web
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:

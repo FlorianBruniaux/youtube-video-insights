@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import importlib.util
+import re
 import subprocess
 import sys
 import tomllib
 from pathlib import Path
+from zipfile import ZipFile
 
 from click.testing import CliRunner
 
@@ -199,6 +201,83 @@ def test_package_data_declares_recursive_generated_web_assets() -> None:
 
     patterns = project["tool"]["setuptools"]["package-data"]["yt_insights"]
     assert "web/static/**/*" in patterns
+
+
+def test_built_wheel_contains_complete_web_app_without_build_inputs(
+    tmp_path: Path,
+) -> None:
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "build",
+            "--wheel",
+            "--no-isolation",
+            "--outdir",
+            str(tmp_path),
+        ],
+        cwd=REPOSITORY_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    wheels = tuple(tmp_path.glob("yt_insights-*.whl"))
+    assert len(wheels) == 1
+    with ZipFile(wheels[0]) as archive:
+        names = set(archive.namelist())
+
+    required_pages = {
+        "yt_insights/web/static/index.html",
+        "yt_insights/web/static/search/index.html",
+        "yt_insights/web/static/sources/index.html",
+        "yt_insights/web/static/research/new/index.html",
+        "yt_insights/web/static/research/workspace/index.html",
+        "yt_insights/web/static/exports/index.html",
+    }
+    assert required_pages <= names
+    assert any(
+        name.startswith("yt_insights/web/static/_astro/") and name.endswith(".js")
+        for name in names
+    )
+    assert any(
+        name.startswith("yt_insights/web/static/_astro/") and name.endswith(".css")
+        for name in names
+    )
+    assert any(
+        re.search(r"\.[A-Za-z0-9_-]{8}\.(?:css|js)$", name)
+        for name in names
+    )
+    assert not any(name.endswith(".map") for name in names)
+    assert not any("node_modules" in name for name in names)
+    assert not any(name.startswith("web/") for name in names)
+    assert not any("/Users/" in name or "/home/" in name for name in names)
+    with ZipFile(wheels[0]) as archive:
+        for name in names:
+            if name.endswith("/"):
+                continue
+            content = archive.read(name)
+            assert b"/Users/" not in content, name
+            assert b"/home/" not in content, name
+
+
+def test_docs_present_the_local_web_interface_as_an_installed_runtime() -> None:
+    readme = (REPOSITORY_ROOT / "README.md").read_text(encoding="utf-8")
+    install = (REPOSITORY_ROOT / "INSTALL.md").read_text(encoding="utf-8")
+    roadmap = (REPOSITORY_ROOT / "ROADMAP.md").read_text(encoding="utf-8")
+    status = (REPOSITORY_ROOT / "docs" / "IMPLEMENTATION-STATUS.md").read_text(
+        encoding="utf-8"
+    )
+
+    for document in (readme, install, status):
+        assert "yt-insights serve" in document
+        assert "--no-open" in document
+        assert "127.0.0.1" in document
+    assert "Node.js" in install
+    assert "contribu" in install.lower()
+    assert "interface web local" in roadmap.lower()
+    assert "implément" in roadmap.lower()
 
 
 def test_wheel_smoke_rejects_a_working_directory_inside_the_checkout(
