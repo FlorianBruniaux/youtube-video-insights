@@ -1,4 +1,6 @@
 ---
+import { isNavigationLinkCurrent } from "../lib/navigation";
+
 interface Props {
   currentPath: string;
 }
@@ -6,20 +8,12 @@ interface Props {
 const { currentPath } = Astro.props;
 
 const links = [
-  { href: "/", label: "Overview", exact: true },
-  { href: "/research/new/", label: "Research", section: "/research/" },
-  { href: "/search/", label: "Corpus", section: "/search" },
-  { href: "/sources/", label: "Sources", section: "/sources" },
-  { href: "/exports/", label: "Exports", section: "/exports" },
+  { href: "/", label: "Overview", match: "exact" },
+  { href: "/research/new/", label: "Research", match: "exact" },
+  { href: "/search/", label: "Corpus", match: "section" },
+  { href: "/sources/", label: "Sources", match: "section" },
+  { href: "/exports/", label: "Exports", match: "section" },
 ] as const;
-
-function isActive(link: (typeof links)[number]): boolean {
-  if ("exact" in link) {
-    return currentPath === link.href;
-  }
-
-  return currentPath.startsWith(link.section);
-}
 ---
 
 <nav class="app-nav" aria-label="Primary navigation">
@@ -32,9 +26,12 @@ function isActive(link: (typeof links)[number]): boolean {
     {
       links.map((link) => (
         <a
-          class:list={["nav-link", { "nav-link-active": isActive(link) }]}
+          class:list={[
+            "nav-link",
+            { "nav-link-active": isNavigationLinkCurrent(currentPath, link) },
+          ]}
           href={link.href}
-          aria-current={isActive(link) ? "page" : undefined}
+          aria-current={isNavigationLinkCurrent(currentPath, link) ? "page" : undefined}
         >
           {link.label}
         </a>

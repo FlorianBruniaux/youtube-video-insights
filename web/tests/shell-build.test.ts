@@ -24,4 +24,14 @@ describe("the generated application shell", () => {
     expect(scripts.length).toBeGreaterThan(0);
     expect(scripts.every((tag) => /\ssrc\s*=/.test(tag))).toBe(true);
   });
+
+  it("loads the external theme bootstrap synchronously before the body", () => {
+    const bootstrapTag = html.match(
+      /<script\b[^>]*\bsrc="\/_astro\/theme-bootstrap\.js"[^>]*><\/script>/i,
+    );
+
+    expect(bootstrapTag).not.toBeNull();
+    expect(bootstrapTag?.[0]).not.toMatch(/\b(?:async|defer)\b|\btype\s*=/i);
+    expect(html.indexOf(bootstrapTag?.[0] ?? "missing")).toBeLessThan(html.indexOf("</head>"));
+  });
 });

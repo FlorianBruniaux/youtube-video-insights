@@ -25,6 +25,7 @@ const documentTitle = title === "YT Insights" ? title : `${title} | YT Insights`
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#f5f7fb" />
     <title>{documentTitle}</title>
+    <script is:inline src="/_astro/theme-bootstrap.js"></script>
   </head>
   <body>
     <a class="skip-link" href="#main-content">Skip to content</a>
@@ -47,7 +48,7 @@ const documentTitle = title === "YT Insights" ? title : `${title} | YT Insights`
     </footer>
 
     <script>
-      import { applyStoredTheme, THEME_STORAGE_KEY } from "../lib/theme";
+      import { THEME_STORAGE_KEY, type Theme } from "../lib/theme";
 
       const root = document.documentElement;
       const toggle = document.querySelector<HTMLButtonElement>("[data-theme-toggle]");
@@ -62,12 +63,8 @@ const documentTitle = title === "YT Insights" ? title : `${title} | YT Insights`
         label.textContent = dark ? "Light" : "Dark";
       }
 
-      let theme: "light" | "dark" = "light";
-      try {
-        theme = applyStoredTheme(window.localStorage, root);
-      } catch {
-        root.dataset.theme = theme;
-      }
+      let theme: Theme = root.dataset.theme === "dark" ? "dark" : "light";
+      root.dataset.theme = theme;
       updateToggle(theme);
 
       toggle?.addEventListener("click", () => {
