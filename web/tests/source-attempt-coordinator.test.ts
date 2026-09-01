@@ -98,6 +98,38 @@ describe("source attempt identity coordinator", () => {
     await expect(firstTab.claim(FINGERPRINT)).resolves.toBe(generation + 1);
   });
 
+  it("does not over-rotate stale concurrent conflicts or rotate another scope", async () => {
+    const withLock = serialLock();
+    const firstTab = createAttemptIdentityCoordinator(
+      window.localStorage,
+      withLock,
+      "research",
+    );
+    const secondTab = createAttemptIdentityCoordinator(
+      window.localStorage,
+      withLock,
+      "research",
+    );
+    const otherScope = "b".repeat(64);
+    const conflictedGeneration = await firstTab.claim(FINGERPRINT);
+    await firstTab.claim(otherScope);
+
+    const [first, concurrent] = await Promise.all([
+      firstTab.complete(FINGERPRINT, conflictedGeneration),
+      secondTab.complete(FINGERPRINT, conflictedGeneration),
+    ]);
+    const stale = await secondTab.complete(
+      FINGERPRINT,
+      conflictedGeneration,
+    );
+
+    expect(first).toBe(1);
+    expect(concurrent).toBe(1);
+    expect(stale).toBe(1);
+    await expect(firstTab.claim(FINGERPRINT)).resolves.toBe(1);
+    await expect(firstTab.claim(otherScope)).resolves.toBe(0);
+  });
+
   it("keeps admission validation and POST under one lock, then rejects a stale POST", async () => {
     const withLock = serialLock();
     const admittingTab = createAttemptIdentityCoordinator(window.localStorage, withLock);

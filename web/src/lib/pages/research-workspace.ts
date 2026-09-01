@@ -122,6 +122,18 @@ export function attachResearchWorkspace(
     status.textContent = STALE_MESSAGE;
   };
 
+  const clearDefinitiveAdmission = (): void => {
+    clearResearchAdmission();
+    activeAdmission = null;
+    resetJobPanel(
+      jobRegion,
+      jobMessage,
+      jobId,
+      continueJob,
+      retryAdmission,
+    );
+  };
+
   const syncMutation = async (path: string, body: unknown): Promise<void> => {
     if (busy) return;
     busy = true;
@@ -170,6 +182,7 @@ export function attachResearchWorkspace(
     requestController?.abort();
     requestController = controller;
     let attempt = retryAttempt;
+    let scopeFingerprint: string | null = null;
     try {
       const scope = researchActionScope(
         sessionId,
@@ -177,13 +190,14 @@ export function attachResearchWorkspace(
         expectedRevision,
         language,
       );
-      const scopeFingerprint = await researchScopeFingerprint(scope);
+      const computedScopeFingerprint = await researchScopeFingerprint(scope);
+      scopeFingerprint = computedScopeFingerprint;
       if (
         retryAttempt?.version === 2 &&
-        retryAttempt.scope_fingerprint !== scopeFingerprint
+        retryAttempt.scope_fingerprint !== computedScopeFingerprint
       ) throw { code: "invalid_request", status: 400 };
       const admission = await coordinator.admit(
-        scopeFingerprint,
+        computedScopeFingerprint,
         retryAttempt === null
           ? null
           : retryAttempt.version === 2
@@ -195,7 +209,7 @@ export function attachResearchWorkspace(
             kind,
             expectedRevision,
             language,
-            scopeFingerprint,
+            computedScopeFingerprint,
             generation,
           );
           attempt = coordinatedAttempt;
@@ -207,8 +221,7 @@ export function attachResearchWorkspace(
         },
       );
       if (admission.status === "stale") {
-        clearResearchAdmission();
-        activeAdmission = null;
+        clearDefinitiveAdmission();
         await loadSnapshot();
         status.textContent = "This research attempt already ended. Review the current session before starting again.";
         busy = false;
@@ -238,28 +251,42 @@ export function attachResearchWorkspace(
       }
       const code = publicCode(error);
       if (code === "stale_revision") {
-        clearResearchAdmission();
-        activeAdmission = null;
+        clearDefinitiveAdmission();
         await handleStale();
       } else if (code === "workflow_conflict") {
-        clearResearchAdmission();
-        activeAdmission = null;
+        clearDefinitiveAdmission();
         await loadSnapshot();
         status.textContent = "The research workflow changed. Review the current session before starting again.";
       } else if (code === "not_found") {
-        clearResearchAdmission();
-        activeAdmission = null;
+        clearDefinitiveAdmission();
         status.textContent = "This research session was not found.";
       } else if (code === "attempt_storage_unavailable") {
-        clearResearchAdmission();
-        activeAdmission = null;
+        clearDefinitiveAdmission();
         status.textContent = "Browser session storage is unavailable. No background job was submitted.";
+      } else if (
+        code === "idempotency_conflict" &&
+        attempt !== null &&
+        scopeFingerprint !== null
+      ) {
+        try {
+          await coordinator.complete(
+            scopeFingerprint,
+            attempt.version === 2 ? attempt.generation : 0,
+          );
+        } catch {
+          showAdmission(jobRegion, jobMessage, jobId, retryAdmission, attempt);
+          retryAdmission.hidden = true;
+          status.textContent = "This conflicted request identity could not be retired. Research controls remain locked.";
+          busy = false;
+          return;
+        }
+        clearDefinitiveAdmission();
+        status.textContent = mutationMessage(error);
       } else if (attempt !== null && shouldRetainAdmission(error)) {
         showAdmission(jobRegion, jobMessage, jobId, retryAdmission, attempt);
         status.textContent = "The admission response was not confirmed. Retry explicitly to reuse the same request identity.";
       } else {
-        clearResearchAdmission();
-        activeAdmission = null;
+        clearDefinitiveAdmission();
         status.textContent = mutationMessage(error);
       }
       busy = false;
@@ -763,6 +790,22 @@ function showAdmission(
   message.textContent = "This background job admission has no confirmed response.";
   id.textContent = attempt.idempotency_key;
   retry.hidden = false;
+  retry.disabled = false;
+}
+
+function resetJobPanel(
+  region: HTMLElement,
+  message: HTMLElement,
+  id: HTMLElement,
+  continuation: HTMLButtonElement,
+  retry: HTMLButtonElement,
+): void {
+  region.hidden = true;
+  message.textContent = "";
+  id.textContent = "";
+  continuation.hidden = true;
+  continuation.disabled = false;
+  retry.hidden = true;
   retry.disabled = false;
 }
 

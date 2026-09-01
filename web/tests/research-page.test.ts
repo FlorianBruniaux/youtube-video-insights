@@ -746,6 +746,75 @@ describe("cumulative research workspace", () => {
     expect(root.querySelector<HTMLButtonElement>("[data-start-discovery]")?.disabled).toBe(false);
   });
 
+  it("poisons one conflicted generation, clears its panel, and waits for a new explicit click", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    const scope = researchActionScope(
+      sessionId,
+      "research_discovery",
+      2,
+      null,
+    );
+    const fingerprint = await researchScopeFingerprint(scope);
+    const firstKey = `web-research-${fingerprint}-0`;
+    window.sessionStorage.setItem(
+      "yt-insights:research-admission:v1",
+      JSON.stringify({
+        version: 2,
+        session_id: sessionId,
+        kind: "research_discovery",
+        expected_revision: 2,
+        idempotency_key: firstKey,
+        language: null,
+        scope_fingerprint: fingerprint,
+        generation: 0,
+      }),
+    );
+    const coordinator = createAttemptIdentityCoordinator(
+      window.localStorage,
+      serialLock(),
+      "research",
+    );
+    await coordinator.claim(fingerprint);
+    const root = renderWorkspaceDom();
+    const write = vi
+      .fn()
+      .mockRejectedValueOnce({ code: "idempotency_conflict", status: 409 })
+      .mockRejectedValueOnce(new TypeError("response lost"));
+    attachResearchWorkspace(root, {
+      read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
+      write,
+      wait: vi.fn(),
+      coordinator,
+    });
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")?.hidden).toBe(false),
+    );
+
+    root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")!.click();
+
+    await vi.waitFor(() =>
+      expect(root.querySelector("[data-research-status]")?.textContent).toContain(
+        "conflicts with another decision",
+      ),
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+    expect((write.mock.calls[0]?.[1] as { idempotency_key: string }).idempotency_key).toBe(firstKey);
+    expect(root.querySelector<HTMLElement>("[data-job-progress]")?.hidden).toBe(true);
+    expect(root.querySelector("[data-job-message]")?.textContent).toBe("");
+    expect(root.querySelector("[data-job-id]")?.textContent).toBe("");
+    expect(root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")?.hidden).toBe(true);
+    expect(window.sessionStorage.getItem("yt-insights:research-admission:v1")).toBeNull();
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    expect(write).toHaveBeenCalledTimes(1);
+
+    root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
+
+    await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+    expect((write.mock.calls[1]?.[1] as { idempotency_key: string }).idempotency_key).toBe(
+      `web-research-${fingerprint}-1`,
+    );
+  });
+
   it("bounds a pending admission to 15 seconds and retains the exact key", async () => {
     window.history.replaceState({}, "", `/research/${sessionId}/`);
     const root = renderWorkspaceDom();
