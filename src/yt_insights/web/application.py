@@ -159,7 +159,7 @@ class _ReplayRegistry:
         key: str,
         payload: object,
         operation: Callable[[], WebResponse],
-        terminal_failure: WebResponse | None = None,
+        failure_response: Callable[[Exception], WebResponse] | None = None,
     ) -> WebResponse:
         identity = (route, key)
         deadline = time.monotonic() + _REPLAY_WAIT_SECONDS
@@ -174,28 +174,32 @@ class _ReplayRegistry:
                     break
                 if prior.payload != payload:
                     raise IdempotencyConflict()
-                if prior.response is not None:
-                    return prior.response
+                completed_response = prior.response
+                if completed_response is not None:
+                    return completed_response
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     return _error(409, "request_in_progress")
                 self._condition.wait(timeout=remaining)
+                notified_response = prior.response
+                if notified_response is not None:
+                    return notified_response
 
         try:
             response = operation()
             job_id = _response_job_id(response)
         except Exception as exc:
-            if terminal_failure is None:
+            if failure_response is None:
                 self._discard(identity, record)
                 raise
-            _LOGGER.error("replay operation failed: %s", type(exc).__name__)
-            self._complete(identity, record, terminal_failure, None)
-            return terminal_failure
+            response = failure_response(exc)
+            self._complete(identity, record, response, None)
+            return response
         except BaseException:
-            if terminal_failure is None:
+            if failure_response is None:
                 self._discard(identity, record)
             else:
-                self._complete(identity, record, terminal_failure, None)
+                self._complete(identity, record, _error(500, "internal_error"), None)
             raise
         self._complete(identity, record, response, job_id)
         return response
@@ -287,31 +291,8 @@ class WebApplication:
         """Return a fixed public response without reflecting exception text."""
         try:
             return self._dispatch(request)
-        except RequestValidationError:
-            return _error(400, "invalid_request")
-        except (JobNotFound, ResourceNotFound):
-            return _error(404, "not_found")
-        except PlanChanged:
-            return _error(409, "plan_changed")
-        except ResearchRevisionConflict:
-            return _error(409, "stale_revision")
-        except WorkflowConflict:
-            return _error(409, "workflow_conflict")
-        except IdempotencyConflict:
-            return _error(409, "idempotency_conflict")
-        except (JobQueueFull, ReplayRegistryFull):
-            return _error(429, "job_queue_full")
-        except JobExecutorClosed:
-            return _error(503, "jobs_unavailable")
-        except SearchIndexError:
-            return _error(503, "search_unavailable")
-        except CatalogError:
-            return _error(503, "catalog_unavailable")
-        except sqlite3.Error:
-            return _error(503, "research_unavailable")
         except Exception as exc:
-            _LOGGER.error("web request failed: %s", type(exc).__name__)
-            return _error(500, "internal_error")
+            return _exception_response(exc)
 
     def _dispatch(self, request: WebRequest) -> WebResponse:
         if request.method == "GET":
@@ -444,7 +425,7 @@ class WebApplication:
                     parsed_start.freshness_profile.value,
                 ),
                 operation=lambda: self._start_session(parsed_start),
-                terminal_failure=_error(500, "internal_error"),
+                failure_response=_exception_response,
             )
         match = _SESSION_ACTION_ROUTE.fullmatch(request.path)
         if match is None:
@@ -844,3 +825,30 @@ def _error(status: int, code: str) -> WebResponse:
         status,
         {"schema_version": 1, "error": {"code": code}},
     )
+
+
+def _exception_response(exc: Exception) -> WebResponse:
+    if isinstance(exc, RequestValidationError):
+        return _error(400, "invalid_request")
+    if isinstance(exc, (JobNotFound, ResourceNotFound)):
+        return _error(404, "not_found")
+    if isinstance(exc, PlanChanged):
+        return _error(409, "plan_changed")
+    if isinstance(exc, ResearchRevisionConflict):
+        return _error(409, "stale_revision")
+    if isinstance(exc, WorkflowConflict):
+        return _error(409, "workflow_conflict")
+    if isinstance(exc, IdempotencyConflict):
+        return _error(409, "idempotency_conflict")
+    if isinstance(exc, (JobQueueFull, ReplayRegistryFull)):
+        return _error(429, "job_queue_full")
+    if isinstance(exc, JobExecutorClosed):
+        return _error(503, "jobs_unavailable")
+    if isinstance(exc, SearchIndexError):
+        return _error(503, "search_unavailable")
+    if isinstance(exc, CatalogError):
+        return _error(503, "catalog_unavailable")
+    if isinstance(exc, sqlite3.Error):
+        return _error(503, "research_unavailable")
+    _LOGGER.error("web request failed: %s", type(exc).__name__)
+    return _error(500, "internal_error")

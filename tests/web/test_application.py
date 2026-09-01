@@ -29,9 +29,9 @@ from yt_insights.research.store import (
 from yt_insights.search.models import SearchQuery
 from yt_insights.search.sqlite_fts import SearchIndexError, SearchIndexNotFound
 from yt_insights.web.api import PlanChanged, SourcePreviewRequest
-from yt_insights.web.application import WebApplication
+from yt_insights.web.application import WebApplication, _ReplayRegistry
 from yt_insights.web.jobs import JobQueueFull, JobSnapshot
-from yt_insights.web.models import WebRequest
+from yt_insights.web.models import WebRequest, WebResponse
 
 SESSION_ID = "01K4RESEARCH0000000000000000"
 
@@ -1342,6 +1342,39 @@ def test_session_creation_replays_failure_after_a_durable_side_effect(
     assert changed.json_body["error"] == {"code": "idempotency_conflict"}
 
 
+def test_session_creation_replays_research_unavailable_failure(
+    services: SimpleNamespace,
+) -> None:
+    services.workflow.error = sqlite3.OperationalError("private database path")
+    original = _post(
+        "/api/v1/research/sessions",
+        '{"topic":"local","queries":["local"],"languages":["fr"],'
+        '"freshness_profile":"standard","idempotency_key":"start-1"}',
+    )
+
+    first = services.app.handle(original)
+    replayed = services.app.handle(original)
+    changed = services.app.handle(
+        _post(
+            "/api/v1/research/sessions",
+            '{"topic":"changed","queries":["changed"],"languages":["fr"],'
+            '"freshness_profile":"standard","idempotency_key":"start-1"}',
+        )
+    )
+
+    assert first == replayed
+    assert first.status == 503
+    assert first.json_body == {
+        "schema_version": 1,
+        "error": {"code": "research_unavailable"},
+    }
+    assert services.workflow.start_calls == [
+        ("local", ("local",), ("fr",), FreshnessProfile.STANDARD)
+    ]
+    assert changed.status == 409
+    assert changed.json_body["error"] == {"code": "idempotency_conflict"}
+
+
 def test_session_failure_replay_prevents_a_second_real_store_insert(
     services: SimpleNamespace,
     tmp_path: Path,
@@ -1424,6 +1457,88 @@ def test_concurrent_session_failure_executes_the_side_effect_once(
     assert all(response == responses[0] for response in responses)
     assert responses[0].status == 500
     assert len(services.workflow.start_calls) == 1
+
+
+def test_attached_waiter_replays_evicted_record_without_reexecution(
+    services: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class EvictionInterleavingCondition(threading.Condition):
+        def __init__(self) -> None:
+            super().__init__()
+            self.waiter_attached = threading.Event()
+            self.waiter_notified_and_released = threading.Event()
+            self.allow_waiter_reacquire = threading.Event()
+
+        def wait(self, timeout: float | None = None) -> bool:
+            is_attached_waiter = threading.current_thread().name.startswith(
+                "attached-waiter"
+            )
+            if is_attached_waiter:
+                self.waiter_attached.set()
+            notified = super().wait(timeout)
+            if is_attached_waiter and notified:
+                self.release()
+                try:
+                    self.waiter_notified_and_released.set()
+                    if not self.allow_waiter_reacquire.wait(timeout=1.0):
+                        raise AssertionError("waiter reacquire gate timed out")
+                finally:
+                    self.acquire()
+            return notified
+
+    condition = EvictionInterleavingCondition()
+    registry = _ReplayRegistry(maximum=1, jobs=services.jobs)
+    monkeypatch.setattr(registry, "_condition", condition)
+    owner_entered = threading.Event()
+    release_owner = threading.Event()
+    owner_calls = 0
+
+    def owner_operation() -> WebResponse:
+        nonlocal owner_calls
+        owner_calls += 1
+        owner_entered.set()
+        if not release_owner.wait(timeout=1.0):
+            raise AssertionError("owner release gate timed out")
+        return WebResponse.json(200, {"owner_call": owner_calls})
+
+    def run_owner() -> WebResponse:
+        return registry.run(
+            route="/owner",
+            key="same-key",
+            payload=("same-payload",),
+            operation=owner_operation,
+        )
+
+    with (
+        ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="owner"
+        ) as owner_pool,
+        ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="attached-waiter"
+        ) as waiter_pool,
+    ):
+        owner = owner_pool.submit(run_owner)
+        assert owner_entered.wait(timeout=1.0)
+        waiter = waiter_pool.submit(run_owner)
+        assert condition.waiter_attached.wait(timeout=1.0)
+        release_owner.set()
+        assert condition.waiter_notified_and_released.wait(timeout=1.0)
+
+        third = registry.run(
+            route="/third",
+            key="third-key",
+            payload=("third-payload",),
+            operation=lambda: WebResponse.json(200, {"third": True}),
+        )
+        condition.allow_waiter_reacquire.set()
+        first = owner.result(timeout=1.0)
+        replayed = waiter.result(timeout=1.0)
+
+    assert third.json_body == {"third": True}
+    assert first == replayed
+    assert first.json_body == {"owner_call": 1}
+    assert owner_calls == 1
 
 
 def test_pending_session_replay_wait_is_bounded_and_never_reexecutes(
