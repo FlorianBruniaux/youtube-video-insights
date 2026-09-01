@@ -278,20 +278,20 @@ async function requireJson(response: Response): Promise<unknown> {
   if (
     contentType.split(";", 1)[0]?.trim().toLowerCase() !== "application/json"
   ) {
-    throw unexpected(response.status);
+    rejectHeaders(response);
   }
   const declaredLength = response.headers.get("Content-Length");
   let expectedBytes: number | null = null;
   if (declaredLength !== null) {
     if (!/^(0|[1-9][0-9]{0,6})$/.test(declaredLength)) {
-      throw unexpected(response.status);
+      rejectHeaders(response);
     }
     expectedBytes = Number(declaredLength);
     if (
       !Number.isSafeInteger(expectedBytes) ||
       expectedBytes > MAX_JSON_RESPONSE_BYTES
     ) {
-      throw unexpected(response.status);
+      rejectHeaders(response);
     }
   }
   if (response.body !== null) {
@@ -303,6 +303,19 @@ async function requireJson(response: Response): Promise<unknown> {
     if (isAbortError(error)) throw error;
     throw unexpected(response.status);
   }
+}
+
+function rejectHeaders(response: Response): never {
+  const error = unexpected(response.status);
+  const body = response.body;
+  if (body !== null) {
+    try {
+      void body.cancel().catch(() => undefined);
+    } catch {
+      // The fixed validation error remains authoritative.
+    }
+  }
+  throw error;
 }
 
 async function readBoundedJsonStream(
@@ -370,7 +383,9 @@ function parseBootstrap(payload: unknown, status: number): BootstrapResponse {
   requireExactKeys(object, ["schema_version", "mutation_token"], status);
   requireSchemaVersion(object.schema_version, status);
   const token = stringValue(object.mutation_token, status);
-  if (token.length < 32 || token.length > 500) throw unexpected(status);
+  const tokenCodePoints = unicodeCodePointLength(token, 500);
+  if (tokenCodePoints < 32 || tokenCodePoints > 500)
+    throw unexpected(status);
   return { schema_version: 1, mutation_token: token };
 }
 
@@ -662,7 +677,7 @@ function parseSessionObject(
       object.languages,
       status,
       MAX_SOURCE_METADATA_VALUES,
-      32,
+      500,
     ),
     freshness_profile: profile,
     discovery_fingerprint: fingerprint,
@@ -1291,7 +1306,7 @@ function parseSourcePreview(
     object.requires_confirmation,
     status,
   );
-  const language = nonEmptyString(object.language, status, 32);
+  const language = nonEmptyString(object.language, status, 500);
   if (
     selectedCount !== videoIds.length ||
     count(object.videos_returned, status) !== videos.length ||
@@ -1538,9 +1553,21 @@ function stringValue(
   status: number,
   maximumCodePoints = MAX_PUBLIC_STRING_CODEPOINTS,
 ): string {
-  if (typeof value !== "string" || value.length > maximumCodePoints)
+  if (
+    typeof value !== "string" ||
+    unicodeCodePointLength(value, maximumCodePoints) > maximumCodePoints
+  )
     throw unexpected(status);
   return value;
+}
+
+function unicodeCodePointLength(value: string, stopAfter: number): number {
+  let count = 0;
+  for (const _character of value) {
+    count += 1;
+    if (count > stopAfter) return count;
+  }
+  return count;
 }
 
 function nullableString(

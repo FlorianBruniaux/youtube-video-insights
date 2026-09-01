@@ -26,6 +26,21 @@ function jsonResponse(body: unknown, status = 200): Response {
   });
 }
 
+function cancellableResponse(headers: HeadersInit): {
+  readonly response: Response;
+  readonly cancelSpy: ReturnType<typeof vi.spyOn>;
+} {
+  const response = new Response(new ReadableStream<Uint8Array>(), {
+    status: 200,
+    headers,
+  });
+  if (response.body === null) throw new Error("test response body is missing");
+  return {
+    response,
+    cancelSpy: vi.spyOn(response.body, "cancel").mockResolvedValue(undefined),
+  };
+}
+
 beforeEach(() => {
   vi.resetModules();
 });
@@ -391,6 +406,57 @@ describe("adversarial response boundaries", () => {
     expect(jsonSpy).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ["non-JSON", { "Content-Type": "text/plain" }],
+    [
+      "malformed Content-Length",
+      { "Content-Type": "application/json", "Content-Length": "unknown" },
+    ],
+    [
+      "duplicate Content-Length",
+      { "Content-Type": "application/json", "Content-Length": "2, 3" },
+    ],
+    [
+      "invalid Content-Length",
+      { "Content-Type": "application/json", "Content-Length": "-1" },
+    ],
+    [
+      "oversized Content-Length",
+      { "Content-Type": "application/json", "Content-Length": "4194305" },
+    ],
+  ] as const)(
+    "cancels the response body after a %s header rejection",
+    async (_, headers) => {
+      const { response, cancelSpy } = cancellableResponse(headers);
+      vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response));
+      const { apiGet } = await import("../src/lib/api");
+
+      await expect(apiGet("/api/v1/status")).rejects.toMatchObject({
+        code: "unexpected_response",
+        status: 200,
+      });
+      expect(cancelSpy).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps the header validation error authoritative when body cancellation aborts", async () => {
+    const abort = new DOMException("cancel failed", "AbortError");
+    const { response, cancelSpy } = cancellableResponse({
+      "Content-Type": "text/plain",
+    });
+    cancelSpy.mockRejectedValue(abort);
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response));
+    const { apiGet, PublicApiError } = await import("../src/lib/api");
+
+    const error = await apiGet("/api/v1/status").catch(
+      (value: unknown) => value,
+    );
+
+    expect(error).toBeInstanceOf(PublicApiError);
+    expect(error).toMatchObject({ code: "unexpected_response", status: 200 });
+    expect(error).not.toBe(abort);
+  });
+
   it("rejects an oversized streamed body even without Content-Length", async () => {
     const oversized = `{"padding":"${"x".repeat(4_194_305)}"}`;
     const response = new Response(oversized, {
@@ -441,6 +507,60 @@ describe("adversarial response boundaries", () => {
       code: "unexpected_response",
     });
   });
+
+  it.each([
+    ["preview title", 300, "accept"],
+    ["preview title", 301, "reject"],
+    ["research topic", 500, "accept"],
+    ["research topic", 501, "reject"],
+    ["research language", 500, "accept"],
+    ["research language", 501, "reject"],
+  ] as const)(
+    "counts astral code points at the %s boundary (%i, %s)",
+    async (field, length, expected) => {
+      const astralValue = "\u{1F9EA}".repeat(length);
+      const fixture =
+        field === "preview title"
+          ? succeededJob("source_preview", {
+              ...sourcePreviewResult(),
+              videos: [
+                {
+                  video_id: "abc123DEF45",
+                  title: astralValue,
+                  published_at: "2026-08-20",
+                  url: "https://www.youtube.com/watch?v=abc123DEF45",
+                },
+              ],
+            })
+          : {
+              ...researchFixture(),
+              session: {
+                ...researchFixture().session,
+                ...(field === "research topic"
+                  ? { topic: astralValue }
+                  : { languages: [astralValue] }),
+              },
+            };
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(fixture)),
+      );
+      const { apiGet } = await import("../src/lib/api");
+      const operation =
+        field === "preview title"
+          ? apiGet("/api/v1/jobs/job-contract-1")
+          : apiGet("/api/v1/research/sessions/session_1");
+
+      if (expected === "accept") {
+        await expect(operation).resolves.toEqual(fixture);
+      } else {
+        await expect(operation).rejects.toMatchObject({
+          code: "unexpected_response",
+          status: 200,
+        });
+      }
+    },
+  );
 
   it("rejects an unknown source kind in a completed preview job", async () => {
     const fixture = succeededJob("source_preview", {
@@ -651,7 +771,7 @@ function succeededJob(kind: string, result: object): object {
   };
 }
 
-function researchFixture(): object {
+function researchFixture() {
   return {
     schema_version: 1,
     session: {
