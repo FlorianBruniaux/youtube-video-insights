@@ -1034,6 +1034,19 @@ Run the pipeline on any video, skip any step you have already done. The agent ne
 
 ---
 
+<!-- BEGIN GENERATED RELATED PROJECTS -->
+<!-- Source: https://github.com/FlorianBruniaux/FlorianBruniaux/blob/main/ecosystem/projects.json; project: yt-insights -->
+## Explore the ecosystem
+
+These projects extend the workflow without duplicating this tool:
+
+- **Run with [CC-Copilot Bridge](https://github.com/FlorianBruniaux/cc-copilot-bridge)**: use the LLM backend that yt-insights already detects automatically.
+- **Measure with [Google Search Console MCP](https://github.com/FlorianBruniaux/google-search-console-mcp)**: connect content research to search visibility after publication.
+- **Learn with [Claude Code Ultimate Guide](https://github.com/FlorianBruniaux/claude-code-ultimate-guide)**: reuse the guide's research and synthesis workflows.
+
+[Browse the complete open-source galaxy](https://github.com/FlorianBruniaux#open-source-galaxy)
+<!-- END GENERATED RELATED PROJECTS -->
+
 ## Contributing
 
 Open a PR. No CLA is required. Run `uv sync --extra mcp --extra dev`, then the
