@@ -1,5 +1,7 @@
 import type {
+  AcquisitionErrorCode,
   AcquisitionHistoryAttempt,
+  AcquisitionItemStatus,
   ApiGetResponse,
   ApiPath,
   ApiPostResponse,
@@ -18,6 +20,7 @@ import type {
   ResearchAssessment,
   ResearchCandidate,
   ResearchListResponse,
+  ResearchErrorCode,
   ResearchResponse,
   ResearchSessionCore,
   ResearchSessionSummary,
@@ -26,6 +29,7 @@ import type {
   SearchHit,
   SearchResponse,
   SourceAcquisitionResult,
+  SourceKind,
   SourceItem,
   SourcePreviewResult,
   SourcesResponse,
@@ -33,7 +37,22 @@ import type {
 } from "./types";
 
 const MUTATION_TOKEN_HEADER = "X-YT-Insights-Token";
-const PUBLIC_ERROR_CODES = new Set<PublicApiErrorCode>([
+const MAX_JSON_RESPONSE_BYTES = 4 * 1024 * 1024;
+const MAX_PAGE_SIZE = 100;
+const MAX_SEARCH_HITS = 20;
+const MAX_RESEARCH_QUERIES = 8;
+const MAX_RESEARCH_EVIDENCE = 160;
+const MAX_RESEARCH_CANDIDATES = 10;
+const MAX_TIMELINE_ITEMS = 100;
+const MAX_ACQUISITION_ATTEMPTS = 100;
+const MAX_ACQUISITION_ITEMS = 1_000;
+const MAX_SOURCE_METADATA_VALUES = 20;
+const MAX_SELECTED_VIDEOS = 1_000;
+const MAX_PLAN_IDENTITY_BYTES = 524_288;
+const MAX_ACQUISITION_DIAGNOSTICS =
+  MAX_PLAN_IDENTITY_BYTES + MAX_SELECTED_VIDEOS + 2;
+const MAX_PUBLIC_STRING_CODEPOINTS = 2_048;
+const PUBLIC_ERROR_CODES = new Set<string>([
   "invalid_request",
   "forbidden",
   "method_not_allowed",
@@ -53,6 +72,28 @@ const PUBLIC_ERROR_CODES = new Set<PublicApiErrorCode>([
   "server_busy",
   "server_shutting_down",
 ]);
+const ERROR_STATUSES: Readonly<
+  Record<Exclude<PublicApiErrorCode, "unexpected_response">, readonly number[]>
+> = {
+  invalid_request: [400, 413, 414, 431, 505],
+  forbidden: [403],
+  method_not_allowed: [405],
+  not_found: [404],
+  plan_changed: [409],
+  stale_revision: [409],
+  workflow_conflict: [409],
+  idempotency_conflict: [409],
+  request_in_progress: [409],
+  job_queue_full: [429],
+  jobs_unavailable: [503],
+  search_unavailable: [503],
+  catalog_unavailable: [503],
+  research_unavailable: [503],
+  exports_unavailable: [503],
+  internal_error: [500],
+  server_busy: [503],
+  server_shutting_down: [503],
+};
 const RESEARCH_STATES = new Set<ResearchState>([
   "assessing",
   "awaiting_sufficiency_confirmation",
@@ -85,6 +126,40 @@ const JOB_KINDS = new Set<JobKind>([
   "research_acquisition",
   "research_retry",
 ]);
+const SOURCE_KINDS = new Set<SourceKind>([
+  "video",
+  "playlist",
+  "channel",
+  "batch",
+]);
+const ACQUISITION_ITEM_STATUSES = new Set<AcquisitionItemStatus>([
+  "acquired",
+  "already_present",
+  "no_transcript",
+  "failed_retryable",
+]);
+const ACQUISITION_ERROR_CODES = new Set<AcquisitionErrorCode>([
+  "acquisition_unavailable",
+  "cache_read_failed",
+  "download_failed",
+  "no_transcript",
+  "acquisition_failed",
+]);
+const RESEARCH_ERROR_CODES = new Set<ResearchErrorCode>([
+  "acquisition_in_progress",
+  "acquisition_unavailable",
+  "discovery_unavailable",
+  "index_refresh_failed",
+  "local_index_unavailable",
+  "partial_acquisition_failed",
+  "retry_in_progress",
+  "research_unavailable",
+]);
+const ACQUISITION_ATTEMPT_STATUSES = new Set([
+  "running",
+  "failed_retryable",
+  "completed",
+] as const);
 const JOB_RESULT_ERROR_CODES = new Set([
   "plan_too_large",
   "plan_changed",
@@ -132,7 +207,12 @@ export async function apiGet<T extends ApiGetResponse = ApiGetResponse>(
     ...(signal === undefined ? {} : { signal }),
   });
   const payload = await requireJson(response);
-  if (!response.ok) throw publicResponseError(payload, response.status);
+  if (!response.ok) {
+    const error = publicResponseError(payload, response.status);
+    if (error.status === 403 && error.code === "forbidden")
+      mutationToken = null;
+    throw error;
+  }
   if (response.status !== 200) throw unexpected(response.status);
   const parsed = parseGetResponse(route, payload, response.status);
   return parsed as T;
@@ -156,7 +236,12 @@ export async function apiPost<T extends ApiPostResponse = ApiPostResponse>(
     ...(signal === undefined ? {} : { signal }),
   });
   const payload = await requireJson(response);
-  if (!response.ok) throw publicResponseError(payload, response.status);
+  if (!response.ok) {
+    const error = publicResponseError(payload, response.status);
+    if (error.status === 403 && error.code === "forbidden")
+      mutationToken = null;
+    throw error;
+  }
   const parsed = parsePostResponse(route, payload, response.status);
   return parsed as T;
 }
@@ -195,9 +280,75 @@ async function requireJson(response: Response): Promise<unknown> {
   ) {
     throw unexpected(response.status);
   }
+  const declaredLength = response.headers.get("Content-Length");
+  let expectedBytes: number | null = null;
+  if (declaredLength !== null) {
+    if (!/^(0|[1-9][0-9]{0,6})$/.test(declaredLength)) {
+      throw unexpected(response.status);
+    }
+    expectedBytes = Number(declaredLength);
+    if (
+      !Number.isSafeInteger(expectedBytes) ||
+      expectedBytes > MAX_JSON_RESPONSE_BYTES
+    ) {
+      throw unexpected(response.status);
+    }
+  }
+  if (response.body !== null) {
+    return readBoundedJsonStream(response, expectedBytes);
+  }
   try {
     return await response.json();
-  } catch {
+  } catch (error: unknown) {
+    if (isAbortError(error)) throw error;
+    throw unexpected(response.status);
+  }
+}
+
+async function readBoundedJsonStream(
+  response: Response,
+  expectedBytes: number | null,
+): Promise<unknown> {
+  const body = response.body;
+  if (body === null) throw unexpected(response.status);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let received = 0;
+  try {
+    while (true) {
+      const next = await reader.read();
+      if (next.done) break;
+      received += next.value.byteLength;
+      if (received > MAX_JSON_RESPONSE_BYTES) {
+        try {
+          await reader.cancel();
+        } catch {
+          // The fixed client error below remains authoritative.
+        }
+        throw unexpected(response.status);
+      }
+      chunks.push(next.value);
+    }
+  } catch (error: unknown) {
+    if (error instanceof PublicApiError || isAbortError(error)) throw error;
+    throw unexpected(response.status);
+  } finally {
+    reader.releaseLock();
+  }
+  if (expectedBytes !== null && received !== expectedBytes) {
+    throw unexpected(response.status);
+  }
+  const bytes = new Uint8Array(received);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return JSON.parse(text) as unknown;
+  } catch (error: unknown) {
+    if (isAbortError(error)) throw error;
     throw unexpected(response.status);
   }
 }
@@ -209,9 +360,9 @@ function publicResponseError(payload: unknown, status: number): PublicApiError {
   const error = record(object.error, status);
   requireExactKeys(error, ["code"], status);
   const code = stringValue(error.code, status);
-  if (!PUBLIC_ERROR_CODES.has(code as PublicApiErrorCode))
+  if (!isPublicErrorCode(code) || !ERROR_STATUSES[code].includes(status))
     throw unexpected(status);
-  return new PublicApiError(code as PublicApiErrorCode, status);
+  return new PublicApiError(code, status);
 }
 
 function parseBootstrap(payload: unknown, status: number): BootstrapResponse {
@@ -310,11 +461,12 @@ function parseStatus(payload: unknown, status: number): StatusResponse {
 
 function parseSearch(payload: unknown, status: number): SearchResponse {
   const object = versioned(payload, ["hits", "returned", "truncated"], status);
-  const hits = arrayValue(object.hits, status).map((item) =>
+  const hits = arrayValue(object.hits, status, MAX_SEARCH_HITS).map((item) =>
     parseSearchHit(item, status),
   );
   const returned = count(object.returned, status);
-  if (returned !== hits.length) throw unexpected(status);
+  if (returned !== hits.length || returned > MAX_SEARCH_HITS)
+    throw unexpected(status);
   return {
     schema_version: 1,
     hits,
@@ -342,29 +494,35 @@ function parseSearchHit(value: unknown, status: number): SearchHit {
     ],
     status,
   );
+  const passageId = stringValue(object.passage_id, status, 64);
+  if (!SHA256.test(passageId)) throw unexpected(status);
+  const startSeconds = finiteNumber(object.start_seconds, status);
+  const endSeconds = finiteNumber(object.end_seconds, status);
+  if (startSeconds < 0 || endSeconds < startSeconds) throw unexpected(status);
   return {
-    passage_id: stringValue(object.passage_id, status),
-    rank: finiteNumber(object.rank, status),
+    passage_id: passageId,
+    rank: positiveSafeInteger(object.rank, status, MAX_SEARCH_HITS),
     score: finiteNumber(object.score, status),
-    channel_id: stringValue(object.channel_id, status),
-    channel: stringValue(object.channel, status),
-    title: stringValue(object.title, status),
-    language: stringValue(object.language, status),
-    excerpt: stringValue(object.excerpt, status),
-    start_seconds: finiteNumber(object.start_seconds, status),
-    end_seconds: finiteNumber(object.end_seconds, status),
-    url: stringValue(object.url, status),
+    channel_id: stringValue(object.channel_id, status, 200),
+    channel: stringValue(object.channel, status, 200),
+    title: stringValue(object.title, status, 300),
+    language: stringValue(object.language, status, 64),
+    excerpt: stringValue(object.excerpt, status, 1_500),
+    start_seconds: startSeconds,
+    end_seconds: endSeconds,
+    url: stringValue(object.url, status, 2_048),
   };
 }
 
 function parseSources(payload: unknown, status: number): SourcesResponse {
   const object = versioned(payload, ["items", "limit", "offset"], status);
+  const limit = pageLimit(object.limit, status);
   return {
     schema_version: 1,
-    items: arrayValue(object.items, status).map((item) =>
+    items: arrayValue(object.items, status, limit).map((item) =>
       parseSource(item, status),
     ),
-    limit: count(object.limit, status),
+    limit,
     offset: count(object.offset, status),
   };
 }
@@ -400,11 +558,21 @@ function parseSource(value: unknown, status: number): SourceItem {
   }
   return {
     video_id: videoId,
-    title: stringValue(object.title, status),
-    published_at: nullableString(object.published_at, status),
-    languages: stringArray(object.languages, status),
-    sources: stringArray(object.sources, status),
-    url: stringValue(object.url, status),
+    title: stringValue(object.title, status, 1_000),
+    published_at: nullableDate(object.published_at, status),
+    languages: stringArray(
+      object.languages,
+      status,
+      MAX_SOURCE_METADATA_VALUES,
+      32,
+    ),
+    sources: stringArray(
+      object.sources,
+      status,
+      MAX_SOURCE_METADATA_VALUES,
+      200,
+    ),
+    url: canonicalWatchUrl(object.url, videoId, status),
     artifact_count: count(object.artifact_count, status),
     transcript_state: transcriptState,
     index_state: indexState,
@@ -416,12 +584,13 @@ function parseResearchList(
   status: number,
 ): ResearchListResponse {
   const object = versioned(payload, ["items", "limit", "offset"], status);
+  const limit = pageLimit(object.limit, status);
   return {
     schema_version: 1,
-    items: arrayValue(object.items, status).map((item) =>
+    items: arrayValue(object.items, status, limit).map((item) =>
       parseSessionSummary(item, status),
     ),
-    limit: count(object.limit, status),
+    limit,
     offset: count(object.offset, status),
   };
 }
@@ -433,6 +602,7 @@ function parseSessionSummary(
   const object = record(value, status);
   const core = parseSessionObject(object, status, true);
   const action = requiredAction(object.required_user_action, status);
+  requireActionMatchesState(core.state, action, status);
   return { ...core, required_user_action: action } as ResearchSessionSummary;
 }
 
@@ -473,22 +643,34 @@ function parseSessionObject(
     object.retry_target === null
       ? null
       : enumValue(object.retry_target, RESEARCH_STATES, status);
-  const fingerprint = stringValue(object.discovery_fingerprint, status);
+  const fingerprint = stringValue(object.discovery_fingerprint, status, 64);
   if (!SHA256.test(fingerprint)) throw unexpected(status);
-  const sessionId = stringValue(object.session_id, status);
+  const sessionId = stringValue(object.session_id, status, 128);
   if (!SESSION_ID.test(sessionId)) throw unexpected(status);
+  const queries = stringArray(
+    object.queries,
+    status,
+    MAX_RESEARCH_QUERIES,
+    500,
+  );
+  if (queries.length === 0) throw unexpected(status);
   return {
     session_id: sessionId,
-    topic: stringValue(object.topic, status),
-    queries: stringArray(object.queries, status),
-    languages: stringArray(object.languages, status),
+    topic: nonEmptyString(object.topic, status, 500),
+    queries,
+    languages: stringArray(
+      object.languages,
+      status,
+      MAX_SOURCE_METADATA_VALUES,
+      32,
+    ),
     freshness_profile: profile,
     discovery_fingerprint: fingerprint,
     state,
     revision: count(object.revision, status),
     retry_target: retryTarget,
-    created_at: stringValue(object.created_at, status),
-    updated_at: stringValue(object.updated_at, status),
+    created_at: timestampString(object.created_at, status),
+    updated_at: timestampString(object.updated_at, status),
   };
 }
 
@@ -522,22 +704,29 @@ function parseResearch(
   const candidates =
     object.candidates === null
       ? null
-      : arrayValue(object.candidates, status).map((item) =>
-          parseCandidate(item, status),
+      : arrayValue(object.candidates, status, MAX_RESEARCH_CANDIDATES).map(
+          (item) => parseCandidate(item, status),
         );
   const history = withHistory
     ? parseTimeline(object.history, status)
     : undefined;
+  const session = parseSession(object.session, status);
+  requireActionMatchesState(session.state, action, status);
   const response = {
     schema_version: 1 as const,
-    session: parseSession(object.session, status),
+    session,
     assessment,
     candidates,
     required_user_action: action,
-    error_code: nullableString(object.error_code, status),
-    acquisition_history: arrayValue(object.acquisition_history, status).map(
-      (item) => parseAcquisitionHistory(item, status),
-    ),
+    error_code:
+      object.error_code === null
+        ? null
+        : enumValue(object.error_code, RESEARCH_ERROR_CODES, status),
+    acquisition_history: arrayValue(
+      object.acquisition_history,
+      status,
+      MAX_ACQUISITION_ATTEMPTS,
+    ).map((item) => parseAcquisitionHistory(item, status)),
     acquisition_history_truncated: booleanValue(
       object.acquisition_history_truncated,
       status,
@@ -585,45 +774,84 @@ function parseAssessment(value: unknown, status: number): ResearchAssessment {
     ],
     status,
   );
+  const passages = arrayValue(
+    object.passages,
+    status,
+    MAX_RESEARCH_EVIDENCE,
+  ).map((item) => parsePassage(item, status));
+  const videos = arrayValue(object.videos, status, MAX_RESEARCH_EVIDENCE).map(
+    (item) => parseVideoEvidence(item, status),
+  );
+  const matchedPassages = boundedCount(
+    coverage.matched_passages,
+    status,
+    MAX_RESEARCH_EVIDENCE,
+  );
+  const matchedVideos = boundedCount(
+    coverage.matched_videos,
+    status,
+    MAX_RESEARCH_EVIDENCE * 2,
+  );
+  const distinctChannels = boundedCount(
+    coverage.distinct_channels,
+    status,
+    matchedVideos,
+  );
+  const unknownPublicationDates = boundedCount(
+    coverage.unknown_publication_date_count,
+    status,
+    videos.length,
+  );
+  if (
+    matchedPassages !== passages.length ||
+    unknownPublicationDates !==
+      videos.filter((video) => video.published_at === null).length
+  ) {
+    throw unexpected(status);
+  }
+  const profile = enumValue(freshness.profile, FRESHNESS_PROFILES, status);
+  const maximumAge = nullableCount(freshness.maximum_age_days, status);
+  const expectedMaximumAge = {
+    fast: 14,
+    standard: 30,
+    stable: 90,
+    historical: null,
+  }[profile];
+  if (maximumAge !== expectedMaximumAge) throw unexpected(status);
   return {
-    created_at: stringValue(object.created_at, status),
+    created_at: timestampString(object.created_at, status),
     snapshot: {
-      search_generation: stringValue(snapshot.search_generation, status),
-      catalog_generation: stringValue(snapshot.catalog_generation, status),
+      search_generation: exactSha256(snapshot.search_generation, status),
+      catalog_generation: exactSha256(snapshot.catalog_generation, status),
     },
     coverage: {
-      matched_passages: count(coverage.matched_passages, status),
-      matched_videos: count(coverage.matched_videos, status),
-      distinct_channels: count(coverage.distinct_channels, status),
+      matched_passages: matchedPassages,
+      matched_videos: matchedVideos,
+      distinct_channels: distinctChannels,
       queries_with_zero_hits: stringArray(
         coverage.queries_with_zero_hits,
         status,
+        MAX_RESEARCH_QUERIES,
+        500,
       ),
-      newest_source_published_at: nullableString(
+      newest_source_published_at: nullableDate(
         coverage.newest_source_published_at,
         status,
       ),
-      unknown_publication_date_count: count(
-        coverage.unknown_publication_date_count,
-        status,
-      ),
+      unknown_publication_date_count: unknownPublicationDates,
     },
     freshness: {
-      profile: enumValue(freshness.profile, FRESHNESS_PROFILES, status),
-      maximum_age_days: nullableCount(freshness.maximum_age_days, status),
-      last_successful_discovery_at: nullableString(
+      profile,
+      maximum_age_days: maximumAge,
+      last_successful_discovery_at: nullableTimestamp(
         freshness.last_successful_discovery_at,
         status,
       ),
       stale: booleanValue(freshness.stale, status),
-      reason: stringValue(freshness.reason, status),
+      reason: nonEmptyString(freshness.reason, status, 500),
     },
-    passages: arrayValue(object.passages, status).map((item) =>
-      parsePassage(item, status),
-    ),
-    videos: arrayValue(object.videos, status).map((item) =>
-      parseVideoEvidence(item, status),
-    ),
+    passages,
+    videos,
   };
 }
 
@@ -646,16 +874,15 @@ function parsePassage(
     ],
     status,
   );
-  const hash = stringValue(object.source_sha256, status);
-  if (!SHA256.test(hash)) throw unexpected(status);
+  const hash = exactSha256(object.source_sha256, status);
   return {
-    query: stringValue(object.query, status),
-    passage_id: stringValue(object.passage_id, status),
+    query: nonEmptyString(object.query, status, 500),
+    passage_id: exactSha256(object.passage_id, status),
     video_id: exactVideoId(object.video_id, status),
-    channel_id: stringValue(object.channel_id, status),
-    rank: finiteNumber(object.rank, status),
-    url: stringValue(object.url, status),
-    excerpt: stringValue(object.excerpt, status),
+    channel_id: stringValue(object.channel_id, status, 300),
+    rank: positiveSafeInteger(object.rank, status, MAX_RESEARCH_EVIDENCE),
+    url: stringValue(object.url, status, 2_048),
+    excerpt: nonEmptyString(object.excerpt, status, 1_500),
     source_sha256: hash,
   };
 }
@@ -679,13 +906,17 @@ function parseVideoEvidence(
     status,
   );
   return {
-    query: stringValue(object.query, status),
+    query: nonEmptyString(object.query, status, 500),
     video_id: exactVideoId(object.video_id, status),
-    source_keys: stringArray(object.source_keys, status),
-    title: stringValue(object.title, status),
-    published_at: nullableString(object.published_at, status),
+    source_keys: stringArray(object.source_keys, status, 10, 200),
+    title: nonEmptyString(object.title, status, 1_000),
+    published_at: nullableDate(object.published_at, status),
     rank: finiteNumber(object.rank, status),
-    watch_url: stringValue(object.watch_url, status),
+    watch_url: canonicalWatchUrl(
+      object.watch_url,
+      exactVideoId(object.video_id, status),
+      status,
+    ),
   };
 }
 
@@ -708,13 +939,26 @@ function parseCandidate(value: unknown, status: number): ResearchCandidate {
   );
   return {
     video_id: exactVideoId(object.video_id, status),
-    title: stringValue(object.title, status),
-    channel_id: nullableString(object.channel_id, status),
-    channel_title: nullableString(object.channel_title, status),
-    published_at: nullableString(object.published_at, status),
-    watch_url: stringValue(object.watch_url, status),
-    matched_queries: stringArray(object.matched_queries, status),
-    original_rank: finiteNumber(object.original_rank, status),
+    title: stringValue(object.title, status, 1_000),
+    channel_id: nullableString(object.channel_id, status, 300),
+    channel_title: nullableString(object.channel_title, status, 300),
+    published_at: nullableDate(object.published_at, status),
+    watch_url: canonicalWatchUrl(
+      object.watch_url,
+      exactVideoId(object.video_id, status),
+      status,
+    ),
+    matched_queries: stringArray(
+      object.matched_queries,
+      status,
+      MAX_RESEARCH_QUERIES,
+      500,
+    ),
+    original_rank: positiveSafeInteger(
+      object.original_rank,
+      status,
+      MAX_RESEARCH_CANDIDATES,
+    ),
     status: enumValue(object.status, CANDIDATE_STATUSES, status),
   };
 }
@@ -726,24 +970,52 @@ function parseAcquisitionHistory(
   const object = record(value, status);
   requireExactKeys(object, ["attempt_id", "status", "items"], status);
   return {
-    attempt_id: stringValue(object.attempt_id, status),
-    status: stringValue(object.status, status),
-    items: arrayValue(object.items, status).map((item) => {
-      const outcome = record(item, status);
-      requireExactKeys(
-        outcome,
-        ["video_id", "status", "error_code", "source_sha256"],
-        status,
-      );
-      const hash = nullableString(outcome.source_sha256, status);
-      if (hash !== null && !SHA256.test(hash)) throw unexpected(status);
-      return {
-        video_id: exactVideoId(outcome.video_id, status),
-        status: enumValue(outcome.status, CANDIDATE_STATUSES, status),
-        error_code: nullableString(outcome.error_code, status),
-        source_sha256: hash,
-      };
-    }),
+    attempt_id: nonEmptyString(object.attempt_id, status, 200),
+    status: enumValue(object.status, ACQUISITION_ATTEMPT_STATUSES, status),
+    items: arrayValue(object.items, status, 5).map((item) =>
+      parseAcquisitionOutcome(item, status),
+    ),
+  };
+}
+
+function parseAcquisitionOutcome(
+  value: unknown,
+  status: number,
+): SourceAcquisitionResult["items"][number] {
+  const object = record(value, status);
+  requireExactKeys(
+    object,
+    ["video_id", "status", "error_code", "source_sha256"],
+    status,
+  );
+  const itemStatus = enumValue(
+    object.status,
+    ACQUISITION_ITEM_STATUSES,
+    status,
+  );
+  const errorCode =
+    object.error_code === null
+      ? null
+      : enumValue(object.error_code, ACQUISITION_ERROR_CODES, status);
+  const hash =
+    object.source_sha256 === null
+      ? null
+      : exactSha256(object.source_sha256, status);
+  if (
+    ((itemStatus === "acquired" || itemStatus === "already_present") &&
+      (errorCode !== null || hash === null)) ||
+    (itemStatus === "no_transcript" &&
+      (errorCode !== "no_transcript" || hash !== null)) ||
+    (itemStatus === "failed_retryable" &&
+      (errorCode === null || errorCode === "no_transcript"))
+  ) {
+    throw unexpected(status);
+  }
+  return {
+    video_id: exactVideoId(object.video_id, status),
+    status: itemStatus,
+    error_code: errorCode,
+    source_sha256: hash,
   };
 }
 
@@ -755,32 +1027,36 @@ function parseTimeline(value: unknown, status: number): ResearchTimeline {
     status,
   );
   return {
-    decisions: arrayValue(object.decisions, status).map((item) => {
-      const decision = record(item, status);
-      requireExactKeys(decision, ["action", "created_at"], status);
-      return {
-        action: stringValue(decision.action, status),
-        created_at: stringValue(decision.created_at, status),
-      };
-    }),
-    events: arrayValue(object.events, status).map((item) => {
-      const event = record(item, status);
-      requireExactKeys(
-        event,
-        ["event_id", "from_state", "to_state", "event_code", "created_at"],
-        status,
-      );
-      return {
-        event_id: count(event.event_id, status),
-        from_state:
-          event.from_state === null
-            ? null
-            : enumValue(event.from_state, RESEARCH_STATES, status),
-        to_state: enumValue(event.to_state, RESEARCH_STATES, status),
-        event_code: stringValue(event.event_code, status),
-        created_at: stringValue(event.created_at, status),
-      };
-    }),
+    decisions: arrayValue(object.decisions, status, MAX_TIMELINE_ITEMS).map(
+      (item) => {
+        const decision = record(item, status);
+        requireExactKeys(decision, ["action", "created_at"], status);
+        return {
+          action: nonEmptyString(decision.action, status, 500),
+          created_at: timestampString(decision.created_at, status),
+        };
+      },
+    ),
+    events: arrayValue(object.events, status, MAX_TIMELINE_ITEMS).map(
+      (item) => {
+        const event = record(item, status);
+        requireExactKeys(
+          event,
+          ["event_id", "from_state", "to_state", "event_code", "created_at"],
+          status,
+        );
+        return {
+          event_id: count(event.event_id, status),
+          from_state:
+            event.from_state === null
+              ? null
+              : enumValue(event.from_state, RESEARCH_STATES, status),
+          to_state: enumValue(event.to_state, RESEARCH_STATES, status),
+          event_code: nonEmptyString(event.event_code, status, 500),
+          created_at: timestampString(event.created_at, status),
+        };
+      },
+    ),
     decisions_truncated: booleanValue(object.decisions_truncated, status),
     events_truncated: booleanValue(object.events_truncated, status),
   };
@@ -799,16 +1075,29 @@ function parseExports(payload: unknown, status: number): ExportsResponse {
     ],
     status,
   );
+  const limit = pageLimit(object.limit, status);
+  const items = arrayValue(object.items, status, limit).map((item) =>
+    parseExportItem(item, status),
+  );
+  const truncated = booleanValue(object.truncated, status);
+  const inventoryComplete = booleanValue(object.inventory_complete, status);
+  const inventoryLimit = boundedCount(object.inventory_limit, status, 32);
+  const inventoryExamined = boundedCount(
+    object.inventory_examined,
+    status,
+    inventoryLimit,
+  );
+  if (inventoryLimit !== 32 || (!inventoryComplete && !truncated)) {
+    throw unexpected(status);
+  }
   return {
     schema_version: 1,
-    items: arrayValue(object.items, status).map((item) =>
-      parseExportItem(item, status),
-    ),
-    limit: count(object.limit, status),
-    truncated: booleanValue(object.truncated, status),
-    inventory_complete: booleanValue(object.inventory_complete, status),
-    inventory_examined: count(object.inventory_examined, status),
-    inventory_limit: count(object.inventory_limit, status),
+    items,
+    limit,
+    truncated,
+    inventory_complete: inventoryComplete,
+    inventory_examined: inventoryExamined,
+    inventory_limit: inventoryLimit,
   };
 }
 
@@ -826,17 +1115,26 @@ function parseExportItem(value: unknown, status: number): ExportItem {
     ],
     status,
   );
-  const exportId = stringValue(object.export_id, status);
-  if (!SHA256.test(exportId)) throw unexpected(status);
-  const openUrl = nullableString(object.open_url, status);
+  const exportId = exactSha256(object.export_id, status);
+  const openUrl = nullableString(object.open_url, status, 110);
   const match = openUrl?.match(EXPORT_OPEN_URL) ?? null;
   if (openUrl !== null && match?.[1] !== exportId) throw unexpected(status);
   const manifestValid = booleanValue(object.manifest_valid, status);
   if (manifestValid !== (openUrl !== null)) throw unexpected(status);
+  const sessionId = nullableString(object.session_id, status, 128);
+  if (sessionId !== null && !SESSION_ID.test(sessionId))
+    throw unexpected(status);
+  const createdAt = nullableTimestamp(object.created_at, status);
+  if (
+    manifestValid !== (sessionId !== null && createdAt !== null) ||
+    (!manifestValid && (sessionId !== null || createdAt !== null))
+  ) {
+    throw unexpected(status);
+  }
   return {
-    name: stringValue(object.name, status),
-    session_id: nullableString(object.session_id, status),
-    created_at: nullableString(object.created_at, status),
+    name: nonEmptyString(object.name, status, 255),
+    session_id: sessionId,
+    created_at: createdAt,
     manifest_valid: manifestValid,
     export_id: exportId,
     open_url: openUrl,
@@ -855,7 +1153,7 @@ function parseJob(value: unknown, status: number): Job {
     ["job_id", "kind", "status", "result", "error_code"],
     status,
   );
-  const jobId = stringValue(object.job_id, status);
+  const jobId = stringValue(object.job_id, status, 200);
   if (!JOB_ID.test(jobId)) throw unexpected(status);
   const kind = enumValue(object.kind, JOB_KINDS, status);
   if (object.status === "queued" || object.status === "running") {
@@ -901,7 +1199,11 @@ function parseJobResult(
   value: unknown,
   status: number,
 ): Job["result"] & object {
-  if (isRecord(value) && Object.keys(value).length === 1 && value.truncated === true) {
+  if (
+    isRecord(value) &&
+    Object.keys(value).length === 1 &&
+    value.truncated === true
+  ) {
     return { truncated: true };
   }
   const possibleError = tryJobResultError(value, status);
@@ -953,40 +1255,77 @@ function parseSourcePreview(
     ],
     status,
   );
-  const fingerprint = stringValue(object.fingerprint, status);
-  if (!SHA256.test(fingerprint)) throw unexpected(status);
-  const videoIds = arrayValue(object.video_ids, status).map((item) =>
-    exactVideoId(item, status),
+  const fingerprint = exactSha256(object.fingerprint, status);
+  const videoIds = arrayValue(
+    object.video_ids,
+    status,
+    MAX_SELECTED_VIDEOS,
+  ).map((item) => exactVideoId(item, status));
+  if (new Set(videoIds).size !== videoIds.length) throw unexpected(status);
+  const videos = arrayValue(object.videos, status, MAX_SELECTED_VIDEOS).map(
+    (item) => {
+      const video = record(item, status);
+      requireExactKeys(
+        video,
+        ["video_id", "title", "published_at", "url"],
+        status,
+      );
+      const videoId = exactVideoId(video.video_id, status);
+      if (!videoIds.includes(videoId)) throw unexpected(status);
+      return {
+        video_id: videoId,
+        title: stringValue(video.title, status, 300),
+        published_at: sourcePreviewDate(video.published_at, status),
+        url: canonicalWatchUrl(video.url, videoId, status),
+      };
+    },
   );
-  const videos = arrayValue(object.videos, status).map((item) => {
-    const video = record(item, status);
-    requireExactKeys(
-      video,
-      ["video_id", "title", "published_at", "url"],
-      status,
-    );
-    return {
-      video_id: exactVideoId(video.video_id, status),
-      title: stringValue(video.title, status),
-      published_at: nullableString(video.published_at, status),
-      url: stringValue(video.url, status),
-    };
-  });
-  if (count(object.videos_returned, status) !== videos.length)
+  const sourceKind = enumValue(object.source_kind, SOURCE_KINDS, status);
+  const selectedCount = boundedCount(
+    object.selected_count,
+    status,
+    MAX_SELECTED_VIDEOS,
+  );
+  const videosTruncated = booleanValue(object.videos_truncated, status);
+  const requiresConfirmation = booleanValue(
+    object.requires_confirmation,
+    status,
+  );
+  const language = nonEmptyString(object.language, status, 32);
+  if (
+    selectedCount !== videoIds.length ||
+    count(object.videos_returned, status) !== videos.length ||
+    new Set(videos.map((video) => video.video_id)).size !== videos.length ||
+    videos.some((video, index) => video.video_id !== videoIds[index]) ||
+    (!videosTruncated && videos.length !== selectedCount) ||
+    (videosTruncated && videos.length >= selectedCount) ||
+    videos.length > selectedCount ||
+    requiresConfirmation !== (sourceKind !== "video") ||
+    !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(language)
+  ) {
     throw unexpected(status);
+  }
   return {
     fingerprint,
-    source_kind: stringValue(object.source_kind, status),
-    selected_count: count(object.selected_count, status),
+    source_kind: sourceKind,
+    selected_count: selectedCount,
     video_ids: videoIds,
     videos,
     videos_returned: videos.length,
-    videos_truncated: booleanValue(object.videos_truncated, status),
-    language: stringValue(object.language, status),
+    videos_truncated: videosTruncated,
+    language,
     analyze: booleanValue(object.analyze, status),
-    requires_confirmation: booleanValue(object.requires_confirmation, status),
-    excluded_count: count(object.excluded_count, status),
-    discovery_error_count: count(object.discovery_error_count, status),
+    requires_confirmation: requiresConfirmation,
+    excluded_count: boundedCount(
+      object.excluded_count,
+      status,
+      MAX_PLAN_IDENTITY_BYTES,
+    ),
+    discovery_error_count: boundedCount(
+      object.discovery_error_count,
+      status,
+      MAX_PLAN_IDENTITY_BYTES,
+    ),
   };
 }
 
@@ -1008,29 +1347,59 @@ function parseSourceAcquisition(
     ],
     status,
   );
+  const selected = boundedCount(object.selected, status, MAX_ACQUISITION_ITEMS);
+  const transcriptsReady = boundedCount(
+    object.transcripts_ready,
+    status,
+    selected,
+  );
+  const insightsReady = boundedCount(
+    object.insights_ready,
+    status,
+    transcriptsReady,
+  );
+  const failureCount = boundedCount(
+    object.failure_count,
+    status,
+    MAX_ACQUISITION_DIAGNOSTICS,
+  );
+  const exclusionCount = boundedCount(
+    object.exclusion_count,
+    status,
+    MAX_PLAN_IDENTITY_BYTES,
+  );
+  const items = arrayValue(object.items, status, MAX_ACQUISITION_ITEMS).map(
+    (item) => parseAcquisitionOutcome(item, status),
+  );
+  const minimumFailures = items.filter(
+    (item) => item.error_code !== null,
+  ).length;
+  const readyItems = items.filter((item) => item.source_sha256 !== null).length;
+  const exitCode = count(object.exit_code, status);
+  const expectedExitCode =
+    selected > 0 && transcriptsReady === 0
+      ? 1
+      : failureCount > 0 || transcriptsReady < selected
+        ? transcriptsReady > 0
+          ? 4
+          : 1
+        : 0;
+  if (
+    items.length !== selected ||
+    readyItems !== transcriptsReady ||
+    failureCount < minimumFailures ||
+    exitCode !== expectedExitCode
+  ) {
+    throw unexpected(status);
+  }
   return {
-    selected: count(object.selected, status),
-    transcripts_ready: count(object.transcripts_ready, status),
-    insights_ready: count(object.insights_ready, status),
-    failure_count: count(object.failure_count, status),
-    exclusion_count: count(object.exclusion_count, status),
-    items: arrayValue(object.items, status).map((item) => {
-      const result = record(item, status);
-      requireExactKeys(
-        result,
-        ["video_id", "status", "error_code", "source_sha256"],
-        status,
-      );
-      const hash = nullableString(result.source_sha256, status);
-      if (hash !== null && !SHA256.test(hash)) throw unexpected(status);
-      return {
-        video_id: exactVideoId(result.video_id, status),
-        status: stringValue(result.status, status),
-        error_code: nullableString(result.error_code, status),
-        source_sha256: hash,
-      };
-    }),
-    exit_code: count(object.exit_code, status),
+    selected,
+    transcripts_ready: transcriptsReady,
+    insights_ready: insightsReady,
+    failure_count: failureCount,
+    exclusion_count: exclusionCount,
+    items,
+    exit_code: exitCode,
   };
 }
 
@@ -1039,7 +1408,7 @@ function parseJobAccepted(
   status: number,
 ): JobAcceptedResponse {
   const object = versioned(payload, ["job_id"], status);
-  const jobId = stringValue(object.job_id, status);
+  const jobId = stringValue(object.job_id, status, 200);
   if (!JOB_ID.test(jobId)) throw unexpected(status);
   return { schema_version: 1, job_id: jobId };
 }
@@ -1055,13 +1424,12 @@ function parseExportCreated(
     ["name", "manifest_sha256", "dossier_sha256"],
     status,
   );
-  const manifest = stringValue(result.manifest_sha256, status);
-  const dossier = stringValue(result.dossier_sha256, status);
-  if (!SHA256.test(manifest) || !SHA256.test(dossier)) throw unexpected(status);
+  const manifest = exactSha256(result.manifest_sha256, status);
+  const dossier = exactSha256(result.dossier_sha256, status);
   return {
     schema_version: 1,
     export: {
-      name: stringValue(result.name, status),
+      name: nonEmptyString(result.name, status, 255),
       manifest_sha256: manifest,
       dossier_sha256: dossier,
     },
@@ -1144,22 +1512,43 @@ function requireSchemaVersion(value: unknown, status: number): void {
   if (value !== 1) throw unexpected(status);
 }
 
-function arrayValue(value: unknown, status: number): readonly unknown[] {
-  if (!Array.isArray(value)) throw unexpected(status);
+function arrayValue(
+  value: unknown,
+  status: number,
+  maximumItems: number,
+): readonly unknown[] {
+  if (!Array.isArray(value) || value.length > maximumItems)
+    throw unexpected(status);
   return value;
 }
 
-function stringArray(value: unknown, status: number): readonly string[] {
-  return arrayValue(value, status).map((item) => stringValue(item, status));
+function stringArray(
+  value: unknown,
+  status: number,
+  maximumItems: number,
+  maximumCodePoints = MAX_PUBLIC_STRING_CODEPOINTS,
+): readonly string[] {
+  return arrayValue(value, status, maximumItems).map((item) =>
+    stringValue(item, status, maximumCodePoints),
+  );
 }
 
-function stringValue(value: unknown, status: number): string {
-  if (typeof value !== "string") throw unexpected(status);
+function stringValue(
+  value: unknown,
+  status: number,
+  maximumCodePoints = MAX_PUBLIC_STRING_CODEPOINTS,
+): string {
+  if (typeof value !== "string" || value.length > maximumCodePoints)
+    throw unexpected(status);
   return value;
 }
 
-function nullableString(value: unknown, status: number): string | null {
-  return value === null ? null : stringValue(value, status);
+function nullableString(
+  value: unknown,
+  status: number,
+  maximumCodePoints = MAX_PUBLIC_STRING_CODEPOINTS,
+): string | null {
+  return value === null ? null : stringValue(value, status, maximumCodePoints);
 }
 
 function booleanValue(value: unknown, status: number): boolean {
@@ -1175,7 +1564,23 @@ function finiteNumber(value: unknown, status: number): number {
 
 function count(value: unknown, status: number): number {
   const parsed = finiteNumber(value, status);
-  if (!Number.isInteger(parsed) || parsed < 0) throw unexpected(status);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw unexpected(status);
+  return parsed;
+}
+
+function boundedCount(value: unknown, status: number, maximum: number): number {
+  const parsed = count(value, status);
+  if (parsed > maximum) throw unexpected(status);
+  return parsed;
+}
+
+function positiveSafeInteger(
+  value: unknown,
+  status: number,
+  maximum: number,
+): number {
+  const parsed = boundedCount(value, status, maximum);
+  if (parsed < 1) throw unexpected(status);
   return parsed;
 }
 
@@ -1201,10 +1606,97 @@ function requiredAction(
   return enumValue(value, REQUIRED_ACTIONS, status);
 }
 
+function requireActionMatchesState(
+  state: ResearchState,
+  action:
+    "confirm_sufficiency_or_refresh" | "approve_candidates_or_cancel" | null,
+  status: number,
+): void {
+  const expected =
+    state === "awaiting_sufficiency_confirmation"
+      ? "confirm_sufficiency_or_refresh"
+      : state === "awaiting_candidate_approval"
+        ? "approve_candidates_or_cancel"
+        : null;
+  if (action !== expected) throw unexpected(status);
+}
+
 function exactVideoId(value: unknown, status: number): string {
   const parsed = stringValue(value, status);
   if (!VIDEO_ID.test(parsed)) throw unexpected(status);
   return parsed;
+}
+
+function exactSha256(value: unknown, status: number): string {
+  const parsed = stringValue(value, status, 64);
+  if (!SHA256.test(parsed)) throw unexpected(status);
+  return parsed;
+}
+
+function nonEmptyString(
+  value: unknown,
+  status: number,
+  maximumCodePoints: number,
+): string {
+  const parsed = stringValue(value, status, maximumCodePoints);
+  if (parsed.trim() === "") throw unexpected(status);
+  return parsed;
+}
+
+function canonicalWatchUrl(
+  value: unknown,
+  videoId: string,
+  status: number,
+): string {
+  const parsed = stringValue(value, status, 2_048);
+  if (parsed !== `https://www.youtube.com/watch?v=${videoId}`)
+    throw unexpected(status);
+  return parsed;
+}
+
+function nullableDate(value: unknown, status: number): string | null {
+  if (value === null) return null;
+  const parsed = stringValue(value, status, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(parsed)) throw unexpected(status);
+  const date = new Date(`${parsed}T00:00:00Z`);
+  if (
+    !Number.isFinite(date.valueOf()) ||
+    date.toISOString().slice(0, 10) !== parsed
+  ) {
+    throw unexpected(status);
+  }
+  return parsed;
+}
+
+function sourcePreviewDate(value: unknown, status: number): string {
+  if (value === "unknown") return "unknown";
+  const parsed = nullableDate(value, status);
+  if (parsed === null) throw unexpected(status);
+  return parsed;
+}
+
+function timestampString(value: unknown, status: number): string {
+  const parsed = nonEmptyString(value, status, 64);
+  if (!Number.isFinite(Date.parse(parsed))) throw unexpected(status);
+  return parsed;
+}
+
+function nullableTimestamp(value: unknown, status: number): string | null {
+  return value === null ? null : timestampString(value, status);
+}
+
+function pageLimit(value: unknown, status: number): number {
+  return positiveSafeInteger(value, status, MAX_PAGE_SIZE);
+}
+
+function isPublicErrorCode(
+  value: string,
+): value is Exclude<PublicApiErrorCode, "unexpected_response"> {
+  return PUBLIC_ERROR_CODES.has(value);
+}
+
+function isAbortError(value: unknown): value is Error {
+  return value instanceof Error && value.name === "AbortError";
 }
 
 function unexpected(status: number): PublicApiError {

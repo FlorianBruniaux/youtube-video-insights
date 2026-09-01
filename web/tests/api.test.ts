@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import backendSourceAcquisition from "./fixtures/backend-source-acquisition.json";
+
 const STATUS_FIXTURE = {
   schema_version: 1,
   status: "ok",
@@ -121,6 +123,22 @@ describe("safe API requests", () => {
 });
 
 describe("strict response validation", () => {
+  it("accepts the source acquisition fixture emitted by the current Python projection", async () => {
+    const fixture = succeededJob(
+      "source_acquisition",
+      backendSourceAcquisition,
+    );
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(fixture)),
+    );
+    const { apiGet } = await import("../src/lib/api");
+
+    await expect(apiGet("/api/v1/jobs/job-contract-1")).resolves.toEqual(
+      fixture,
+    );
+  });
+
   it("maps non-JSON server output to a fixed error without exposing response text", async () => {
     vi.stubGlobal(
       "fetch",
@@ -190,14 +208,12 @@ describe("strict response validation", () => {
   it("rejects a malformed successful payload instead of casting unknown JSON", async () => {
     vi.stubGlobal(
       "fetch",
-      vi
-        .fn<typeof fetch>()
-        .mockResolvedValue(
-          jsonResponse({
-            ...STATUS_FIXTURE,
-            corpus: { health: "ready", videos: "12" },
-          }),
-        ),
+      vi.fn<typeof fetch>().mockResolvedValue(
+        jsonResponse({
+          ...STATUS_FIXTURE,
+          corpus: { health: "ready", videos: "12" },
+        }),
+      ),
     );
     const { apiGet } = await import("../src/lib/api");
 
@@ -324,6 +340,317 @@ describe("strict response validation", () => {
   });
 });
 
+describe("adversarial response boundaries", () => {
+  it.each(["get", "bootstrap", "post"] as const)(
+    "preserves AbortError raised while decoding a %s response",
+    async (stage) => {
+      const abort = new DOMException("cancelled while reading", "AbortError");
+      const abortedResponse = new Response(null, {
+        status: stage === "post" ? 202 : 200,
+        headers: { "Content-Type": "application/json" },
+      });
+      vi.spyOn(abortedResponse, "json").mockRejectedValue(abort);
+      const fetchSpy = vi.fn<typeof fetch>();
+      if (stage === "post") {
+        fetchSpy
+          .mockResolvedValueOnce(
+            jsonResponse({ schema_version: 1, mutation_token: "t".repeat(43) }),
+          )
+          .mockResolvedValueOnce(abortedResponse);
+      } else {
+        fetchSpy.mockResolvedValue(abortedResponse);
+      }
+      vi.stubGlobal("fetch", fetchSpy);
+      const { apiGet, apiPost } = await import("../src/lib/api");
+
+      const operation =
+        stage === "get"
+          ? apiGet("/api/v1/status")
+          : apiPost("/api/v1/sources/preview", {});
+
+      await expect(operation).rejects.toBe(abort);
+    },
+  );
+
+  it("rejects an oversized Content-Length before JSON materialization", async () => {
+    const response = new Response(JSON.stringify(STATUS_FIXTURE), {
+      status: 200,
+      headers: {
+        "Content-Type": "application/json",
+        "Content-Length": "4194305",
+      },
+    });
+    const jsonSpy = vi.spyOn(response, "json");
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response));
+    const { apiGet } = await import("../src/lib/api");
+
+    await expect(apiGet("/api/v1/status")).rejects.toMatchObject({
+      code: "unexpected_response",
+      status: 200,
+    });
+    expect(jsonSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects an oversized streamed body even without Content-Length", async () => {
+    const oversized = `{"padding":"${"x".repeat(4_194_305)}"}`;
+    const response = new Response(oversized, {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(response, "json");
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockResolvedValue(response));
+    const { apiGet } = await import("../src/lib/api");
+
+    await expect(apiGet("/api/v1/status")).rejects.toMatchObject({
+      code: "unexpected_response",
+      status: 200,
+    });
+    expect(jsonSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects integers that JavaScript cannot represent safely", async () => {
+    const fixture = {
+      ...STATUS_FIXTURE,
+      corpus: { ...STATUS_FIXTURE.corpus, videos: Number.MAX_SAFE_INTEGER + 1 },
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(fixture)),
+    );
+    const { apiGet } = await import("../src/lib/api");
+
+    await expect(apiGet("/api/v1/status")).rejects.toMatchObject({
+      code: "unexpected_response",
+    });
+  });
+
+  it("rejects source strings and arrays beyond backend projection limits", async () => {
+    const fixture = sourceResponseFixture({
+      title: "t".repeat(1_001),
+      languages: Array.from({ length: 21 }, (_, index) => `l${index}`),
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(fixture)),
+    );
+    const { apiGet } = await import("../src/lib/api");
+
+    await expect(
+      apiGet("/api/v1/sources?limit=20&offset=0"),
+    ).rejects.toMatchObject({
+      code: "unexpected_response",
+    });
+  });
+
+  it("rejects an unknown source kind in a completed preview job", async () => {
+    const fixture = succeededJob("source_preview", {
+      ...sourcePreviewResult(),
+      source_kind: "remote_shell",
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(fixture)),
+    );
+    const { apiGet } = await import("../src/lib/api");
+
+    await expect(apiGet("/api/v1/jobs/job-contract-1")).rejects.toMatchObject({
+      code: "unexpected_response",
+    });
+  });
+
+  it.each([{ videos_truncated: true }, { language: "../private" }])(
+    "rejects an inconsistent source preview result %#",
+    async (change) => {
+      const fixture = succeededJob("source_preview", {
+        ...sourcePreviewResult(),
+        ...change,
+      });
+      vi.stubGlobal(
+        "fetch",
+        vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(fixture)),
+      );
+      const { apiGet } = await import("../src/lib/api");
+
+      await expect(apiGet("/api/v1/jobs/job-contract-1")).rejects.toMatchObject(
+        {
+          code: "unexpected_response",
+        },
+      );
+    },
+  );
+
+  it.each([
+    { items: [{ ...acquisitionItem(), status: "compromised" }] },
+    { items: [{ ...acquisitionItem(), error_code: "download_failed" }] },
+    { selected: 2 },
+    { transcripts_ready: 2 },
+    { insights_ready: 2 },
+    { failure_count: 1 },
+    { exit_code: 4 },
+  ])("rejects an inconsistent source acquisition result %#", async (change) => {
+    const fixture = succeededJob("source_acquisition", {
+      ...sourceAcquisitionResult(),
+      ...change,
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>().mockResolvedValue(jsonResponse(fixture)),
+    );
+    const { apiGet } = await import("../src/lib/api");
+
+    await expect(apiGet("/api/v1/jobs/job-contract-1")).rejects.toMatchObject({
+      code: "unexpected_response",
+    });
+  });
+
+  it.each([
+    [409, "invalid_request"],
+    [400, "stale_revision"],
+    [503, "forbidden"],
+    [429, "server_busy"],
+  ] as const)(
+    "rejects incompatible HTTP status %i for error code %s",
+    async (status, code) => {
+      vi.stubGlobal(
+        "fetch",
+        vi
+          .fn<typeof fetch>()
+          .mockResolvedValue(
+            jsonResponse({ schema_version: 1, error: { code } }, status),
+          ),
+      );
+      const { apiGet } = await import("../src/lib/api");
+
+      await expect(apiGet("/api/v1/status")).rejects.toMatchObject({
+        code: "unexpected_response",
+        status,
+      });
+    },
+  );
+
+  it("clears a rejected mutation token and bootstraps only on the next explicit POST", async () => {
+    const firstToken = "a".repeat(43);
+    const secondToken = "b".repeat(43);
+    const fetchSpy = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ schema_version: 1, mutation_token: firstToken }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ schema_version: 1, error: { code: "forbidden" } }, 403),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({ schema_version: 1, mutation_token: secondToken }),
+      )
+      .mockResolvedValueOnce(jsonResponse(SOURCE_PREVIEW_FIXTURE, 202));
+    vi.stubGlobal("fetch", fetchSpy);
+    const { apiPost } = await import("../src/lib/api");
+
+    await expect(apiPost("/api/v1/sources/preview", {})).rejects.toMatchObject({
+      code: "forbidden",
+      status: 403,
+    });
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    await expect(apiPost("/api/v1/sources/preview", {})).resolves.toEqual(
+      SOURCE_PREVIEW_FIXTURE,
+    );
+    expect(fetchSpy).toHaveBeenCalledTimes(4);
+    expect(fetchSpy.mock.calls[1]?.[1]?.headers).toEqual({
+      "Content-Type": "application/json",
+      "X-YT-Insights-Token": firstToken,
+    });
+    expect(fetchSpy.mock.calls[3]?.[1]?.headers).toEqual({
+      "Content-Type": "application/json",
+      "X-YT-Insights-Token": secondToken,
+    });
+  });
+});
+
+function sourceResponseFixture(
+  change: Partial<{
+    title: string;
+    languages: readonly string[];
+  }> = {},
+): object {
+  return {
+    schema_version: 1,
+    items: [
+      {
+        video_id: "abc123DEF45",
+        title: change.title ?? "Local model",
+        published_at: "2026-08-20",
+        languages: change.languages ?? ["en", "fr"],
+        sources: ["example"],
+        url: "https://www.youtube.com/watch?v=abc123DEF45",
+        artifact_count: 2,
+        transcript_state: "available",
+        index_state: "indexed",
+      },
+    ],
+    limit: 20,
+    offset: 0,
+  };
+}
+
+function sourcePreviewResult(): object {
+  return {
+    fingerprint: "a".repeat(64),
+    source_kind: "channel",
+    selected_count: 1,
+    video_ids: ["abc123DEF45"],
+    videos: [
+      {
+        video_id: "abc123DEF45",
+        title: "Local model",
+        published_at: "2026-08-20",
+        url: "https://www.youtube.com/watch?v=abc123DEF45",
+      },
+    ],
+    videos_returned: 1,
+    videos_truncated: false,
+    language: "fr",
+    analyze: false,
+    requires_confirmation: true,
+    excluded_count: 0,
+    discovery_error_count: 0,
+  };
+}
+
+function acquisitionItem(): object {
+  return {
+    video_id: "abc123DEF45",
+    status: "acquired",
+    error_code: null,
+    source_sha256: "b".repeat(64),
+  };
+}
+
+function sourceAcquisitionResult(): object {
+  return {
+    selected: 1,
+    transcripts_ready: 1,
+    insights_ready: 0,
+    failure_count: 0,
+    exclusion_count: 0,
+    items: [acquisitionItem()],
+    exit_code: 0,
+  };
+}
+
+function succeededJob(kind: string, result: object): object {
+  return {
+    schema_version: 1,
+    job: {
+      job_id: "job-contract-1",
+      kind,
+      status: "succeeded",
+      result,
+      error_code: null,
+    },
+  };
+}
+
 function researchFixture(): object {
   return {
     schema_version: 1,
@@ -342,11 +669,14 @@ function researchFixture(): object {
     },
     assessment: {
       created_at: "2026-08-31T10:05:00+00:00",
-      snapshot: { search_generation: "s1", catalog_generation: "c1" },
+      snapshot: {
+        search_generation: "d".repeat(64),
+        catalog_generation: "e".repeat(64),
+      },
       coverage: {
-        matched_passages: 3,
-        matched_videos: 2,
-        distinct_channels: 2,
+        matched_passages: 1,
+        matched_videos: 1,
+        distinct_channels: 1,
         queries_with_zero_hits: [],
         newest_source_published_at: "2026-08-20",
         unknown_publication_date_count: 0,
@@ -361,9 +691,9 @@ function researchFixture(): object {
       passages: [
         {
           query: "local inference",
-          passage_id: "p".repeat(64),
+          passage_id: "c".repeat(64),
           video_id: "abc123DEF45",
-          channel_id: "channel-1",
+          channel_id: `UC${"x".repeat(22)}`,
           rank: 1,
           url: "https://www.youtube.com/watch?v=abc123DEF45&t=12s",
           excerpt: "Local evidence",

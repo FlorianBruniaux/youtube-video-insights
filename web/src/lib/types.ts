@@ -77,6 +77,24 @@ export type CandidateStatus =
   | "already_present"
   | "no_transcript"
   | "failed_retryable";
+export type SourceKind = "video" | "playlist" | "channel" | "batch";
+export type AcquisitionItemStatus =
+  "acquired" | "already_present" | "no_transcript" | "failed_retryable";
+export type AcquisitionErrorCode =
+  | "acquisition_unavailable"
+  | "cache_read_failed"
+  | "download_failed"
+  | "no_transcript"
+  | "acquisition_failed";
+export type ResearchErrorCode =
+  | "acquisition_in_progress"
+  | "acquisition_unavailable"
+  | "discovery_unavailable"
+  | "index_refresh_failed"
+  | "local_index_unavailable"
+  | "partial_acquisition_failed"
+  | "retry_in_progress"
+  | "research_unavailable";
 
 export interface ResearchSessionCore {
   readonly session_id: string;
@@ -170,14 +188,14 @@ export interface ResearchCandidate {
 
 export interface AcquisitionHistoryItem {
   readonly video_id: string;
-  readonly status: CandidateStatus;
-  readonly error_code: string | null;
+  readonly status: AcquisitionItemStatus;
+  readonly error_code: AcquisitionErrorCode | null;
   readonly source_sha256: string | null;
 }
 
 export interface AcquisitionHistoryAttempt {
   readonly attempt_id: string;
-  readonly status: string;
+  readonly status: "running" | "failed_retryable" | "completed";
   readonly items: readonly AcquisitionHistoryItem[];
 }
 
@@ -202,7 +220,7 @@ interface ResearchResponseBase {
   readonly session: ResearchSessionCore;
   readonly assessment: ResearchAssessment | null;
   readonly candidates: readonly ResearchCandidate[] | null;
-  readonly error_code: string | null;
+  readonly error_code: ResearchErrorCode | null;
   readonly acquisition_history: readonly AcquisitionHistoryAttempt[];
   readonly acquisition_history_truncated: boolean;
   readonly history?: ResearchTimeline;
@@ -236,13 +254,13 @@ export interface ExportsResponse {
 
 export interface SourcePreviewResult {
   readonly fingerprint: string;
-  readonly source_kind: string;
+  readonly source_kind: SourceKind;
   readonly selected_count: number;
   readonly video_ids: readonly string[];
   readonly videos: readonly {
     readonly video_id: string;
     readonly title: string;
-    readonly published_at: string | null;
+    readonly published_at: string;
     readonly url: string;
   }[];
   readonly videos_returned: number;
@@ -262,8 +280,8 @@ export interface SourceAcquisitionResult {
   readonly exclusion_count: number;
   readonly items: readonly {
     readonly video_id: string;
-    readonly status: CandidateStatus | string;
-    readonly error_code: string | null;
+    readonly status: AcquisitionItemStatus;
+    readonly error_code: AcquisitionErrorCode | null;
     readonly source_sha256: string | null;
   }[];
   readonly exit_code: number;

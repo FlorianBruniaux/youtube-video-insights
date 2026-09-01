@@ -1,0 +1,16 @@
+{
+  "exclusion_count": 0,
+  "exit_code": 0,
+  "failure_count": 0,
+  "insights_ready": 0,
+  "items": [
+    {
+      "error_code": null,
+      "source_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "status": "acquired",
+      "video_id": "abc123DEF45"
+    }
+  ],
+  "selected": 1,
+  "transcripts_ready": 1
+}
