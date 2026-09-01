@@ -1,9 +1,9 @@
 (function applyThemeBeforePaint() {
-  var theme = "light";
+  var theme = "dark";
 
   try {
-    if (localStorage.getItem("yt-insights-theme") === "dark") {
-      theme = "dark";
+    if (localStorage.getItem("yt-insights-theme") === "light") {
+      theme = "light";
     }
   } catch {
     // The default remains usable when browser storage is unavailable.

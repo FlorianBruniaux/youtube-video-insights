@@ -1,4 +1,5 @@
 ---
+import ContextGuide from "../components/ContextGuide.astro";
 import AppLayout from "../layouts/AppLayout.astro";
 ---
 
@@ -9,6 +10,16 @@ import AppLayout from "../layouts/AppLayout.astro";
       <h1 id="page-title">Validated dossiers, ready to use.</h1>
       <p>Open bounded export projections served by the local API. Filesystem paths stay private.</p>
     </section>
+    <ContextGuide
+      title="Use a research result outside the app"
+      introduction="Exports are deterministic publications created from a completed research session. They do not become new corpus sources."
+      steps={[
+        { title: "Complete a session", description: "Confirm that the available evidence is sufficient before publishing a dossier." },
+        { title: "Generate the export", description: "The research workspace creates a Markdown dossier and a provenance manifest." },
+        { title: "Reuse the result", description: "Open the dossier for writing, share its bounded output, or give it to Claude or Codex." },
+      ]}
+      tip="For exploratory questions, an LLM can query the live corpus directly through the read-only MCP instead of using an export."
+    />
     <p class="page-status" data-exports-status role="status" aria-live="polite"></p>
     <section class="export-list" data-export-list aria-label="Research exports"></section>
   </div>

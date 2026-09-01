@@ -10,7 +10,7 @@ const { currentPath } = Astro.props;
 const links = [
   { href: "/", label: "Overview", match: "exact" },
   { href: "/research/new/", label: "Research", match: "exact" },
-  { href: "/search/", label: "Corpus", match: "section" },
+  { href: "/search/", label: "Search", match: "section" },
   { href: "/sources/", label: "Sources", match: "section" },
   { href: "/exports/", label: "Exports", match: "section" },
 ] as const;
@@ -43,10 +43,10 @@ const links = [
     class="theme-toggle"
     type="button"
     data-theme-toggle
-    aria-pressed="false"
-    aria-label="Use dark theme"
+    aria-pressed="true"
+    aria-label="Use light theme"
   >
     <span class="theme-toggle-icon" aria-hidden="true">◐</span>
-    <span data-theme-label>Dark</span>
+    <span data-theme-label>Light</span>
   </button>
 </nav>

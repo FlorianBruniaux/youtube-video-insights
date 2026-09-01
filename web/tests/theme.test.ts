@@ -20,16 +20,19 @@ describe("applyStoredTheme", () => {
     document.documentElement.removeAttribute("data-theme");
   });
 
-  it("defaults to light and restores only known values", () => {
+  it("defaults to dark and restores only known values", () => {
     const root = document.documentElement;
 
-    expect(applyStoredTheme(fakeStorage(null), root)).toBe("light");
-    expect(root.dataset.theme).toBe("light");
+    expect(applyStoredTheme(fakeStorage(null), root)).toBe("dark");
+    expect(root.dataset.theme).toBe("dark");
 
     expect(applyStoredTheme(fakeStorage("dark"), root)).toBe("dark");
     expect(root.dataset.theme).toBe("dark");
 
-    expect(applyStoredTheme(fakeStorage("system"), root)).toBe("light");
+    expect(applyStoredTheme(fakeStorage("light"), root)).toBe("light");
     expect(root.dataset.theme).toBe("light");
+
+    expect(applyStoredTheme(fakeStorage("system"), root)).toBe("dark");
+    expect(root.dataset.theme).toBe("dark");
   });
 });

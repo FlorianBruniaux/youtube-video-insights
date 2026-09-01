@@ -9,9 +9,9 @@
 **GitHub CI hébergée :** `PASS` sur `b62adaa`
 
 Le lot web courant a passé localement `1 089` tests Python et `10` subtests,
-`155` tests frontend, `4` parcours Playwright, Ruff sur `src tests scripts`,
-Mypy sur les 53 fichiers source, Astro Check sur 51 fichiers et
-`git diff --check`. Le [run GitHub Actions 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
+`156` tests frontend, `6` parcours Playwright, Ruff sur `src tests scripts`,
+Mypy sur les 53 fichiers source, Astro Check sur 53 fichiers, la reproduction
+exacte des 18 fichiers web packagés et `git diff --check`. Le [run GitHub Actions 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
 a passé sur le même SHA `b62adaa`, avec les jobs web, Python 3.11, Python 3.12
 et packaging/runtime au vert. Mypy n'a pas été exécuté avec `--strict`.
 
@@ -66,7 +66,7 @@ textuelle révisable; le rendu raster n'est pas généré par le build du dépô
 | MCP | `list_corpora`, `search_videos`, `search_passages`, `get_passage` | Lecture seule |
 | Assistants | Quatre skills projet et assets wheel Claude Code/Codex | Quatrième skill non installé globalement |
 | Setup | `--dry-run`, `--apply`, `--verify`, plus `--assets-only` | Une écriture globale demande toujours une transaction approuvée |
-| Web local | Dashboard, recherche, sources, sessions, jobs et exports en thème clair ou sombre | Boucle locale `127.0.0.1` uniquement, aucun hébergement ou compte utilisateur |
+| Web local | Dashboard, recherche, sources, sessions, jobs et exports avec thème sombre par défaut, préférence claire persistante et parcours guidé en cinq étapes | Boucle locale `127.0.0.1` uniquement, aucun hébergement ou compte utilisateur |
 
 Le contrat actuel expose `acquisition_history`, limité aux 100 dernières
 tentatives, et `acquisition_history_truncated`. Chaque tentative contient
@@ -78,6 +78,11 @@ L'interface installée démarre avec `yt-insights serve`; la commande
 `yt-insights serve --no-open` supprime uniquement l'ouverture automatique du navigateur. Dans les
 deux cas, l'écoute reste limitée à `127.0.0.1` et les assets Astro viennent du
 package Python, sans runtime Node.js.
+
+Le dashboard explique le parcours Collect, Search, Assess, Decide, Use. Les
+pages Sources, Search, Research, Workspace et Exports reprennent les trois
+actions propres à leur contexte. La navigation garde ses cinq destinations sur
+mobile et les contrôles de mutation inactifs restent masqués.
 
 ## Cycle utilisateur
 
@@ -114,7 +119,7 @@ les candidats à acquérir.
 | Claude Code frais | `UNKNOWN` | Chargement statique seulement |
 | Codex frais | `PASS` | Processus éphémère read-only: skill projet chargé, deux décisions et limites 10/5 restituées |
 | Activation globale | `false` | Pas de promotion du quatrième skill ou du runtime |
-| Qualité locale du lot web courant | `PASS` | 1 089 tests Python + 10 subtests, 155 tests frontend, 4 parcours Playwright, Ruff complet, Mypy sur 53 fichiers et diff-check |
+| Qualité locale du lot web courant | `PASS` | 1 089 tests Python + 10 subtests, 156 tests frontend, 6 parcours Playwright, Ruff complet, Mypy sur 53 fichiers, Astro Check sur 53 fichiers, build web reproductible sur 18 fichiers et diff-check |
 | GitHub CI hébergée | `PASS` sur `b62adaa` | [Run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306), web, Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 Les gates externes encore `UNKNOWN` bloquent les affirmations correspondantes

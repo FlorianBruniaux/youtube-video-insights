@@ -47,7 +47,7 @@ flowchart LR
     S --> A{Approuver 1 à 5 IDs ?}
     A -->|Oui| V
     A -->|Annuler| X[Session annulée]
-    UI[Web local] --> R
+    UI[Web local guidé] --> R
     CLI[CLI] --> R
     MCP[MCP read-only] --> C
     MCP --> F
@@ -97,9 +97,9 @@ source dans une recherche suivante.
 | Gate | Résultat |
 |---|---|
 | Python | 1 089 tests plus 10 subtests |
-| Frontend | 155 tests Vitest |
-| Navigateur | 4 parcours Playwright |
-| Astro | 51 fichiers, aucun diagnostic |
+| Frontend | 156 tests Vitest |
+| Navigateur | 6 parcours Playwright |
+| Astro | 53 fichiers, aucun diagnostic |
 | Typage Python | Mypy sur 53 fichiers source |
 | Lint | Ruff sur `src`, `tests` et `scripts` |
 | Assets | 18 fichiers reconstruits et comparés |

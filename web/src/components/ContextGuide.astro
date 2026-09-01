@@ -1,0 +1,42 @@
+---
+interface GuideStep {
+  title: string;
+  description: string;
+}
+
+interface Props {
+  title: string;
+  introduction: string;
+  steps: GuideStep[];
+  tip?: string;
+}
+
+const { title, introduction, steps, tip } = Astro.props;
+---
+
+<details class="context-guide" open>
+  <summary>
+    <span>
+      <span class="context-guide-kicker">How this page works</span>
+      <strong>{title}</strong>
+    </span>
+    <span class="context-guide-toggle" aria-hidden="true">Guide</span>
+  </summary>
+  <div class="context-guide-body">
+    <p>{introduction}</p>
+    <ol>
+      {
+        steps.map((step, index) => (
+          <li>
+            <span>{String(index + 1).padStart(2, "0")}</span>
+            <div>
+              <h2>{step.title}</h2>
+              <p>{step.description}</p>
+            </div>
+          </li>
+        ))
+      }
+    </ol>
+    {tip && <p class="context-guide-tip"><strong>Useful to know:</strong> {tip}</p>}
+  </div>
+</details>

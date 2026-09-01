@@ -1,6 +1,7 @@
 ---
 import AcquisitionHistory from "../../components/AcquisitionHistory.astro";
 import CandidateList from "../../components/CandidateList.astro";
+import ContextGuide from "../../components/ContextGuide.astro";
 import DecisionPanel from "../../components/DecisionPanel.astro";
 import EvidencePanel from "../../components/EvidencePanel.astro";
 import EventTimeline from "../../components/EventTimeline.astro";
@@ -15,6 +16,17 @@ import AppLayout from "../../layouts/AppLayout.astro";
       <p class="eyebrow">Cumulative research</p>
       <h1>Loading research…</h1>
     </header>
+
+    <ContextGuide
+      title="One decision at a time"
+      introduction="The workspace keeps local evidence, freshness, candidate discovery, and acquisition as separate reviewable steps."
+      steps={[
+        { title: "Inspect evidence", description: "Review matched passages, videos, missing queries, and freshness before deciding." },
+        { title: "Confirm or refresh", description: "Finish when the corpus is sufficient, or request a bounded YouTube discovery." },
+        { title: "Approve exact videos", description: "Select one to five candidates. Acquisition starts only after this second confirmation." },
+      ]}
+      tip="The event timeline records every state transition, so a paused session can be resumed safely."
+    />
 
     <div class="research-layout">
       <EvidencePanel />

@@ -1,4 +1,5 @@
 ---
+import ContextGuide from "../../components/ContextGuide.astro";
 import AppLayout from "../../layouts/AppLayout.astro";
 ---
 
@@ -10,15 +11,27 @@ import AppLayout from "../../layouts/AppLayout.astro";
       <p>Assess local evidence first. You decide whether YouTube discovery is needed after reviewing coverage and freshness.</p>
     </section>
 
+    <ContextGuide
+      title="Assess before you acquire"
+      introduction="A research session checks the local catalogue and transcript index. It never contacts YouTube when you create it."
+      steps={[
+        { title: "Frame the topic", description: "Name the decision or article you want the evidence to support." },
+        { title: "Add distinct queries", description: "Use one line per angle, claim, tool, or vocabulary variant you want to test." },
+        { title: "Review the assessment", description: "You will see coverage and freshness before choosing whether to search YouTube." },
+      ]}
+      tip="The freshness profile defines when existing sources are considered stale. Standard uses a 30-day window."
+    />
+
     <form class="panel research-new-form" data-research-new-form>
       <div class="field field-wide">
-        <label for="research-topic">Research topic</label>
+        <label for="research-topic">What are you trying to understand?</label>
         <input id="research-topic" name="topic" maxlength="500" autocomplete="off" required />
+        <p class="field-help">Example: How product engineering teams use AI in 2026.</p>
       </div>
       <div class="field field-wide">
-        <label for="research-queries">Search queries, one per line</label>
+        <label for="research-queries">Which angles should the corpus cover?</label>
         <textarea id="research-queries" name="queries" rows="6" maxlength="4007" required></textarea>
-        <p class="field-help">Use 1 to 8 distinct queries.</p>
+        <p class="field-help">Use 1 to 8 distinct queries, one per line. Include synonyms when terminology varies.</p>
       </div>
       <div class="field">
         <label for="research-languages">Languages</label>

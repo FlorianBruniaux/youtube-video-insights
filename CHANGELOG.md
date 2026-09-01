@@ -16,6 +16,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   jobs, exact candidate approval or cancellation, exports, light and dark
   themes, and no automatic mutation retry. Compiled assets ship in the Python
   wheel, so installed use does not require Node.js.
+- Warm technical-documentation visual identity with a dark default, persistent
+  light preference, responsive five-tab navigation, flatter cards, clearer
+  status treatments, and a visible five-step Collect, Search, Assess, Decide,
+  Use workflow. Sources, Search, Research, Workspace, and Exports now include
+  contextual instructions. Hidden mutation controls remain absent until their
+  state explicitly enables them.
 - Deterministic browser delivery gates: strict fixture-backed Playwright flows,
   static CSP-oriented scans, semantic HTML assertions, Python-to-TypeScript
   fixture verification, reproducible generated-asset hashes, and wheel content
@@ -42,7 +48,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `1,073` Python tests plus `10` subtests, `155` frontend tests, `3` Playwright
   flows, and Mypy on 53 source files. This review pass raises the current local
   gates to `1,089` Python tests and `4` Playwright flows, with `155` frontend
-  tests and the same 53 Mypy-checked source files. Hosted GitHub Actions
+  tests and the same 53 Mypy-checked source files. The UI and onboarding pass
+  raises the local frontend gates to `156` tests, `6` Playwright flows, Astro
+  Check on `53` files, and a reproducible `18`-file static build. Hosted GitHub Actions
   [run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
   passed on final delivery SHA `b62adaa`, including the web interface, Python
   3.11, Python 3.12, packaging, and offline runtime. Mypy was run as

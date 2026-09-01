@@ -21,14 +21,49 @@ test.beforeEach(() => {
   fixture?.resetResearch();
 });
 
+test("explains the product flow and links each next action", async ({ page }) => {
+  if (fixture === undefined) throw new Error("Fixture server is unavailable");
+  await page.goto(fixture.origin);
+
+  const guide = page.getByRole("region", { name: "From YouTube to usable evidence" });
+  await expect(guide.getByRole("heading", { name: "From YouTube to usable evidence" })).toBeVisible();
+  await expect(guide.getByRole("listitem")).toHaveCount(5);
+  await expect(guide.getByRole("link", { name: "Add a source" })).toHaveAttribute(
+    "href",
+    "/sources/",
+  );
+  await expect(guide.getByRole("link", { name: "Start research" })).toHaveAttribute(
+    "href",
+    "/research/new/",
+  );
+  await expect(guide.getByRole("link", { name: "Open exports" })).toHaveAttribute(
+    "href",
+    "/exports/",
+  );
+});
+
+test("keeps inactive action controls visually hidden", async ({ page }) => {
+  if (fixture === undefined) throw new Error("Fixture server is unavailable");
+  await page.goto(`${fixture.origin}/sources/`);
+
+  const acquireDisplay = await page
+    .locator("[data-source-acquire]")
+    .evaluate((element) => getComputedStyle(element).display);
+  expect(acquireDisplay).toBe("none");
+});
+
 test("searches, persists theme, and confirms an exact source plan", async ({ page }) => {
   if (fixture === undefined) throw new Error("Fixture server is unavailable");
   await page.goto(fixture.origin);
-  await page.getByRole("button", { name: "Use dark theme" }).click();
-  await page.reload();
   await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await page.getByRole("button", { name: "Use light theme" }).click();
+  await page.reload();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 
-  await page.getByRole("link", { name: "Search the corpus" }).click();
+  await page
+    .getByLabel("Primary actions")
+    .getByRole("link", { name: "Search the corpus" })
+    .click();
   await page.getByLabel("Search transcripts").fill("local inference");
   await page.getByLabel("Channel").fill("local-ai");
   await page.getByLabel("Language").fill("en");
@@ -156,12 +191,12 @@ test("supports keyboard navigation and the reduced-motion preference", async ({
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
   await page.keyboard.press("Tab");
-  await expect(page.getByRole("link", { name: "Corpus", exact: true })).toBeFocused();
+  await expect(page.getByRole("link", { name: "Search", exact: true })).toBeFocused();
   await page.keyboard.press("Enter");
   await expect(page).toHaveURL(`${fixture.origin}/search/`);
 
   const motion = await page
-    .getByRole("button", { name: "Use dark theme" })
+    .getByRole("button", { name: "Use light theme" })
     .evaluate((element) => {
       const style = getComputedStyle(element);
       return {

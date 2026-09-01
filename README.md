@@ -64,6 +64,25 @@ existing corpus, then build the timestamped index. A successful
 plus `required_user_action=confirm_sufficiency_or_refresh`. It never contacts
 YouTube.
 
+### Use the web app in five steps
+
+Run `uv run yt-insights serve`, then follow the workflow shown on the dashboard:
+
+1. **Collect:** open **Sources**, preview a video, playlist, or channel, review
+   the selected IDs, then confirm the acquisition.
+2. **Search:** open **Search** to query the existing transcript passages before
+   requesting more sources.
+3. **Assess:** open **Research**, describe the question and useful angles, then
+   inspect coverage and freshness.
+4. **Decide:** mark the evidence sufficient or request discovery. Discovery
+   still requires a separate approval of one to five exact video IDs.
+5. **Use:** open **Exports** for deterministic dossiers, or query the same corpus
+   from Claude Code or Codex through the read-only MCP.
+
+Each task page repeats the relevant three-step instructions. The interface uses
+the dark theme by default, remembers a light-theme preference, and stays usable
+on a narrow mobile viewport. The server remains local to `127.0.0.1`.
+
 ---
 
 ## What it's actually for
@@ -288,15 +307,18 @@ uv run yt-insights generate-short VIDEO_ID --start 00:05:10 --end 00:05:55 --tit
 
 ### Local web research flow
 
-`yt-insights serve` exposes the same durable data and workflow as the CLI:
+`yt-insights serve` exposes the same durable data and workflow as the CLI. The
+dashboard starts with a five-step guide and every task page provides contextual
+instructions:
 
-1. Search the existing transcript index.
-2. Preview a YouTube video, playlist, or channel and inspect every selected ID.
-3. Confirm acquisition explicitly and follow the accepted background job.
-4. Start a research session from local evidence.
-5. Answer `Is the current evidence sufficient?` before any discovery.
-6. If discovery is requested, approve one to five exact candidates or cancel.
-7. Open the deterministic export from the exports screen.
+1. Preview a YouTube video, playlist, or channel under **Sources**, inspect every
+   selected ID, then confirm the background acquisition job.
+2. Search the existing transcript index under **Search**.
+3. Start a session under **Research** and answer
+   `Is the current evidence sufficient?` before any discovery.
+4. If discovery is requested, approve one to five exact candidates or cancel.
+5. Open the deterministic dossier under **Exports**, or query the read-only MCP
+   from an LLM client.
 
 Failed jobs are never resubmitted automatically. A stale session reloads the
 durable snapshot and asks for the decision again. If the UI reports that the
@@ -891,6 +913,9 @@ claim.
 The final local delivery at `b62adaa` passed `1,089` Python tests plus `10`
 subtests, `155` frontend tests, `4` Playwright flows, Ruff, Astro Check on 51
 files, generated-asset verification, packaging, and Mypy on 53 source files.
+The current UI review passes `1,089` Python tests plus `10` subtests, `156`
+frontend tests, `6` Playwright flows, Ruff, Astro Check on 53 files, Mypy on 53
+source files, and exact reproduction of the 18 packaged web files.
 Hosted GitHub Actions
 [run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
 passed on the same SHA for the web interface, Python 3.11, Python 3.12, and

@@ -1,4 +1,5 @@
 ---
+import ContextGuide from "../components/ContextGuide.astro";
 import SourceImportPanel from "../components/SourceImportPanel.astro";
 import SourceTable from "../components/SourceTable.astro";
 import AppLayout from "../layouts/AppLayout.astro";
@@ -11,6 +12,17 @@ import AppLayout from "../layouts/AppLayout.astro";
       <h1 id="page-title">Know what feeds the corpus.</h1>
       <p>Inspect a bounded catalogue page or add a source through a preview-confirmed acquisition.</p>
     </section>
+
+    <ContextGuide
+      title="Preview, confirm, then acquire"
+      introduction="Sources are the controlled entry point to your corpus. A pasted YouTube URL never triggers an immediate download."
+      steps={[
+        { title: "Paste a source", description: "Use a video, playlist, or channel URL and choose the transcript language." },
+        { title: "Review the preview", description: "Check the selected videos, exclusions, and exact IDs before anything is written." },
+        { title: "Confirm acquisition", description: "Only your explicit confirmation adds transcripts and refreshes the derived indexes." },
+      ]}
+      tip="Run analysis only when you need generated insights. Acquisition and transcript search work without an LLM."
+    />
 
     <div class="source-layout">
       <SourceImportPanel />
