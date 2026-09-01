@@ -3,6 +3,7 @@ import AppLayout from "../layouts/AppLayout.astro";
 ---
 
 <AppLayout>
+  <div data-dashboard>
   <section class="page-heading" aria-labelledby="page-title">
     <p class="eyebrow">Your local YouTube research system</p>
     <h1 id="page-title">Build evidence, not another pile of tabs.</h1>
@@ -13,24 +14,43 @@ import AppLayout from "../layouts/AppLayout.astro";
     <div class="hero-actions" aria-label="Primary actions">
       <a class="button" href="/search/">Search the corpus</a>
       <a class="button button-secondary" href="/research/new/">Start research</a>
+      <a class="button button-secondary" href="/sources/">Add a YouTube source</a>
     </div>
   </section>
 
-  <section class="feature-grid" aria-label="How YT Insights works">
-    <article class="feature-card">
-      <span class="feature-number" aria-hidden="true">01</span>
-      <h2>Check what you already know</h2>
-      <p>Search timestamped passages across your existing local transcript catalogue first.</p>
+  <section class="dashboard-status panel" aria-labelledby="corpus-status-title">
+    <div class="section-heading section-heading-inline">
+      <div>
+        <p class="eyebrow">Local system</p>
+        <h2 id="corpus-status-title">Corpus status</h2>
+      </div>
+      <p data-dashboard-status role="status" aria-live="polite">Checking the local corpus…</p>
+    </div>
+    <div class="metric-grid" data-dashboard-metrics></div>
+  </section>
+
+  <section class="dashboard-panels" aria-label="Recent activity">
+    <article class="panel">
+      <div class="section-heading">
+        <p class="eyebrow">Research</p>
+        <h2>Recent sessions</h2>
+      </div>
+      <div data-dashboard-sessions>Loading recent research…</div>
     </article>
-    <article class="feature-card">
-      <span class="feature-number" aria-hidden="true">02</span>
-      <h2>Close explicit gaps</h2>
-      <p>Review freshness and coverage before deciding whether YouTube discovery is needed.</p>
-    </article>
-    <article class="feature-card">
-      <span class="feature-number" aria-hidden="true">03</span>
-      <h2>Export a traceable dossier</h2>
-      <p>Keep evidence, decisions, source history, and outputs connected to the research session.</p>
+    <article class="panel">
+      <div class="section-heading">
+        <p class="eyebrow">Outputs</p>
+        <h2>Recent exports</h2>
+      </div>
+      <div data-dashboard-exports>Loading recent exports…</div>
     </article>
   </section>
+  </div>
+
+  <script>
+    import { attachDashboard } from "../lib/pages/dashboard";
+
+    const root = document.querySelector<HTMLElement>("[data-dashboard]");
+    if (root) void attachDashboard(root);
+  </script>
 </AppLayout>

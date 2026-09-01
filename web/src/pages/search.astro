@@ -1,0 +1,26 @@
+---
+import SearchForm from "../components/SearchForm.astro";
+import AppLayout from "../layouts/AppLayout.astro";
+---
+
+<AppLayout title="Search corpus" description="Search timestamped passages in the local YouTube transcript corpus.">
+  <div data-search-page>
+    <section class="page-heading page-heading-compact" aria-labelledby="page-title">
+      <p class="eyebrow">Corpus search</p>
+      <h1 id="page-title">Find the evidence you already have.</h1>
+      <p>Search transcript passages first, then open the exact timestamp on YouTube.</p>
+    </section>
+
+    <SearchForm />
+    <p class="page-status" data-search-state role="status" aria-live="polite"></p>
+    <section class="result-summary" data-search-summary tabindex="-1" aria-live="polite"></section>
+    <div class="passage-list" data-search-results></div>
+  </div>
+
+  <script>
+    import { attachSearchPage } from "../lib/pages/search";
+
+    const root = document.querySelector<HTMLElement>("[data-search-page]");
+    if (root) attachSearchPage(root);
+  </script>
+</AppLayout>

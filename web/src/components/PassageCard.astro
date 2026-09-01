@@ -1,0 +1,22 @@
+---
+interface Props {
+  title?: string;
+  channel?: string;
+  language?: string;
+  excerpt?: string;
+}
+
+const {
+  title = "Transcript passage",
+  channel = "Channel",
+  language = "Language",
+  excerpt = "Passage text",
+} = Astro.props;
+---
+
+<article class="passage-card">
+  <h3>{title}</h3>
+  <p class="passage-meta">{channel} · {language}</p>
+  <p>{excerpt}</p>
+  <slot />
+</article>

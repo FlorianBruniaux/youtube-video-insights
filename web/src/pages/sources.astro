@@ -1,0 +1,27 @@
+---
+import SourceImportPanel from "../components/SourceImportPanel.astro";
+import SourceTable from "../components/SourceTable.astro";
+import AppLayout from "../layouts/AppLayout.astro";
+---
+
+<AppLayout title="Sources" description="Review the local source catalogue and acquire approved YouTube videos.">
+  <div data-sources-page>
+    <section class="page-heading page-heading-compact" aria-labelledby="page-title">
+      <p class="eyebrow">Source control</p>
+      <h1 id="page-title">Know what feeds the corpus.</h1>
+      <p>Inspect a bounded catalogue page or add a source through a preview-confirmed acquisition.</p>
+    </section>
+
+    <div class="source-layout">
+      <SourceImportPanel />
+      <SourceTable />
+    </div>
+  </div>
+
+  <script>
+    import { attachSourcesPage } from "../lib/pages/sources";
+
+    const root = document.querySelector<HTMLElement>("[data-sources-page]");
+    if (root) attachSourcesPage(root);
+  </script>
+</AppLayout>

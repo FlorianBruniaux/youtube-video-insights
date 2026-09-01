@@ -1,0 +1,38 @@
+<section class="panel import-panel" aria-labelledby="source-import-title">
+  <div class="section-heading">
+    <p class="eyebrow">Grow the corpus</p>
+    <h2 id="source-import-title">Add a YouTube source</h2>
+    <p>Preview a video, playlist, or channel. Nothing is acquired until you review the exact IDs and confirm.</p>
+  </div>
+
+  <form class="source-import-form" data-source-preview-form>
+    <div class="field field-wide">
+      <label for="source-url">YouTube URL</label>
+      <input
+        id="source-url"
+        name="source"
+        type="url"
+        inputmode="url"
+        autocomplete="url"
+        maxlength="2048"
+        placeholder="https://www.youtube.com/@channel"
+        required
+      />
+    </div>
+    <div class="field">
+      <label for="source-language">Transcript language</label>
+      <input id="source-language" name="language" value="en" maxlength="64" required />
+    </div>
+    <label class="check-field">
+      <input name="analyze" type="checkbox" />
+      Run analysis after acquisition
+    </label>
+    <button class="button" type="submit">Preview source</button>
+  </form>
+
+  <div class="job-status" data-source-job role="status" aria-live="polite"></div>
+  <section class="source-plan" data-source-plan hidden aria-labelledby="source-plan-title"></section>
+  <button class="button acquire-button" data-source-acquire type="button" hidden disabled>
+    Acquire these videos
+  </button>
+</section>
