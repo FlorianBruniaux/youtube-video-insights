@@ -1,0 +1,46 @@
+tests/web/test_readers.py
+  s_0a442347250965::t_0e1190ca66d720 6,23,67-82
+  s_0a442347250965::t_dd6000dbcaa4ad 416-503
+  s_0a442347250965::t_0b6bce4667bb0f 83-84
+src/yt_insights/research/store.py
+  s_0a442347250965::t_27fbb54a45c3ba 705,715-720,722-725
+  s_0a442347250965::t_37379b640c9732 727,733-734,741,750-751
+tests/web/test_application.py
+  s_0a442347250965::t_0e1190ca66d720 29,1608-1617
+  s_0a442347250965::t_18289af147f386 151,168-174,176,179,195-197,564-582
+  s_0a442347250965::t_acc1a1ca0f9a11 583-584
+  s_0a442347250965::t_6e2fdd7435e365 1618-1619
+src/yt_insights/web/readers.py
+  s_0a442347250965::t_37379b640c9732 19,86,88-90,105-108,110-112
+  s_0a442347250965::t_99f7adefedc475 35-38
+tests/web/test_api.py
+  s_0a442347250965::t_d6a1b377b0ce64 557-587
+src/yt_insights/web/api.py
+  s_0a442347250965::t_37379b640c9732 399,468-477
+  s_0a442347250965::t_4730c8b31f876b 478-479
+src/yt_insights/web/server.py
+  s_0a442347250965::t_e8b01d2c606cec 37,223-229
+tests/research/test_store.py
+  s_0a442347250965::t_d6a1b377b0ce64 5,189,222-246
+  s_0a442347250965::t_18289af147f386 27,248-252,265-267
+  s_0a442347250965::t_e7d236089d7a2e 247
+src/yt_insights/web/application.py
+  s_0a442347250965::t_27fbb54a45c3ba 334,337-339,343,347-350,774-783
+  s_0a442347250965::t_69128911c5ce71 784-785
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "0b55f5607c8e0049d8a1a7661d71c398220368b0",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

@@ -1,0 +1,60 @@
+web/src/components/SourceImportPanel.astro
+  s_0a442347250965::t_3479656b5e0021 30,33-39
+web/src/styles/global.css
+  s_0a442347250965::t_3479656b5e0021 314-329,443-460
+  s_0a442347250965::t_400b812d415033 461
+web/tests/sources-page.test.ts
+  s_0a442347250965::t_fb737f7cf55348 197,210,457,606-610,613,617-618
+  s_0a442347250965::t_84cc18d67b974f 74,78-82,91,107-108,133-138,251-311,363-442,490,534-585
+  s_0a442347250965::t_06edb52f691122 13
+  s_0a442347250965::t_e6073165a270ab 23,139,312-362,486-487,491-494
+  s_0a442347250965::t_c8ad6655a5bd3c 14
+  s_0a442347250965::t_eb3643ad30fcc1 443
+  s_0a442347250965::t_988e94e01117f4 586
+web/src/lib/pages/search.ts
+  s_0a442347250965::t_a894f8147dc461 21-23
+web/src/lib/pages/dashboard.ts
+  s_0a442347250965::t_a894f8147dc461 83,87-98,104-112
+  s_0a442347250965::t_0faa3e81b9a93c 113
+web/tests/search-page.test.ts
+  s_0a442347250965::t_84cc18d67b974f 118,121-144
+  s_0a442347250965::t_8d8890920bfc73 117
+  s_0a442347250965::t_bbad999b04c521 119-120
+web/src/lib/pages/sources.ts
+  s_0a442347250965::t_a894f8147dc461 30-56,71-74,78-82,87-88,94-95
+  s_0a442347250965::t_d559f71b8aa357 134-138,149,153-158,174-184,187-188,194,200-202,210,214,218-243,245-260,262-268,273-285,297-300,305-308,313,315-318,327,344
+  s_0a442347250965::t_9c4a901e6e199c 152
+  s_0a442347250965::t_6a87edee2a3766 244
+  s_0a442347250965::t_a259f1f753adfd 365-372,384-385,424-425,429,494-495,530-648
+  s_0a442347250965::t_049dbc936dce42 649
+src/yt_insights/web/static/_astro/AppLayout.C1bUst9U.css
+  s_0a442347250965::t_012504705c4def 1
+src/yt_insights/web/static/_astro/index.astro_astro_type_script_index_0_lang.CA0zJ9eM.js
+  s_0a442347250965::t_77f6ff70433ccf 1
+src/yt_insights/web/static/_astro/search.astro_astro_type_script_index_0_lang.BbykoCNL.js
+  s_0a442347250965::t_4cec79b0004ad0 1
+src/yt_insights/web/static/_astro/sources.astro_astro_type_script_index_0_lang.CYXAQg6V.js
+  s_0a442347250965::t_c1f9be85db8388 1
+src/yt_insights/web/static/index.html
+  s_0a442347250965::t_ab8ea23ed6aa0a 1
+src/yt_insights/web/static/search/index.html
+  s_0a442347250965::t_76ccf88ba657f4 1
+src/yt_insights/web/static/sources/index.html
+  s_0a442347250965::t_3458873e7903f2 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "4dd51cc38659e6d346922cddd505c19c9fb9df6f",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

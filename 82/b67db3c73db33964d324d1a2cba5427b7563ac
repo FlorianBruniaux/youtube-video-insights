@@ -1,0 +1,106 @@
+web/src/pages/research/new.astro
+  s_0a442347250965::t_d7dfb146a0fdc3 2,14-24,27,29,32,34
+web/src/lib/theme.ts
+  s_0a442347250965::t_a48990f4996f76 7
+web/src/components/ContextGuide.astro
+  s_0a442347250965::t_d7dfb146a0fdc3 1-42
+web/src/pages/sources.astro
+  s_0a442347250965::t_d7dfb146a0fdc3 2,16-25
+  s_22ce93e93315a8::t_cc52567ee99a3f 26
+web/src/styles/tokens.css
+  s_0a442347250965::t_e16a92deff08e8 3-5,7-29,42-62
+web/src/layouts/AppLayout.astro
+  s_0a442347250965::t_a48990f4996f76 20,26
+web/e2e/local-ui.spec.ts
+  s_0a442347250965::t_9432f5b9a69e66 59-61,194,199
+  s_0a442347250965::t_d6d321fbfd3187 24-27,29-44
+  s_0a442347250965::t_a52512e71ad426 51
+  s_0a442347250965::t_59ecd3c1b84c4f 45-46,48,53-54
+  s_0a442347250965::t_d2a5fbed9efb6e 47,49-50,52
+  s_0a442347250965::t_c4eaeb539ecb33 63-66
+  s_0a442347250965::t_58ecbc0eae6002 28
+web/src/pages/search.astro
+  s_0a442347250965::t_d7dfb146a0fdc3 2,15-24
+  s_22ce93e93315a8::t_76116002025636 25
+web/src/components/AppNav.astro
+  s_0a442347250965::t_ba8a4dcc244966 46-47,50
+  s_0a442347250965::t_e16a92deff08e8 13
+web/tests/theme.test.ts
+  s_0a442347250965::t_d6d321fbfd3187 23,26-27,32,34-36
+web/src/pages/research/workspace.astro
+  s_0a442347250965::t_d7dfb146a0fdc3 4,20-29
+  s_22ce93e93315a8::t_5c0da3698cb425 30
+web/src/styles/global.css
+  s_0a442347250965::t_e16a92deff08e8 16,24,28-32,92,112-115,140,144,148-161,163,166,181,189-190,203,229,232,237-238,252-255,274-275,549,553
+  s_0a442347250965::t_fdf4cfb1aafc18 7-10
+  s_0a442347250965::t_b7d2ab5129f09f 1182-1211,1320-1336
+  s_0a442347250965::t_bafc1ce5832245 1292-1319
+  s_0a442347250965::t_392ecbea157fb7 276,298-544,578-596,696-697,813-818
+  s_0a442347250965::t_3bf07a8d4e7ac7 277,547-548,1337
+CHANGELOG.md
+  s_0a442347250965::t_1f3cbe8bae8681 19-24,51-53
+ROADMAP.md
+  s_0a442347250965::t_92b9d4591c3021 57,75-78
+  s_0a442347250965::t_1f3cbe8bae8681 32,74
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_92b9d4591c3021 12-14,122
+  s_0a442347250965::t_1f3cbe8bae8681 69,82-85
+  s_0a442347250965::t_d0c6346ebbf116 86
+web/public/_astro/theme-bootstrap.js
+  s_0a442347250965::t_a48990f4996f76 2,5-6
+web/src/components/WorkflowGuide.astro
+  s_0a442347250965::t_d7dfb146a0fdc3 1-59
+web/tests/theme-bootstrap.test.ts
+  s_0a442347250965::t_d6d321fbfd3187 10-21
+web/src/pages/index.astro
+  s_0a442347250965::t_d7dfb146a0fdc3 3,22
+  s_22ce93e93315a8::t_7d3530daa4b3b7 23
+web/src/pages/exports.astro
+  s_0a442347250965::t_d7dfb146a0fdc3 2,13-22
+README.md
+  s_0a442347250965::t_1f3cbe8bae8681 67-85,310-312,314-321
+  s_0a442347250965::t_92b9d4591c3021 916-918
+docs/DELIVERY-RECAP.md
+  s_0a442347250965::t_1f3cbe8bae8681 50
+  s_0a442347250965::t_92b9d4591c3021 100-102
+src/yt_insights/web/static/_astro/AppLayout.DLADnOdu.css
+  s_0a442347250965::t_b75f1295eb9a75 1
+src/yt_insights/web/static/_astro/theme-bootstrap.js
+  s_0a442347250965::t_646e9d7a0f7dfa 2,5-6
+src/yt_insights/web/static/exports/index.html
+  s_0a442347250965::t_bef8b9f9843da1 1
+src/yt_insights/web/static/index.html
+  s_0a442347250965::t_085649fad61bce 1
+src/yt_insights/web/static/research/new/index.html
+  s_0a442347250965::t_37642731a057e8 1
+src/yt_insights/web/static/research/workspace/index.html
+  s_0a442347250965::t_38a9fd320a3c4e 1
+src/yt_insights/web/static/search/index.html
+  s_0a442347250965::t_0e0d043cf4a7c6 1
+src/yt_insights/web/static/sources/index.html
+  s_0a442347250965::t_46b2b280b89aa9 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "82b67db3c73db33964d324d1a2cba5427b7563ac",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_22ce93e93315a8": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05ca4-a94e-7ff2-8926-33f5fa0d5c93",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

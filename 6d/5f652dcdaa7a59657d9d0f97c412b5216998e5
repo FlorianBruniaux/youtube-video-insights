@@ -1,0 +1,94 @@
+web/src/pages/research/new.astro
+  s_0a442347250965::t_8507ba37041073 1-53
+web/src/pages/exports.astro
+  s_0a442347250965::t_8507ba37041073 1-23
+web/src/styles/global.css
+  s_0a442347250965::t_c9c7e5e686301b 268-476,853-854,858-865,878-879,930-937
+  s_554c34e57ae37c::t_b1116a540ddea4 938
+web/src/components/DecisionPanel.astro
+  s_0a442347250965::t_8507ba37041073 1-5
+web/src/lib/pages/research-new.ts
+  s_0a442347250965::t_16871794e9e4d6 161-163,171-204
+  s_0a442347250965::t_458ec07be9e7b4 1-160,164-170,205-241
+web/tests/research-page.test.ts
+  s_0a442347250965::t_e77fdaf3bc20ff 1-5,7-172,174-176,232-450,464-465
+  s_0a442347250965::t_0850a358ea26bd 6,173,177-231,451-463
+web/src/lib/pages/research-workspace.ts
+  s_0a442347250965::t_7932e14ad603d1 215
+  s_0a442347250965::t_0850a358ea26bd 478
+  s_0a442347250965::t_e8ffda2d113678 1-214,216-290,296-477,479-653
+  s_0a442347250965::t_22ed26f374db52 291-295
+web/src/components/JobProgress.astro
+  s_0a442347250965::t_8507ba37041073 1-9
+web/src/components/AcquisitionHistory.astro
+  s_0a442347250965::t_8507ba37041073 1-5
+web/src/components/CandidateList.astro
+  s_0a442347250965::t_8507ba37041073 1-5
+web/src/lib/pages/exports.ts
+  s_0a442347250965::t_458ec07be9e7b4 1-78
+web/src/components/EventTimeline.astro
+  s_0a442347250965::t_8507ba37041073 1-7
+web/src/components/EvidencePanel.astro
+  s_0a442347250965::t_8507ba37041073 1-5
+web/src/lib/research-job.ts
+  s_0a442347250965::t_458ec07be9e7b4 1-42,47-68,83-137
+  s_0a442347250965::t_98f169bde0ef38 44
+  s_0a442347250965::t_544141be1e5c2d 71-80
+  s_0a442347250965::t_22ed26f374db52 43,45-46,69-70,81-82
+web/src/pages/research/workspace.astro
+  s_0a442347250965::t_8507ba37041073 1-40
+src/yt_insights/web/static/_astro/AppLayout.CJ3Sqiod.css
+  s_0a442347250965::t_847ec599ddab42 1
+src/yt_insights/web/static/_astro/api.CkWsafxt.js
+  s_0a442347250965::t_79ad43a87c650e 1
+src/yt_insights/web/static/_astro/dom.CV_EZYtQ.js
+  s_0a442347250965::t_98bce839a67004 1
+src/yt_insights/web/static/_astro/exports.astro_astro_type_script_index_0_lang.D0rPlbOe.js
+  s_0a442347250965::t_8b6a3f7216ff3b 1
+src/yt_insights/web/static/_astro/index.astro_astro_type_script_index_0_lang.DW-yyvz3.js
+  s_0a442347250965::t_237dbd972a6c88 1
+src/yt_insights/web/static/_astro/new.astro_astro_type_script_index_0_lang.l_iM0CFx.js
+  s_0a442347250965::t_6517b8fb70598b 1
+src/yt_insights/web/static/_astro/search.astro_astro_type_script_index_0_lang.CWLckqOV.js
+  s_0a442347250965::t_14b26160dec499 1
+src/yt_insights/web/static/_astro/sources.astro_astro_type_script_index_0_lang.P2lKwrgS.js
+  s_0a442347250965::t_ed23e597c4538d 1
+src/yt_insights/web/static/_astro/workspace.astro_astro_type_script_index_0_lang.BE9AuluG.js
+  s_0a442347250965::t_2e23cebdff1bdc 1
+src/yt_insights/web/static/exports/index.html
+  s_0a442347250965::t_5ce0621f883596 1
+src/yt_insights/web/static/index.html
+  s_0a442347250965::t_caf072cae6afea 1
+src/yt_insights/web/static/research/new/index.html
+  s_0a442347250965::t_439eda6ddd9bf1 1
+src/yt_insights/web/static/research/workspace/index.html
+  s_0a442347250965::t_18de1fcfa4b25d 1
+src/yt_insights/web/static/search/index.html
+  s_0a442347250965::t_4bb349e948c6e4 1
+src/yt_insights/web/static/sources/index.html
+  s_0a442347250965::t_eacca57ea57925 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "6d5f652dcdaa7a59657d9d0f97c412b5216998e5",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_554c34e57ae37c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05b7b-f04d-7330-a9ed-33b8852afb44",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

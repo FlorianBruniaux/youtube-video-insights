@@ -1,0 +1,20 @@
+docs/superpowers/specs/2026-08-31-local-astro-web-ui-design.md
+  s_0a442347250965::t_7977b5d507cc6d 1-62,64-405
+  s_0a442347250965::t_5c1e1c19c2b048 63
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "fa5b362a4ed0b01bf23f8fc2bc9bb42e53861b24",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

@@ -1,0 +1,46 @@
+.github/workflows/ci.yml
+  s_0a442347250965::t_68d29f512018a7 53-59,71-77
+ROADMAP.md
+  s_0a442347250965::t_d9f2bec97aa021 57,74
+tests/web/test_static_assets.py
+  s_0a442347250965::t_4a3b8a9714e9a2 250-254,279-283,312-316,331-360
+  s_da248a336ea73b::t_7819b929b50120 361-362
+CHANGELOG.md
+  s_0a442347250965::t_d9f2bec97aa021 44
+  s_0a442347250965::t_32322ed2835af3 22-24
+INSTALL.md
+  s_0a442347250965::t_32322ed2835af3 486-488
+scripts/verify_web_build.py
+  s_0a442347250965::t_31f05428817cb6 94
+  s_0a442347250965::t_97acaa17a1c1cb 8,17-26,60-81,83,110,112-115,117
+  s_0a442347250965::t_144e09820f596b 89
+README.md
+  s_0a442347250965::t_d9f2bec97aa021 882
+  s_0a442347250965::t_32322ed2835af3 1020-1024
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_d9f2bec97aa021 11,117
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "edfa8f018e24f1fb8512cf88d09afb7dd506a552",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_da248a336ea73b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05c08-3f0e-7de2-bbe2-594413cca1a5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

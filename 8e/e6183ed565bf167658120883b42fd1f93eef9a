@@ -1,0 +1,70 @@
+web/playwright.config.ts
+  s_0a442347250965::t_9434b20b532eac 1-15
+pyproject.toml
+  s_0a442347250965::t_467c1054e26933 36
+  s_0a442347250965::t_a65dc1e568a9ce 31
+INSTALL.md
+  s_0a442347250965::t_6101ae55ef8457 39-74,474-479
+web/.gitignore
+  s_0a442347250965::t_cdeaab4daab243 3-4
+web/e2e/fixture-server.ts
+  s_0a442347250965::t_773a20b1e4189b 165,353-357,447-450
+  s_0a442347250965::t_9434b20b532eac 1-23,25-164,166-285,287-307,309-352,358-446,451-473
+  s_0a442347250965::t_f42516d4f80bc9 24,286,308
+web/tests/research-page.test.ts
+  s_0a442347250965::t_607482657805ae 599-603
+web/e2e/local-ui.spec.ts
+  s_0a442347250965::t_169d5695885377 10,17,21,25,61,82
+  s_0a442347250965::t_e4d70c27a837fe 40-41,43
+  s_0a442347250965::t_9434b20b532eac 1-9,11-16,18-20,22-24,26-39,42,44-51,53-60,62-81,83-96
+  s_0a442347250965::t_f42516d4f80bc9 52
+web/vitest.config.ts
+  s_0a442347250965::t_ced2d0f9bcfedb 6
+.github/workflows/ci.yml
+  s_0a442347250965::t_6101ae55ef8457 22-63,66,99-103,162
+CHANGELOG.md
+  s_0a442347250965::t_6101ae55ef8457 13-22
+scripts/smoke_wheel.py
+  s_0a442347250965::t_4b229c53c8d76d 10-11,15,20-21,219-223,241-304,378,587,669
+  s_0a442347250965::t_d2c35edd7d2eb2 582-586
+  s_0a442347250965::t_75cd45c7803cd9 588
+ROADMAP.md
+  s_0a442347250965::t_6101ae55ef8457 3,32,88
+  s_0a442347250965::t_a0649b5bebe641 57,74-79
+tests/test_packaging.py
+  s_0a442347250965::t_4b229c53c8d76d 4,248-251,256-262
+  s_0a442347250965::t_cdeaab4daab243 9
+  s_0a442347250965::t_2f0cdf4b7920f3 206-214,216-247,252-255,263-277
+  s_0a442347250965::t_af3b33d91a525e 215,279
+  s_0a442347250965::t_da82d458cb4993 278,280
+  s_0a442347250965::t_c46f3043b33c99 281-282
+tests/web/test_static_assets.py
+  s_0a442347250965::t_2f0cdf4b7920f3 1-116
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_a0649b5bebe641 11-17
+  s_0a442347250965::t_4d97b080d34e51 77-78
+  s_0a442347250965::t_6101ae55ef8457 3,44-47,69,130-135,175
+  s_0a442347250965::t_627d699557a800 79-81
+scripts/verify_web_build.py
+  s_0a442347250965::t_9434b20b532eac 1-92
+README.md
+  s_0a442347250965::t_6101ae55ef8457 42,221-233,276-292,1004-1009
+uv.lock
+  s_0a442347250965::t_c4009fddcd73f7 52-65,1357-1365,1835-1843,2082,2087,2101,2112
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "8ee6183ed565bf167658120883b42fd1f93eef9a",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

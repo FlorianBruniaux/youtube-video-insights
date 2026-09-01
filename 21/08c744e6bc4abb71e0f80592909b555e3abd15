@@ -1,0 +1,27 @@
+tests/web/test_api.py
+  s_0a442347250965::t_df408fc9f9ec07 588-688,690-716
+  s_0a442347250965::t_32742727c0cd49 689
+src/yt_insights/web/api.py
+  s_0a442347250965::t_e9ae7ea02cb01b 43,492
+  s_0a442347250965::t_c3190d4854d184 518-522,526,529
+  s_0a442347250965::t_2355453d2bdc9d 16,51-53,474,476-478,487-491,493-509,525,530-537,539-541,543-546
+  s_0a442347250965::t_3bfb71c2bb9d0f 523-524,527-528,538,542
+  s_0a442347250965::t_bb3231100a69ee 510-517
+  s_0a442347250965::t_52256d759086f0 547-548
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "2108c744e6bc4abb71e0f80592909b555e3abd15",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}

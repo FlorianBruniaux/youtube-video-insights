@@ -1,0 +1,67 @@
+web/src/components/SearchForm.astro
+  s_0a442347250965::t_90bea1faefea22 1-30
+web/src/components/PassageCard.astro
+  s_0a442347250965::t_90bea1faefea22 1-22
+web/src/pages/index.astro
+  s_0a442347250965::t_90bea1faefea22 6,17,21-38,40-45,48-55
+web/src/lib/pages/dashboard.ts
+  s_0a442347250965::t_65d7a2bc03a774 1-110
+web/src/components/SourceTable.astro
+  s_0a442347250965::t_90bea1faefea22 1-15
+web/src/lib/pages/sources.ts
+  s_0a442347250965::t_65d7a2bc03a774 1-66,75-307,309-402
+  s_0a442347250965::t_b2695a50fb3755 67-74
+  s_0a442347250965::t_cc2865390c55cb 308
+web/tests/search-page.test.ts
+  s_0a442347250965::t_4f06b9f9ab436a 61-62,141
+  s_0a442347250965::t_3a33e66ac7bf2a 1-60,63-69,71-140,142-152
+  s_0a442347250965::t_7e86cc6df768cd 70
+web/src/components/SourceImportPanel.astro
+  s_0a442347250965::t_90bea1faefea22 1-38
+web/src/pages/sources.astro
+  s_0a442347250965::t_90bea1faefea22 1-27
+web/src/pages/search.astro
+  s_0a442347250965::t_90bea1faefea22 1-26
+web/tests/sources-page.test.ts
+  s_0a442347250965::t_f50cd160ce59ae 213-215
+  s_0a442347250965::t_4f06b9f9ab436a 243-248,251-253,266
+  s_0a442347250965::t_390755990eb498 89-101,124-171,318-335
+  s_0a442347250965::t_3a33e66ac7bf2a 1-73,75-88,102-123,172-212,216-242,249-250,254-265,267-317,336-348
+  s_0a442347250965::t_b3ba06664557ec 74
+web/src/styles/global.css
+  s_0a442347250965::t_90bea1faefea22 224-516,606-657,670-683
+web/src/lib/pages/search.ts
+  s_0a442347250965::t_65d7a2bc03a774 1-169
+src/yt_insights/web/static/_astro/AppLayout.BuwFmNUA.css
+  s_0a442347250965::t_1a0802718c0426 1
+src/yt_insights/web/static/_astro/dom.BOfuERNG.js
+  s_0a442347250965::t_7e2e000ed3fe3e 1
+src/yt_insights/web/static/_astro/index.astro_astro_type_script_index_0_lang.yQ8aFuYq.js
+  s_0a442347250965::t_7cd330795770c5 1
+src/yt_insights/web/static/_astro/search.astro_astro_type_script_index_0_lang.D2_-wzVb.js
+  s_0a442347250965::t_9e3415fe781edd 1
+src/yt_insights/web/static/_astro/sources.astro_astro_type_script_index_0_lang.BJnjDdRG.js
+  s_0a442347250965::t_800b783036cf5c 1
+src/yt_insights/web/static/index.html
+  s_0a442347250965::t_62ddd4a1a06cda 1
+src/yt_insights/web/static/search/index.html
+  s_0a442347250965::t_65215490b6e5e3 1
+src/yt_insights/web/static/sources/index.html
+  s_0a442347250965::t_13d705d5aec353 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "a2d94b9d8b2dc3a2abf0432c0cc57811b54be4df",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
