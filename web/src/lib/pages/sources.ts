@@ -1,5 +1,10 @@
 import { apiGet, apiPost } from "../api";
 import { createYouTubeWatchLink, replaceChildren, setText } from "../dom";
+import {
+  acquisitionAttemptKey,
+  createBrowserAttemptIdentityCoordinator,
+} from "../source-attempt-coordinator";
+import type { AttemptIdentityCoordinator } from "../source-attempt-coordinator";
 import type {
   ApiGetResponse,
   ApiPath,
@@ -24,6 +29,7 @@ interface SourceDependencies {
   readonly read?: ReadApi;
   readonly write?: WriteApi;
   readonly wait?: Wait;
+  readonly coordinator?: AttemptIdentityCoordinator;
 }
 
 const PAGE_SIZE = 20;
@@ -37,37 +43,49 @@ const POLL_DELAYS: readonly number[] = [
   ...Array<number>(30).fill(2_000),
 ];
 
-export const SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v2";
-const LEGACY_SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v1";
+export const SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v3";
+const LEGACY_V2_SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v2";
+const LEGACY_V1_SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v1";
 
 type PollingSourceAttempt =
   | {
-      readonly version: 2;
+      readonly version: 3;
       readonly stage: "polling";
       readonly job_id: string;
       readonly kind: "source_preview";
       readonly fingerprint: null;
+      readonly generation: null;
       readonly idempotency_key: null;
     }
   | {
-      readonly version: 2;
+      readonly version: 3;
       readonly stage: "polling";
       readonly job_id: string;
       readonly kind: "source_acquisition";
       readonly fingerprint: string;
+      readonly generation: number;
       readonly idempotency_key: string;
     };
 
 type AdmittingAcquisitionAttempt = {
-  readonly version: 2;
+  readonly version: 3;
   readonly stage: "admitting";
   readonly job_id: null;
   readonly kind: "source_acquisition";
   readonly fingerprint: string;
+  readonly generation: number;
   readonly idempotency_key: string;
 };
 
-type SourceAttempt = PollingSourceAttempt | AdmittingAcquisitionAttempt;
+type FinalizingAcquisitionAttempt = Omit<
+  AdmittingAcquisitionAttempt,
+  "stage"
+> & { readonly stage: "finalizing" };
+
+type SourceAttempt =
+  | PollingSourceAttempt
+  | AdmittingAcquisitionAttempt
+  | FinalizingAcquisitionAttempt;
 
 export function attachSourcesPage(
   root: HTMLElement,
@@ -76,6 +94,8 @@ export function attachSourcesPage(
   const read = dependencies.read ?? ((path, signal) => apiGet(path as ApiPath, signal));
   const write = dependencies.write ?? ((path, body, signal) => apiPost(path as ApiPath, body, signal));
   const wait = dependencies.wait ?? delay;
+  const coordinator = dependencies.coordinator ??
+    createBrowserAttemptIdentityCoordinator();
   const state = requireElement<HTMLElement>(root, "[data-source-state]");
   const list = requireElement<HTMLElement>(root, "[data-source-list]");
   const previous = requireElement<HTMLButtonElement>(root, "[data-source-prev]");
@@ -153,8 +173,10 @@ export function attachSourcesPage(
     if (activeAttempt !== null) {
       if (activeAttempt.stage === "polling") {
         void checkAttempt(activeAttempt);
-      } else {
+      } else if (activeAttempt.stage === "admitting") {
         showAdmissionRetry(activeAttempt);
+      } else {
+        showFinalizationRetry(activeAttempt);
       }
       return;
     }
@@ -194,11 +216,12 @@ export function attachSourcesPage(
       );
       if (!("job_id" in accepted)) throw new Error("unexpected response");
       const attempt: PollingSourceAttempt = {
-        version: 2,
+        version: 3,
         stage: "polling",
         job_id: accepted.job_id,
         kind: "source_preview",
         fingerprint: null,
+        generation: null,
         idempotency_key: null,
       };
       activeAttempt = attempt;
@@ -216,34 +239,52 @@ export function attachSourcesPage(
   const onAcquire = (): void => {
     if (approvedPlan === null || activeAttempt !== null || checkingAttempt) return;
     const plan = approvedPlan;
-    const attempt: AdmittingAcquisitionAttempt = {
-      version: 2,
-      stage: "admitting",
-      job_id: null,
-      kind: "source_acquisition",
-      fingerprint: plan.fingerprint,
-      idempotency_key: acquisitionIdempotencyKey(plan.fingerprint),
-    };
-    activeAttempt = attempt;
-    if (!writeStoredAttempt(attempt)) {
-      activeAttempt = null;
-      acquire.disabled = false;
-      previewSubmit.disabled = false;
-      continueChecking.hidden = true;
-      retryAdmission.hidden = true;
-      setText(
-        jobTarget,
-        "The acquisition identity could not be saved. Allow session storage and confirm again.",
-      );
-      return;
-    }
-    approvedPlan = null;
+    checkingAttempt = true;
     acquire.disabled = true;
     previewSubmit.disabled = true;
     continueChecking.hidden = true;
     retryAdmission.hidden = true;
-    setText(jobTarget, "Submitting the approved acquisition…");
-    void admitAcquisition(attempt);
+    setText(jobTarget, "Coordinating this acquisition attempt…");
+    void prepareAcquisition(plan);
+  };
+  const prepareAcquisition = async (plan: SourcePreviewResult): Promise<void> => {
+    try {
+      const generation = await coordinator.claim(plan.fingerprint);
+      const attempt: AdmittingAcquisitionAttempt = {
+        version: 3,
+        stage: "admitting",
+        job_id: null,
+        kind: "source_acquisition",
+        fingerprint: plan.fingerprint,
+        generation,
+        idempotency_key: acquisitionAttemptKey(plan.fingerprint, generation),
+      };
+      activeAttempt = attempt;
+      if (!writeStoredAttempt(attempt)) {
+        activeAttempt = null;
+        checkingAttempt = false;
+        acquire.disabled = false;
+        previewSubmit.disabled = false;
+        setText(
+          jobTarget,
+          "The acquisition identity could not be saved. Allow session storage and confirm again.",
+        );
+        return;
+      }
+      approvedPlan = null;
+      checkingAttempt = false;
+      setText(jobTarget, "Submitting the approved acquisition…");
+      await admitAcquisition(attempt);
+    } catch (error: unknown) {
+      checkingAttempt = false;
+      activeAttempt = null;
+      acquire.disabled = false;
+      previewSubmit.disabled = false;
+      setText(
+        jobTarget,
+        coordinationMessage(error),
+      );
+    }
   };
   const admitAcquisition = async (
     attempt: AdmittingAcquisitionAttempt,
@@ -265,6 +306,16 @@ export function attachSourcesPage(
     retryAdmission.hidden = true;
     retryAdmission.disabled = true;
     try {
+      const currentGeneration = await coordinator.claim(attempt.fingerprint);
+      if (currentGeneration !== attempt.generation) {
+        checkingAttempt = false;
+        resetForNewPreview();
+        setText(
+          jobTarget,
+          "This acquisition attempt is stale. Start a new preview explicitly.",
+        );
+        return;
+      }
       const accepted = await write(
         "/api/v1/sources/acquire",
         {
@@ -275,11 +326,12 @@ export function attachSourcesPage(
       );
       if (!("job_id" in accepted)) throw new Error("unexpected response");
       const pollingAttempt: PollingSourceAttempt = {
-        version: 2,
+        version: 3,
         stage: "polling",
         job_id: accepted.job_id,
         kind: "source_acquisition",
         fingerprint: attempt.fingerprint,
+        generation: attempt.generation,
         idempotency_key: attempt.idempotency_key,
       };
       activeAttempt = pollingAttempt;
@@ -293,11 +345,11 @@ export function attachSourcesPage(
       retryAdmission.disabled = false;
       const code = publicCode(error);
       if (code === "plan_changed" || code === "stale_revision") {
-        resetForNewPreview();
-        setText(
-          jobTarget,
-          "The source plan changed. Preview the source again before acquiring.",
-        );
+        await finalizeRejectedAdmission(attempt);
+        return;
+      }
+      if (code === "attempt_coordination_unavailable") {
+        showAdmissionRetry(attempt, coordinationMessage(error));
         return;
       }
       showAdmissionRetry(attempt);
@@ -330,6 +382,17 @@ export function attachSourcesPage(
       );
       if (controller.signal.aborted) return;
       checkingAttempt = false;
+      if (attempt.kind === "source_acquisition") {
+        try {
+          await coordinator.complete(
+            attempt.fingerprint,
+            attempt.generation,
+          );
+        } catch (error: unknown) {
+          showPollingFinalizationRetry(attempt, error);
+          return;
+        }
+      }
       activeAttempt = null;
       clearStoredAttempt();
       previewSubmit.disabled = false;
@@ -368,6 +431,17 @@ export function attachSourcesPage(
       if (isAbort(error)) return;
       checkingAttempt = false;
       if (publicCode(error) === "not_found") {
+        if (attempt.kind === "source_acquisition") {
+          try {
+            await coordinator.complete(
+              attempt.fingerprint,
+              attempt.generation,
+            );
+          } catch (coordinationFailure: unknown) {
+            showPollingFinalizationRetry(attempt, coordinationFailure);
+            return;
+          }
+        }
         resetForNewPreview();
         setText(
           jobTarget,
@@ -393,10 +467,15 @@ export function attachSourcesPage(
   const onRetryAdmission = (): void => {
     if (activeAttempt?.stage === "admitting" && !checkingAttempt) {
       void admitAcquisition(activeAttempt);
+    } else if (activeAttempt?.stage === "finalizing" && !checkingAttempt) {
+      void finalizeRejectedAdmission(activeAttempt);
     }
   };
 
-  const showAdmissionRetry = (attempt: AdmittingAcquisitionAttempt): void => {
+  const showAdmissionRetry = (
+    attempt: AdmittingAcquisitionAttempt,
+    message = "The acquisition response was not received. Retry admission with the same saved identity.",
+  ): void => {
     activeAttempt = attempt;
     previewSubmit.disabled = true;
     acquire.disabled = true;
@@ -404,9 +483,64 @@ export function attachSourcesPage(
     retryAdmission.hidden = false;
     retryAdmission.disabled = false;
     jobIdTarget.textContent = "";
+    retryAdmission.textContent = "Retry admission";
+    setText(jobTarget, message);
+  };
+
+  const finalizeRejectedAdmission = async (
+    attempt: AdmittingAcquisitionAttempt | FinalizingAcquisitionAttempt,
+  ): Promise<void> => {
+    const finalizing: FinalizingAcquisitionAttempt = {
+      ...attempt,
+      stage: "finalizing",
+    };
+    activeAttempt = finalizing;
+    writeStoredAttempt(finalizing);
+    checkingAttempt = true;
+    retryAdmission.disabled = true;
+    try {
+      await coordinator.complete(finalizing.fingerprint, finalizing.generation);
+      checkingAttempt = false;
+      resetForNewPreview();
+      setText(
+        jobTarget,
+        "The source plan changed. Preview the source again before acquiring.",
+      );
+    } catch (error: unknown) {
+      checkingAttempt = false;
+      showFinalizationRetry(finalizing, error);
+    }
+  };
+
+  const showFinalizationRetry = (
+    attempt: FinalizingAcquisitionAttempt,
+    error?: unknown,
+  ): void => {
+    activeAttempt = attempt;
+    previewSubmit.disabled = true;
+    acquire.disabled = true;
+    continueChecking.hidden = true;
+    retryAdmission.hidden = false;
+    retryAdmission.disabled = false;
+    retryAdmission.textContent = "Retry finalization";
+    jobIdTarget.textContent = "";
+    setText(jobTarget, coordinationMessage(error));
+  };
+
+  const showPollingFinalizationRetry = (
+    attempt: PollingSourceAttempt & { readonly kind: "source_acquisition" },
+    error: unknown,
+  ): void => {
+    activeAttempt = attempt;
+    previewSubmit.disabled = true;
+    acquire.disabled = true;
+    continueChecking.hidden = false;
+    continueChecking.disabled = false;
+    retryAdmission.hidden = true;
+    retryAdmission.disabled = false;
     setText(
       jobTarget,
-      "The acquisition response was not received. Retry admission with the same saved identity.",
+      `${coordinationMessage(error)} Use Continue checking to finalize this exact job without resubmitting it.`,
     );
   };
 
@@ -423,6 +557,7 @@ export function attachSourcesPage(
     continueChecking.disabled = false;
     retryAdmission.hidden = true;
     retryAdmission.disabled = false;
+    retryAdmission.textContent = "Retry admission";
     jobIdTarget.textContent = "";
   };
 
@@ -437,8 +572,10 @@ export function attachSourcesPage(
     if (activeAttempt.stage === "polling") {
       exposeAttempt(jobIdTarget, activeAttempt);
       void checkAttempt(activeAttempt);
-    } else {
+    } else if (activeAttempt.stage === "admitting") {
       showAdmissionRetry(activeAttempt);
+    } else {
+      showFinalizationRetry(activeAttempt);
     }
   }
 
@@ -614,12 +751,19 @@ function jobResultMessage(code: string): string {
 
 function mutationError(error: unknown): string {
   const code = publicCode(error);
+  if (code === "attempt_coordination_unavailable") return coordinationMessage(error);
   if (code === "forbidden") return "The server denied mutation permission. Reload the page and preview again.";
   if (code === "plan_changed" || code === "stale_revision") return "The source plan changed. Preview it again before acquiring.";
   if (code === "job_queue_full" || code === "server_busy") return "The local job queue is busy. Start a new explicit attempt later.";
   if (code === "poll_timeout") return "The job is still running. Use Continue checking to resume this exact job.";
   if (code === "job_mismatch") return "The accepted job could not be verified. Continue checking the original job before starting another attempt.";
   return "Cannot complete this operation. Check that the local server is running.";
+}
+
+function coordinationMessage(error: unknown): string {
+  return publicCode(error) === "attempt_coordination_unavailable"
+    ? "Shared acquisition coordination storage is unavailable or corrupt. No acquisition was submitted. Repair browser storage, then retry the explicit action."
+    : "The acquisition identity could not be finalized safely. No new acquisition will be admitted.";
 }
 
 function sourceReadError(error: unknown): string {
@@ -648,10 +792,6 @@ function isYouTubeSource(value: string): boolean {
   }
 }
 
-function acquisitionIdempotencyKey(fingerprint: string): string {
-  return `web-source-acquire-${fingerprint}`;
-}
-
 function formatPublishedAt(value: string | null): string {
   return value === null ? "Unknown" : value.slice(0, 10);
 }
@@ -663,10 +803,25 @@ function exposeAttempt(target: HTMLElement, attempt: SourceAttempt): void {
 function readStoredAttempt(): SourceAttempt | null {
   const current = readStorageValue(SOURCE_ATTEMPT_STORAGE_KEY);
   if (current !== null) return parseCurrentAttempt(current);
-  const legacy = readStorageValue(LEGACY_SOURCE_ATTEMPT_STORAGE_KEY);
-  if (legacy === null) return null;
-  const migrated = parseLegacyAttempt(legacy);
-  discardInvalidStoredAttempt(LEGACY_SOURCE_ATTEMPT_STORAGE_KEY);
+  const legacyV2 = migrateStoredAttempt(
+    LEGACY_V2_SOURCE_ATTEMPT_STORAGE_KEY,
+    parseLegacyV2Attempt,
+  );
+  if (legacyV2 !== null) return legacyV2;
+  return migrateStoredAttempt(
+    LEGACY_V1_SOURCE_ATTEMPT_STORAGE_KEY,
+    parseLegacyV1Attempt,
+  );
+}
+
+function migrateStoredAttempt(
+  key: string,
+  parse: (raw: string) => SourceAttempt | null,
+): SourceAttempt | null {
+  const raw = readStorageValue(key);
+  if (raw === null) return null;
+  const migrated = parse(raw);
+  discardInvalidStoredAttempt(key);
   if (migrated !== null) writeStoredAttempt(migrated);
   return migrated;
 }
@@ -698,6 +853,7 @@ function parseCurrentAttempt(raw: string): SourceAttempt | null {
   const keys = Object.keys(value).sort();
   const expected = [
     "fingerprint",
+    "generation",
     "idempotency_key",
     "job_id",
     "kind",
@@ -707,7 +863,7 @@ function parseCurrentAttempt(raw: string): SourceAttempt | null {
   if (
     keys.length !== expected.length ||
     keys.some((key, index) => key !== expected[index]) ||
-    value.version !== 2
+    value.version !== 3
   ) {
     discardInvalidStoredAttempt(SOURCE_ATTEMPT_STORAGE_KEY);
     return null;
@@ -718,14 +874,16 @@ function parseCurrentAttempt(raw: string): SourceAttempt | null {
     typeof value.job_id === "string" &&
     JOB_ID.test(value.job_id) &&
     value.fingerprint === null &&
+    value.generation === null &&
     value.idempotency_key === null
   ) {
     return {
-      version: 2,
+      version: 3,
       stage: "polling",
       job_id: value.job_id,
       kind: "source_preview",
       fingerprint: null,
+      generation: null,
       idempotency_key: null,
     };
   }
@@ -733,20 +891,26 @@ function parseCurrentAttempt(raw: string): SourceAttempt | null {
     value.kind === "source_acquisition" &&
     typeof value.fingerprint === "string" &&
     SHA256.test(value.fingerprint) &&
+    isSafeGeneration(value.generation) &&
     typeof value.idempotency_key === "string" &&
     isSafeIdempotencyKey(value.idempotency_key)
   ) {
     if (
-      value.stage === "admitting" &&
+      (value.stage === "admitting" || value.stage === "finalizing") &&
       value.job_id === null &&
-      value.idempotency_key === acquisitionIdempotencyKey(value.fingerprint)
+      isExpectedAttemptKey(
+        value.fingerprint,
+        value.generation,
+        value.idempotency_key,
+      )
     ) {
       return {
-        version: 2,
-        stage: "admitting",
+        version: 3,
+        stage: value.stage,
         job_id: null,
         kind: "source_acquisition",
         fingerprint: value.fingerprint,
+        generation: value.generation,
         idempotency_key: value.idempotency_key,
       };
     }
@@ -759,11 +923,12 @@ function parseCurrentAttempt(raw: string): SourceAttempt | null {
       return null;
     }
     return {
-      version: 2,
+      version: 3,
       stage: "polling",
       job_id: value.job_id,
       kind: "source_acquisition",
       fingerprint: value.fingerprint,
+      generation: value.generation,
       idempotency_key: value.idempotency_key,
     };
   }
@@ -771,7 +936,77 @@ function parseCurrentAttempt(raw: string): SourceAttempt | null {
   return null;
 }
 
-function parseLegacyAttempt(raw: string): PollingSourceAttempt | null {
+function parseLegacyV2Attempt(raw: string): SourceAttempt | null {
+  const value = parseLegacyRecord(raw, 2, true);
+  if (value === null) return null;
+  if (
+    value.kind === "source_preview" &&
+    value.stage === "polling" &&
+    typeof value.job_id === "string" &&
+    value.fingerprint === null &&
+    value.idempotency_key === null
+  ) {
+    return previewAttempt(value.job_id);
+  }
+  if (
+    value.kind !== "source_acquisition" ||
+    typeof value.fingerprint !== "string" ||
+    !SHA256.test(value.fingerprint) ||
+    typeof value.idempotency_key !== "string" ||
+    !isSafeIdempotencyKey(value.idempotency_key)
+  ) {
+    return null;
+  }
+  if (value.stage === "admitting" && value.job_id === null) {
+    return {
+      version: 3,
+      stage: "admitting",
+      job_id: null,
+      kind: "source_acquisition",
+      fingerprint: value.fingerprint,
+      generation: 0,
+      idempotency_key: value.idempotency_key,
+    };
+  }
+  if (value.stage !== "polling" || typeof value.job_id !== "string") return null;
+  return acquisitionPollingAttempt(
+    value.job_id,
+    value.fingerprint,
+    value.idempotency_key,
+  );
+}
+
+function parseLegacyV1Attempt(raw: string): PollingSourceAttempt | null {
+  const value = parseLegacyRecord(raw, 1, false);
+  if (value === null || typeof value.job_id !== "string") return null;
+  if (
+    value.kind === "source_preview" &&
+    value.fingerprint === null &&
+    value.idempotency_key === null
+  ) {
+    return previewAttempt(value.job_id);
+  }
+  if (
+    value.kind === "source_acquisition" &&
+    typeof value.fingerprint === "string" &&
+    SHA256.test(value.fingerprint) &&
+    typeof value.idempotency_key === "string" &&
+    isSafeIdempotencyKey(value.idempotency_key)
+  ) {
+    return acquisitionPollingAttempt(
+      value.job_id,
+      value.fingerprint,
+      value.idempotency_key,
+    );
+  }
+  return null;
+}
+
+function parseLegacyRecord(
+  raw: string,
+  version: 1 | 2,
+  hasStage: boolean,
+): Record<string, unknown> | null {
   if (raw.length > MAX_STORED_ATTEMPT_BYTES) return null;
   let value: unknown;
   try {
@@ -786,48 +1021,47 @@ function parseLegacyAttempt(raw: string): PollingSourceAttempt | null {
     "idempotency_key",
     "job_id",
     "kind",
+    ...(hasStage ? ["stage"] : []),
     "version",
-  ];
+  ].sort();
   if (
     keys.length !== expected.length ||
     keys.some((key, index) => key !== expected[index]) ||
-    value.version !== 1 ||
-    typeof value.job_id !== "string" ||
-    !JOB_ID.test(value.job_id)
+    value.version !== version ||
+    (value.job_id !== null &&
+      (typeof value.job_id !== "string" || !JOB_ID.test(value.job_id)))
   ) {
     return null;
   }
-  if (
-    value.kind === "source_preview" &&
-    value.fingerprint === null &&
-    value.idempotency_key === null
-  ) {
-    return {
-      version: 2,
-      stage: "polling",
-      job_id: value.job_id,
-      kind: "source_preview",
-      fingerprint: null,
-      idempotency_key: null,
-    };
-  }
-  if (
-    value.kind === "source_acquisition" &&
-    typeof value.fingerprint === "string" &&
-    SHA256.test(value.fingerprint) &&
-    typeof value.idempotency_key === "string" &&
-    isSafeIdempotencyKey(value.idempotency_key)
-  ) {
-    return {
-      version: 2,
-      stage: "polling",
-      job_id: value.job_id,
-      kind: "source_acquisition",
-      fingerprint: value.fingerprint,
-      idempotency_key: value.idempotency_key,
-    };
-  }
-  return null;
+  return value;
+}
+
+function previewAttempt(jobId: string): PollingSourceAttempt {
+  return {
+    version: 3,
+    stage: "polling",
+    job_id: jobId,
+    kind: "source_preview",
+    fingerprint: null,
+    generation: null,
+    idempotency_key: null,
+  };
+}
+
+function acquisitionPollingAttempt(
+  jobId: string,
+  fingerprint: string,
+  idempotencyKey: string,
+): PollingSourceAttempt {
+  return {
+    version: 3,
+    stage: "polling",
+    job_id: jobId,
+    kind: "source_acquisition",
+    fingerprint,
+    generation: 0,
+    idempotency_key: idempotencyKey,
+  };
 }
 
 function writeStoredAttempt(attempt: SourceAttempt): boolean {
@@ -845,7 +1079,8 @@ function writeStoredAttempt(attempt: SourceAttempt): boolean {
 function clearStoredAttempt(): void {
   try {
     window.sessionStorage.removeItem(SOURCE_ATTEMPT_STORAGE_KEY);
-    window.sessionStorage.removeItem(LEGACY_SOURCE_ATTEMPT_STORAGE_KEY);
+    window.sessionStorage.removeItem(LEGACY_V2_SOURCE_ATTEMPT_STORAGE_KEY);
+    window.sessionStorage.removeItem(LEGACY_V1_SOURCE_ATTEMPT_STORAGE_KEY);
   } catch {
     // Terminal state remains authoritative even when browser storage is unavailable.
   }
@@ -865,6 +1100,22 @@ function isSafeIdempotencyKey(value: string): boolean {
     const code = character.codePointAt(0);
     return code !== undefined && code >= 0x20 && code <= 0x7e;
   });
+}
+
+function isSafeGeneration(value: unknown): value is number {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= 999_999_999;
+}
+
+function isExpectedAttemptKey(
+  fingerprint: string,
+  generation: number,
+  key: string,
+): boolean {
+  return key === acquisitionAttemptKey(fingerprint, generation) ||
+    (generation === 0 && key === `web-source-acquire-${fingerprint}`);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

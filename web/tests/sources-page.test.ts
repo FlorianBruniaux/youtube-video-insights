@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   ApiGetResponse,
@@ -10,7 +10,8 @@ import type {
 import { attachDashboard } from "../src/lib/pages/dashboard";
 import { attachSourcesPage, pollJob } from "../src/lib/pages/sources";
 
-const SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v2";
+const SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v3";
+const LEGACY_V2_SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v2";
 const LEGACY_SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v1";
 
 const sourcesFixture: SourcesResponse = {
@@ -88,9 +89,24 @@ function renderSourcesDom(): HTMLElement {
   return root;
 }
 
+beforeEach(() => {
+  Object.defineProperty(window.navigator, "locks", {
+    configurable: true,
+    value: {
+      request: async <T>(
+        _name: string,
+        _options: unknown,
+        task: () => T | Promise<T>,
+      ): Promise<T> => task(),
+    },
+  });
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   window.sessionStorage.clear();
+  window.localStorage.clear();
+  Reflect.deleteProperty(window.navigator, "locks");
   document.body.replaceChildren();
 });
 
@@ -248,6 +264,15 @@ describe("source inventory and acquisition", () => {
         "2 transcripts ready",
       ),
     );
+    expect(JSON.parse(
+      window.localStorage.getItem(
+        `yt-insights:source-attempt-generation:${"a".repeat(64)}`,
+      ) ?? "null",
+    )).toEqual({
+      version: 1,
+      fingerprint: "a".repeat(64),
+      generation: 1,
+    });
   });
 
   it("disables preview admission and persists only the accepted job identity", async () => {
@@ -276,7 +301,7 @@ describe("source inventory and acquisition", () => {
     );
     const stored = window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY);
     expect(stored).toBe(
-      '{"version":2,"stage":"polling","job_id":"preview-job-safe","kind":"source_preview","fingerprint":null,"idempotency_key":null}',
+      '{"version":3,"stage":"polling","job_id":"preview-job-safe","kind":"source_preview","fingerprint":null,"generation":null,"idempotency_key":null}',
     );
     expect(stored).not.toContain("token");
   });
@@ -284,7 +309,7 @@ describe("source inventory and acquisition", () => {
   it("resumes a stored preview job after reload without resubmitting it", async () => {
     window.sessionStorage.setItem(
       SOURCE_ATTEMPT_STORAGE_KEY,
-      '{"version":2,"stage":"polling","job_id":"preview-resume","kind":"source_preview","fingerprint":null,"idempotency_key":null}',
+      '{"version":3,"stage":"polling","job_id":"preview-resume","kind":"source_preview","fingerprint":null,"generation":null,"idempotency_key":null}',
     );
     const root = renderSourcesDom();
     const read = vi
@@ -331,9 +356,10 @@ describe("source inventory and acquisition", () => {
     detach();
     expect(window.sessionStorage.getItem(LEGACY_SOURCE_ATTEMPT_STORAGE_KEY)).toBeNull();
     expect(JSON.parse(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY) ?? "null")).toMatchObject({
-      version: 2,
+      version: 3,
       stage: "polling",
       job_id: "legacy-acquire",
+      generation: 0,
       idempotency_key: "web-source-old-random",
     });
 
@@ -369,6 +395,32 @@ describe("source inventory and acquisition", () => {
       ),
     );
     expect(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY)).toBeNull();
+  });
+
+  it("migrates a lost v2 admission without changing its admitted identity", async () => {
+    const legacyKey = `web-source-acquire-${"a".repeat(64)}`;
+    window.sessionStorage.setItem(
+      LEGACY_V2_SOURCE_ATTEMPT_STORAGE_KEY,
+      `{"version":2,"stage":"admitting","job_id":null,"kind":"source_acquisition","fingerprint":"${"a".repeat(64)}","idempotency_key":"${legacyKey}"}`,
+    );
+    const root = renderSourcesDom();
+    const read = vi.fn().mockResolvedValueOnce(sourcesFixture);
+    const write = vi.fn().mockRejectedValueOnce(new TypeError("response lost"));
+    attachSourcesPage(root, { read, write, wait: vi.fn() });
+
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-source-retry-admission]")?.hidden).toBe(false),
+    );
+    expect(write).not.toHaveBeenCalled();
+    root.querySelector<HTMLButtonElement>("[data-source-retry-admission]")!.click();
+
+    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    expect(write).toHaveBeenCalledWith(
+      "/api/v1/sources/acquire",
+      { fingerprint: "a".repeat(64), idempotency_key: legacyKey },
+      expect.any(AbortSignal),
+    );
+    expect(window.sessionStorage.getItem(LEGACY_V2_SOURCE_ATTEMPT_STORAGE_KEY)).toBeNull();
   });
 
   it("persists the acquisition fingerprint and the admitted idempotency key", async () => {
@@ -414,11 +466,12 @@ describe("source inventory and acquisition", () => {
       idempotency_key: string;
     };
     expect(JSON.parse(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY) ?? "null")).toEqual({
-      version: 2,
+      version: 3,
       stage: "polling",
       job_id: "acquire-slow",
       kind: "source_acquisition",
       fingerprint: "a".repeat(64),
+      generation: 0,
       idempotency_key: admittedBody.idempotency_key,
     });
   });
@@ -466,15 +519,16 @@ describe("source inventory and acquisition", () => {
     await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2));
     const expectedBody = {
       fingerprint: "a".repeat(64),
-      idempotency_key: `web-source-acquire-${"a".repeat(64)}`,
+      idempotency_key: `web-source-acquire-${"a".repeat(64)}-0`,
     };
     expect(write.mock.calls[1]?.[1]).toEqual(expectedBody);
     expect(JSON.parse(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY) ?? "null")).toEqual({
-      version: 2,
+      version: 3,
       stage: "admitting",
       job_id: null,
       kind: "source_acquisition",
       fingerprint: "a".repeat(64),
+      generation: 0,
       idempotency_key: expectedBody.idempotency_key,
     });
 
@@ -492,10 +546,11 @@ describe("source inventory and acquisition", () => {
       expect(root.querySelector<HTMLButtonElement>("[data-source-continue]")?.hidden).toBe(false),
     );
     expect(JSON.parse(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY) ?? "null")).toMatchObject({
-      version: 2,
+      version: 3,
       stage: "polling",
       job_id: "acquire-recovered",
       fingerprint: "a".repeat(64),
+      generation: 0,
       idempotency_key: expectedBody.idempotency_key,
     });
   });
@@ -523,13 +578,13 @@ describe("source inventory and acquisition", () => {
     });
 
     root.querySelector<HTMLButtonElement>("[data-source-acquire]")!.click();
-    storageWrite.mockRestore();
 
     await vi.waitFor(() =>
       expect(root.querySelector("[data-source-job]")?.textContent).toContain(
         "could not be saved",
       ),
     );
+    storageWrite.mockRestore();
     expect(write).toHaveBeenCalledOnce();
     expect(root.querySelector<HTMLButtonElement>("[data-source-acquire]")?.disabled).toBe(false);
   });
@@ -570,18 +625,122 @@ describe("source inventory and acquisition", () => {
     expect(firstTab).toEqual(secondTab);
     expect(firstTab).toEqual({
       fingerprint: "a".repeat(64),
-      idempotency_key: `web-source-acquire-${"a".repeat(64)}`,
+      idempotency_key: `web-source-acquire-${"a".repeat(64)}-0`,
     });
     expect(changedTab).toEqual({
       fingerprint: "b".repeat(64),
-      idempotency_key: `web-source-acquire-${"b".repeat(64)}`,
+      idempotency_key: `web-source-acquire-${"b".repeat(64)}-0`,
     });
+  });
+
+  it("uses the renewed shared generation for a new explicit confirmation", async () => {
+    window.localStorage.setItem(
+      `yt-insights:source-attempt-generation:${"a".repeat(64)}`,
+      `{"version":1,"fingerprint":"${"a".repeat(64)}","generation":1}`,
+    );
+    const root = renderSourcesDom();
+    root.querySelector<HTMLInputElement>("[name=source]")!.value =
+      "https://www.youtube.com/@example";
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(sourcesFixture)
+      .mockResolvedValueOnce(job("source_preview", preview, "preview-job"));
+    const write = vi
+      .fn()
+      .mockResolvedValueOnce({ schema_version: 1, job_id: "preview-job" })
+      .mockRejectedValueOnce(new TypeError("response lost"));
+    attachSourcesPage(root, { read, write, wait: vi.fn() });
+    root.querySelector("form")?.dispatchEvent(
+      new SubmitEvent("submit", { bubbles: true, cancelable: true }),
+    );
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-source-acquire]")?.disabled).toBe(false),
+    );
+
+    root.querySelector<HTMLButtonElement>("[data-source-acquire]")!.click();
+
+    await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+    expect(write.mock.calls[1]?.[1]).toEqual({
+      fingerprint: "a".repeat(64),
+      idempotency_key: `web-source-acquire-${"a".repeat(64)}-1`,
+    });
+  });
+
+  it("does not admit a stale tab after another tab completes the generation", async () => {
+    window.localStorage.setItem(
+      `yt-insights:source-attempt-generation:${"a".repeat(64)}`,
+      `{"version":1,"fingerprint":"${"a".repeat(64)}","generation":1}`,
+    );
+    window.sessionStorage.setItem(
+      SOURCE_ATTEMPT_STORAGE_KEY,
+      `{"version":3,"stage":"admitting","job_id":null,"kind":"source_acquisition","fingerprint":"${"a".repeat(64)}","generation":0,"idempotency_key":"web-source-acquire-${"a".repeat(64)}-0"}`,
+    );
+    const root = renderSourcesDom();
+    const read = vi.fn().mockResolvedValueOnce(sourcesFixture);
+    const write = vi.fn();
+    attachSourcesPage(root, { read, write, wait: vi.fn() });
+
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-source-retry-admission]")?.hidden).toBe(false),
+    );
+    root.querySelector<HTMLButtonElement>("[data-source-retry-admission]")!.click();
+
+    await vi.waitFor(() =>
+      expect(root.querySelector("[data-source-job]")?.textContent).toContain(
+        "new preview",
+      ),
+    );
+    expect(write).not.toHaveBeenCalled();
+    expect(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY)).toBeNull();
+    expect(root.querySelector<HTMLButtonElement>("[data-source-preview-submit]")?.disabled).toBe(false);
+  });
+
+  it("fails closed when shared acquisition coordination is unavailable", async () => {
+    const root = renderSourcesDom();
+    root.querySelector<HTMLInputElement>("[name=source]")!.value =
+      "https://www.youtube.com/@example";
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(sourcesFixture)
+      .mockResolvedValueOnce(job("source_preview", preview, "preview-job"));
+    const write = vi
+      .fn()
+      .mockResolvedValueOnce({ schema_version: 1, job_id: "preview-job" });
+    const unavailable = vi.fn().mockRejectedValue({
+      code: "attempt_coordination_unavailable",
+    });
+    attachSourcesPage(root, {
+      read,
+      write,
+      wait: vi.fn(),
+      coordinator: {
+        claim: unavailable,
+        isCurrent: unavailable,
+        complete: unavailable,
+      },
+    });
+    root.querySelector("form")?.dispatchEvent(
+      new SubmitEvent("submit", { bubbles: true, cancelable: true }),
+    );
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-source-acquire]")?.disabled).toBe(false),
+    );
+
+    root.querySelector<HTMLButtonElement>("[data-source-acquire]")!.click();
+
+    await vi.waitFor(() =>
+      expect(root.querySelector("[data-source-job]")?.textContent).toContain(
+        "coordination storage",
+      ),
+    );
+    expect(write).toHaveBeenCalledOnce();
+    expect(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY)).toBeNull();
   });
 
   it("clears an evicted job and requires a new explicit preview", async () => {
     window.sessionStorage.setItem(
       SOURCE_ATTEMPT_STORAGE_KEY,
-      '{"version":2,"stage":"polling","job_id":"preview-evicted","kind":"source_preview","fingerprint":null,"idempotency_key":null}',
+      '{"version":3,"stage":"polling","job_id":"preview-evicted","kind":"source_preview","fingerprint":null,"generation":null,"idempotency_key":null}',
     );
     const root = renderSourcesDom();
     const read = vi
@@ -601,6 +760,48 @@ describe("source inventory and acquisition", () => {
     expect(root.querySelector<HTMLButtonElement>("[data-source-preview-submit]")?.disabled).toBe(false);
     expect(root.querySelector<HTMLButtonElement>("[data-source-continue]")?.hidden).toBe(true);
     expect(write).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "terminal failure",
+      {
+        schema_version: 1,
+        job: {
+          job_id: "acquire-terminal",
+          kind: "source_acquisition",
+          status: "failed",
+          result: null,
+          error_code: "operation_failed",
+        },
+      },
+    ],
+    ["evicted job", { code: "not_found" }],
+  ])("rotates the acquisition identity after %s", async (_case, outcome) => {
+    window.localStorage.setItem(
+      `yt-insights:source-attempt-generation:${"a".repeat(64)}`,
+      `{"version":1,"fingerprint":"${"a".repeat(64)}","generation":0}`,
+    );
+    window.sessionStorage.setItem(
+      SOURCE_ATTEMPT_STORAGE_KEY,
+      `{"version":3,"stage":"polling","job_id":"acquire-terminal","kind":"source_acquisition","fingerprint":"${"a".repeat(64)}","generation":0,"idempotency_key":"web-source-acquire-${"a".repeat(64)}-0"}`,
+    );
+    const root = renderSourcesDom();
+    const read = vi.fn().mockResolvedValueOnce(sourcesFixture);
+    if ("code" in outcome) read.mockRejectedValueOnce(outcome);
+    else read.mockResolvedValueOnce(outcome as JobResponse);
+
+    attachSourcesPage(root, { read, write: vi.fn(), wait: vi.fn() });
+
+    await vi.waitFor(() =>
+      expect(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY)).toBeNull(),
+    );
+    expect(JSON.parse(
+      window.localStorage.getItem(
+        `yt-insights:source-attempt-generation:${"a".repeat(64)}`,
+      ) ?? "null",
+    )).toMatchObject({ generation: 1 });
+    expect(root.querySelector<HTMLButtonElement>("[data-source-preview-submit]")?.disabled).toBe(false);
   });
 
   it.each(["plan_changed", "stale_revision"])(
@@ -636,13 +837,18 @@ describe("source inventory and acquisition", () => {
       expect(root.querySelector<HTMLButtonElement>("[data-source-preview-submit]")?.disabled).toBe(false);
       expect(root.querySelector<HTMLButtonElement>("[data-source-retry-admission]")?.hidden).toBe(true);
       expect(root.querySelector<HTMLButtonElement>("[data-source-acquire]")?.hidden).toBe(true);
+      expect(JSON.parse(
+        window.localStorage.getItem(
+          `yt-insights:source-attempt-generation:${"a".repeat(64)}`,
+        ) ?? "null",
+      )).toMatchObject({ generation: 1 });
     },
   );
 
   it("keeps a timed-out job and continues polling the same ID only after confirmation", async () => {
     window.sessionStorage.setItem(
       SOURCE_ATTEMPT_STORAGE_KEY,
-      '{"version":2,"stage":"polling","job_id":"preview-slow","kind":"source_preview","fingerprint":null,"idempotency_key":null}',
+      '{"version":3,"stage":"polling","job_id":"preview-slow","kind":"source_preview","fingerprint":null,"generation":null,"idempotency_key":null}',
     );
     const root = renderSourcesDom();
     const running = {
@@ -691,7 +897,7 @@ describe("source inventory and acquisition", () => {
   it("rejects a mismatched returned job without dropping the resumable attempt", async () => {
     window.sessionStorage.setItem(
       SOURCE_ATTEMPT_STORAGE_KEY,
-      '{"version":2,"stage":"polling","job_id":"preview-expected","kind":"source_preview","fingerprint":null,"idempotency_key":null}',
+      '{"version":3,"stage":"polling","job_id":"preview-expected","kind":"source_preview","fingerprint":null,"generation":null,"idempotency_key":null}',
     );
     const root = renderSourcesDom();
     const read = vi
