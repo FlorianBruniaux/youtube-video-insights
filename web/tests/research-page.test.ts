@@ -746,6 +746,130 @@ describe("cumulative research workspace", () => {
     expect(root.querySelector<HTMLButtonElement>("[data-start-discovery]")?.disabled).toBe(false);
   });
 
+  it("moves focus out of an admission panel hidden by a definitive failure", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    window.sessionStorage.setItem(
+      "yt-insights:research-admission:v1",
+      JSON.stringify({
+        version: 1,
+        session_id: sessionId,
+        kind: "research_discovery",
+        expected_revision: 2,
+        idempotency_key: `web:research_discovery:${sessionId}:2`,
+        language: null,
+      }),
+    );
+    const root = renderWorkspaceDom();
+    attachResearchWorkspace(root, {
+      read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
+      write: vi.fn().mockRejectedValue({ code: "forbidden", status: 403 }),
+      wait: vi.fn(),
+      coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
+    });
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")?.hidden).toBe(false),
+    );
+    const retry = root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")!;
+    const status = root.querySelector<HTMLElement>("[data-research-status]")!;
+    retry.focus();
+    expect(document.activeElement).toBe(retry);
+
+    retry.click();
+
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLElement>("[data-job-progress]")?.hidden).toBe(true),
+    );
+    expect(status.getAttribute("tabindex")).toBe("-1");
+    expect(document.activeElement).toBe(status);
+  });
+
+  it("does not move focus when a definitive admission clear hides another panel", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    window.sessionStorage.setItem(
+      "yt-insights:research-admission:v1",
+      JSON.stringify({
+        version: 1,
+        session_id: sessionId,
+        kind: "research_discovery",
+        expected_revision: 2,
+        idempotency_key: `web:research_discovery:${sessionId}:2`,
+        language: null,
+      }),
+    );
+    const root = renderWorkspaceDom();
+    attachResearchWorkspace(root, {
+      read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
+      write: vi.fn().mockRejectedValue({ code: "forbidden", status: 403 }),
+      wait: vi.fn(),
+      coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
+    });
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")?.hidden).toBe(false),
+    );
+    const retry = root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")!;
+    const heading = root.querySelector<HTMLElement>("[data-research-heading]")!;
+    heading.tabIndex = -1;
+    heading.focus();
+    expect(document.activeElement).toBe(heading);
+
+    retry.click();
+
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLElement>("[data-job-progress]")?.hidden).toBe(true),
+    );
+    expect(document.activeElement).toBe(heading);
+  });
+
+  it("keeps the admission and all controls locked when conflict retirement fails", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    const scope = researchActionScope(
+      sessionId,
+      "research_discovery",
+      2,
+      null,
+    );
+    const fingerprint = await researchScopeFingerprint(scope);
+    const baseCoordinator = createAttemptIdentityCoordinator(
+      window.localStorage,
+      serialLock(),
+      "research",
+    );
+    const complete = vi.fn().mockRejectedValue({ code: "attempt_coordination_unavailable" });
+    const root = renderWorkspaceDom();
+    const write = vi.fn().mockRejectedValue({ code: "idempotency_conflict", status: 409 });
+    attachResearchWorkspace(root, {
+      read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
+      write,
+      wait: vi.fn(),
+      coordinator: { ...baseCoordinator, complete },
+    });
+    await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
+
+    root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
+
+    await vi.waitFor(() =>
+      expect(root.querySelector("[data-research-status]")?.textContent).toBe(
+        "This conflicted request identity could not be retired. Research controls remain locked.",
+      ),
+    );
+    const primary = root.querySelector<HTMLButtonElement>("[data-start-discovery]")!;
+    const retry = root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")!;
+    expect(window.sessionStorage.getItem("yt-insights:research-admission:v1")).toContain(
+      `web-research-${fingerprint}-0`,
+    );
+    expect(primary.disabled).toBe(true);
+    expect(retry.hidden).toBe(true);
+    expect(retry.disabled).toBe(true);
+    expect(complete).toHaveBeenCalledWith(fingerprint, 0);
+
+    primary.click();
+    retry.click();
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+
+    expect(write).toHaveBeenCalledOnce();
+    await expect(baseCoordinator.claim(fingerprint)).resolves.toBe(0);
+  });
+
   it("poisons one conflicted generation, clears its panel, and waits for a new explicit click", async () => {
     window.history.replaceState({}, "", `/research/${sessionId}/`);
     const scope = researchActionScope(

@@ -123,6 +123,7 @@ export function attachResearchWorkspace(
   };
 
   const clearDefinitiveAdmission = (): void => {
+    const restoreFocus = jobRegion.contains(document.activeElement);
     clearResearchAdmission();
     activeAdmission = null;
     resetJobPanel(
@@ -132,6 +133,10 @@ export function attachResearchWorkspace(
       continueJob,
       retryAdmission,
     );
+    if (restoreFocus) {
+      status.tabIndex = -1;
+      status.focus();
+    }
   };
 
   const syncMutation = async (path: string, body: unknown): Promise<void> => {
@@ -276,6 +281,7 @@ export function attachResearchWorkspace(
         } catch {
           showAdmission(jobRegion, jobMessage, jobId, retryAdmission, attempt);
           retryAdmission.hidden = true;
+          retryAdmission.disabled = true;
           status.textContent = "This conflicted request identity could not be retired. Research controls remain locked.";
           busy = false;
           return;
