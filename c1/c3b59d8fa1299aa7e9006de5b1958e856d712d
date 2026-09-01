@@ -1,0 +1,73 @@
+.github/workflows/ci.yml
+  s_0a442347250965::t_f62b99752ca768 49-53
+  s_0a442347250965::t_a2686e902b58a6 54,64-65
+  s_da248a336ea73b::t_eb2492d1416601 66
+README.md
+  s_0a442347250965::t_a2686e902b58a6 1009,1020-1022
+  s_0a442347250965::t_989e9f0733f7b7 878-881,887
+  s_0a442347250965::t_388093f2ee1426 882-884
+  s_bd1e403875ee43::t_d2c9c721c5b65a 1023
+CHANGELOG.md
+  s_0a442347250965::t_989e9f0733f7b7 37-40,47-48
+  s_0a442347250965::t_388093f2ee1426 41-44
+web/e2e/local-ui.spec.ts
+  s_0a442347250965::t_e552153faa2f4f 33-35,39-47,70,88-90,98-100,104-106,114-116,124-125,129,134-135,140-141,148-158,160-162,173-179,182
+  s_0a442347250965::t_d648c157f0ea4e 91-92,101-103,107-113,136-139,142
+  s_0a442347250965::t_f071234d72b8a5 117,159
+  s_0a442347250965::t_44e672c76659b5 93-97,126-128,145-147,163-172,180-181
+  s_0a442347250965::t_40af63d8a9365b 183
+web/e2e/fixture-server.ts
+  s_0a442347250965::t_8530865925f5dc 112-115
+  s_0a442347250965::t_35c76dac2377a5 16-20,24,37,44-46,70,74,111,116-117,206-219
+  s_0a442347250965::t_25b5de071ef0d8 220
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_a2686e902b58a6 131
+  s_0a442347250965::t_388093f2ee1426 11-12,117
+ROADMAP.md
+  s_0a442347250965::t_388093f2ee1426 57,74-75
+tests/web/test_static_assets.py
+  s_0a442347250965::t_f62b99752ca768 126
+  s_0a442347250965::t_cd166fcb2b66ea 152-154,173-209,222-223
+  s_0a442347250965::t_8530865925f5dc 155-172
+  s_0a442347250965::t_e552153faa2f4f 6,240-338
+  s_0a442347250965::t_e85913ea8e2171 27
+  s_0a442347250965::t_5ef5c134ad460c 5,21-26,28-29,42,60,63-96,110-112,127-128,144,210-221
+INSTALL.md
+  s_0a442347250965::t_a2686e902b58a6 475,486-489
+  s_da248a336ea73b::t_647cd894d8ffc4 490
+scripts/verify_web_build.py
+  s_0a442347250965::t_f071234d72b8a5 10,16,33-47,50-52,55-66,72-106
+  s_0a442347250965::t_a40ca270be0768 11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "c1c3b59d8fa1299aa7e9006de5b1958e856d712d",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_bd1e403875ee43": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "953892dc-6069-48d6-8505-998f61d64787",
+        "model": "claude-sonnet-5"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_da248a336ea73b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05c08-3f0e-7de2-bbe2-594413cca1a5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
