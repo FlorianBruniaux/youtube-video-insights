@@ -192,6 +192,15 @@ def test_wheel_smoke_copies_only_current_build_inputs(tmp_path: Path) -> None:
     assert not tuple((copied_source / "src").rglob("__pycache__"))
 
 
+def test_package_data_declares_recursive_generated_web_assets() -> None:
+    project = tomllib.loads(
+        (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+
+    patterns = project["tool"]["setuptools"]["package-data"]["yt_insights"]
+    assert "web/static/**/*" in patterns
+
+
 def test_wheel_smoke_rejects_a_working_directory_inside_the_checkout(
     tmp_path: Path,
 ) -> None:

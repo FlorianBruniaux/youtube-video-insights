@@ -26,6 +26,7 @@ EXPECTED_COMMANDS = {
     "research",
     "run",
     "search",
+    "serve",
     "setup",
     "suggest-shorts",
 }
