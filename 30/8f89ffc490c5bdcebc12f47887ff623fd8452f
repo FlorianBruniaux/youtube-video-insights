@@ -1,0 +1,26 @@
+CHANGELOG.md
+  s_0a442347250965::t_4c0169a362d9d0 163
+  s_0a442347250965::t_92251f7def3d72 164-166
+README.md
+  s_0a442347250965::t_4c0169a362d9d0 18-35
+docs/assets/cumulative-research-workflow.mmd
+  s_0a442347250965::t_4c0169a362d9d0 19-24
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_e187d1faffd85a 51-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "308f89ffc490c5bdcebc12f47887ff623fd8452f",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
