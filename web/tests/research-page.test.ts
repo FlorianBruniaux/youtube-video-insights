@@ -746,7 +746,7 @@ describe("cumulative research workspace", () => {
     expect(root.querySelector<HTMLButtonElement>("[data-start-discovery]")?.disabled).toBe(false);
   });
 
-  it("moves focus out of an admission panel hidden by a definitive failure", async () => {
+  it("restores status focus when hiding an admission control moves focus to the body", async () => {
     window.history.replaceState({}, "", `/research/${sessionId}/`);
     window.sessionStorage.setItem(
       "yt-insights:research-admission:v1",
@@ -759,10 +759,14 @@ describe("cumulative research workspace", () => {
         language: null,
       }),
     );
+    let rejectWrite!: (reason?: unknown) => void;
+    const write = vi.fn().mockReturnValue(new Promise<never>((_resolve, reject) => {
+      rejectWrite = reject;
+    }));
     const root = renderWorkspaceDom();
     attachResearchWorkspace(root, {
       read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
-      write: vi.fn().mockRejectedValue({ code: "forbidden", status: 403 }),
+      write,
       wait: vi.fn(),
       coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
     });
@@ -776,11 +780,17 @@ describe("cumulative research workspace", () => {
 
     retry.click();
 
-    await vi.waitFor(() =>
-      expect(root.querySelector<HTMLElement>("[data-job-progress]")?.hidden).toBe(true),
-    );
+    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    expect(retry.hidden).toBe(true);
+    document.body.tabIndex = -1;
+    document.body.focus();
+    expect(document.activeElement).toBe(document.body);
+
+    rejectWrite({ code: "forbidden", status: 403 });
+
+    await vi.waitFor(() => expect(document.activeElement).toBe(status));
     expect(status.getAttribute("tabindex")).toBe("-1");
-    expect(document.activeElement).toBe(status);
+    expect(root.querySelector<HTMLElement>("[data-job-progress]")?.hidden).toBe(true);
   });
 
   it("does not move focus when a definitive admission clear hides another panel", async () => {

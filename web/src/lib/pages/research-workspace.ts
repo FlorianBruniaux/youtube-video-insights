@@ -122,8 +122,7 @@ export function attachResearchWorkspace(
     status.textContent = STALE_MESSAGE;
   };
 
-  const clearDefinitiveAdmission = (): void => {
-    const restoreFocus = jobRegion.contains(document.activeElement);
+  const clearDefinitiveAdmission = (restoreFocus: boolean): void => {
     clearResearchAdmission();
     activeAdmission = null;
     resetJobPanel(
@@ -178,6 +177,8 @@ export function attachResearchWorkspace(
       (retryAttempt !== null &&
         activeAdmission?.idempotency_key !== retryAttempt.idempotency_key)
     ) return;
+    const restoreAdmissionFocus = retryAttempt !== null &&
+      jobRegion.contains(document.activeElement);
     busy = true;
     setDecisionButtonsDisabled(decision, true);
     retryAdmission.hidden = true;
@@ -226,7 +227,7 @@ export function attachResearchWorkspace(
         },
       );
       if (admission.status === "stale") {
-        clearDefinitiveAdmission();
+        clearDefinitiveAdmission(restoreAdmissionFocus);
         await loadSnapshot();
         status.textContent = "This research attempt already ended. Review the current session before starting again.";
         busy = false;
@@ -256,17 +257,17 @@ export function attachResearchWorkspace(
       }
       const code = publicCode(error);
       if (code === "stale_revision") {
-        clearDefinitiveAdmission();
+        clearDefinitiveAdmission(restoreAdmissionFocus);
         await handleStale();
       } else if (code === "workflow_conflict") {
-        clearDefinitiveAdmission();
+        clearDefinitiveAdmission(restoreAdmissionFocus);
         await loadSnapshot();
         status.textContent = "The research workflow changed. Review the current session before starting again.";
       } else if (code === "not_found") {
-        clearDefinitiveAdmission();
+        clearDefinitiveAdmission(restoreAdmissionFocus);
         status.textContent = "This research session was not found.";
       } else if (code === "attempt_storage_unavailable") {
-        clearDefinitiveAdmission();
+        clearDefinitiveAdmission(restoreAdmissionFocus);
         status.textContent = "Browser session storage is unavailable. No background job was submitted.";
       } else if (
         code === "idempotency_conflict" &&
@@ -286,13 +287,13 @@ export function attachResearchWorkspace(
           busy = false;
           return;
         }
-        clearDefinitiveAdmission();
+        clearDefinitiveAdmission(restoreAdmissionFocus);
         status.textContent = mutationMessage(error);
       } else if (attempt !== null && shouldRetainAdmission(error)) {
         showAdmission(jobRegion, jobMessage, jobId, retryAdmission, attempt);
         status.textContent = "The admission response was not confirmed. Retry explicitly to reuse the same request identity.";
       } else {
-        clearDefinitiveAdmission();
+        clearDefinitiveAdmission(restoreAdmissionFocus);
         status.textContent = mutationMessage(error);
       }
       busy = false;
