@@ -16,9 +16,30 @@ export type WithExclusiveLock = <T>(
 
 export interface AttemptIdentityCoordinator {
   claim(fingerprint: string): Promise<number>;
+  admit<T>(
+    fingerprint: string,
+    expectedGeneration: number | null,
+    task: (generation: number) => T | Promise<T>,
+  ): Promise<AdmissionResult<T>>;
   isCurrent(fingerprint: string, generation: number): Promise<boolean>;
   complete(fingerprint: string, completedGeneration: number): Promise<number>;
 }
+
+export type AdmissionResult<T> =
+  | {
+      readonly status: "admitted";
+      readonly generation: number;
+      readonly value: T;
+    }
+  | {
+      readonly status: "stale";
+      readonly generation: number;
+    };
+
+type LockedAdmissionResult<T> = AdmissionResult<T> | {
+  readonly status: "task_failed";
+  readonly error: unknown;
+};
 
 interface GenerationRecord {
   readonly version: 1;
@@ -46,6 +67,37 @@ export function createAttemptIdentityCoordinator(
       writeRecord(storage, { version: 1, fingerprint, generation: 0 });
       return 0;
     }),
+    admit: async (fingerprint, expectedGeneration, task) => {
+      const result = await withGenerationLock(
+        fingerprint,
+        withLock,
+        async (): Promise<LockedAdmissionResult<Awaited<ReturnType<typeof task>>>> => {
+          if (expectedGeneration !== null) requireGeneration(expectedGeneration);
+          const current = readRecord(storage, fingerprint);
+          const generation = current?.generation ?? 0;
+          if (current === null) {
+            writeRecord(storage, { version: 1, fingerprint, generation });
+          }
+          if (
+            expectedGeneration !== null &&
+            generation !== expectedGeneration
+          ) {
+            return { status: "stale", generation };
+          }
+          try {
+            return {
+              status: "admitted",
+              generation,
+              value: await task(generation),
+            };
+          } catch (error: unknown) {
+            return { status: "task_failed", error };
+          }
+        },
+      );
+      if (result.status === "task_failed") throw result.error;
+      return result;
+    },
     isCurrent: (fingerprint, generation) =>
       withGenerationLock(fingerprint, withLock, () => {
         requireGeneration(generation);
@@ -187,6 +239,7 @@ function unavailableCoordinator(): AttemptIdentityCoordinator {
   };
   return {
     claim: unavailable,
+    admit: unavailable,
     isCurrent: unavailable,
     complete: unavailable,
   };

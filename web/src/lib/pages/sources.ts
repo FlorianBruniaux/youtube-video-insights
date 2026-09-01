@@ -33,6 +33,7 @@ interface SourceDependencies {
 }
 
 const PAGE_SIZE = 20;
+const ADMISSION_TIMEOUT_MS = 15_000;
 const MAX_STORED_ATTEMPT_BYTES = 1_024;
 const JOB_ID = /^[A-Za-z0-9_-]{1,200}$/;
 const SHA256 = /^[0-9a-f]{64}$/;
@@ -239,60 +240,22 @@ export function attachSourcesPage(
   const onAcquire = (): void => {
     if (approvedPlan === null || activeAttempt !== null || checkingAttempt) return;
     const plan = approvedPlan;
-    checkingAttempt = true;
     acquire.disabled = true;
     previewSubmit.disabled = true;
     continueChecking.hidden = true;
     retryAdmission.hidden = true;
     setText(jobTarget, "Coordinating this acquisition attempt…");
-    void prepareAcquisition(plan);
-  };
-  const prepareAcquisition = async (plan: SourcePreviewResult): Promise<void> => {
-    try {
-      const generation = await coordinator.claim(plan.fingerprint);
-      const attempt: AdmittingAcquisitionAttempt = {
-        version: 3,
-        stage: "admitting",
-        job_id: null,
-        kind: "source_acquisition",
-        fingerprint: plan.fingerprint,
-        generation,
-        idempotency_key: acquisitionAttemptKey(plan.fingerprint, generation),
-      };
-      activeAttempt = attempt;
-      if (!writeStoredAttempt(attempt)) {
-        activeAttempt = null;
-        checkingAttempt = false;
-        acquire.disabled = false;
-        previewSubmit.disabled = false;
-        setText(
-          jobTarget,
-          "The acquisition identity could not be saved. Allow session storage and confirm again.",
-        );
-        return;
-      }
-      approvedPlan = null;
-      checkingAttempt = false;
-      setText(jobTarget, "Submitting the approved acquisition…");
-      await admitAcquisition(attempt);
-    } catch (error: unknown) {
-      checkingAttempt = false;
-      activeAttempt = null;
-      acquire.disabled = false;
-      previewSubmit.disabled = false;
-      setText(
-        jobTarget,
-        coordinationMessage(error),
-      );
-    }
+    void admitAcquisition(plan.fingerprint, null);
   };
   const admitAcquisition = async (
-    attempt: AdmittingAcquisitionAttempt,
+    fingerprint: string,
+    retryAttempt: AdmittingAcquisitionAttempt | null,
   ): Promise<void> => {
     if (
       checkingAttempt ||
-      activeAttempt?.stage !== "admitting" ||
-      activeAttempt.idempotency_key !== attempt.idempotency_key
+      (retryAttempt !== null &&
+        (activeAttempt?.stage !== "admitting" ||
+          activeAttempt.idempotency_key !== retryAttempt.idempotency_key))
     ) {
       return;
     }
@@ -305,9 +268,36 @@ export function attachSourcesPage(
     continueChecking.hidden = true;
     retryAdmission.hidden = true;
     retryAdmission.disabled = true;
+    let attempt = retryAttempt;
     try {
-      const currentGeneration = await coordinator.claim(attempt.fingerprint);
-      if (currentGeneration !== attempt.generation) {
+      const admission = await coordinator.admit(
+        fingerprint,
+        retryAttempt?.generation ?? null,
+        async (generation) => {
+          const coordinatedAttempt: AdmittingAcquisitionAttempt = retryAttempt ?? {
+            version: 3,
+            stage: "admitting",
+            job_id: null,
+            kind: "source_acquisition",
+            fingerprint,
+            generation,
+            idempotency_key: acquisitionAttemptKey(fingerprint, generation),
+          };
+          attempt = coordinatedAttempt;
+          activeAttempt = coordinatedAttempt;
+          if (!writeStoredAttempt(coordinatedAttempt)) {
+            throw { code: "attempt_storage_unavailable" };
+          }
+          if (retryAttempt === null) approvedPlan = null;
+          setText(jobTarget, "Submitting the approved acquisition…");
+          return awaitAdmissionResponse(
+            write,
+            coordinatedAttempt,
+            controller.signal,
+          );
+        },
+      );
+      if (admission.status === "stale") {
         checkingAttempt = false;
         resetForNewPreview();
         setText(
@@ -316,14 +306,8 @@ export function attachSourcesPage(
         );
         return;
       }
-      const accepted = await write(
-        "/api/v1/sources/acquire",
-        {
-          fingerprint: attempt.fingerprint,
-          idempotency_key: attempt.idempotency_key,
-        },
-        controller.signal,
-      );
+      if (attempt === null) throw new Error("admission attempt missing");
+      const accepted = admission.value;
       if (!("job_id" in accepted)) throw new Error("unexpected response");
       const pollingAttempt: PollingSourceAttempt = {
         version: 3,
@@ -340,16 +324,43 @@ export function attachSourcesPage(
       retryAdmission.disabled = false;
       await checkAttempt(pollingAttempt, controller);
     } catch (error: unknown) {
-      if (isAbort(error)) return;
+      if (isAbort(error)) {
+        checkingAttempt = false;
+        return;
+      }
       checkingAttempt = false;
       retryAdmission.disabled = false;
       const code = publicCode(error);
+      if (code === "attempt_storage_unavailable") {
+        activeAttempt = null;
+        acquire.disabled = false;
+        previewSubmit.disabled = false;
+        setText(
+          jobTarget,
+          "The acquisition identity could not be saved. Allow session storage and confirm again.",
+        );
+        return;
+      }
+      if (attempt === null) {
+        activeAttempt = null;
+        acquire.disabled = false;
+        previewSubmit.disabled = false;
+        setText(jobTarget, coordinationMessage(error));
+        return;
+      }
       if (code === "plan_changed" || code === "stale_revision") {
         await finalizeRejectedAdmission(attempt);
         return;
       }
       if (code === "attempt_coordination_unavailable") {
         showAdmissionRetry(attempt, coordinationMessage(error));
+        return;
+      }
+      if (code === "admission_timeout") {
+        showAdmissionRetry(
+          attempt,
+          "The acquisition admission timed out. Retry admission explicitly with the same saved identity.",
+        );
         return;
       }
       showAdmissionRetry(attempt);
@@ -381,6 +392,12 @@ export function attachSourcesPage(
         controller.signal,
       );
       if (controller.signal.aborted) return;
+      if (
+        completed.job.job_id !== attempt.job_id ||
+        completed.job.kind !== attempt.kind
+      ) {
+        throw { code: "job_mismatch" };
+      }
       checkingAttempt = false;
       if (attempt.kind === "source_acquisition") {
         try {
@@ -466,7 +483,7 @@ export function attachSourcesPage(
 
   const onRetryAdmission = (): void => {
     if (activeAttempt?.stage === "admitting" && !checkingAttempt) {
-      void admitAcquisition(activeAttempt);
+      void admitAcquisition(activeAttempt.fingerprint, activeAttempt);
     } else if (activeAttempt?.stage === "finalizing" && !checkingAttempt) {
       void finalizeRejectedAdmission(activeAttempt);
     }
@@ -589,6 +606,48 @@ export function attachSourcesPage(
     continueChecking.removeEventListener("click", onContinue);
     retryAdmission.removeEventListener("click", onRetryAdmission);
   };
+}
+
+async function awaitAdmissionResponse(
+  write: WriteApi,
+  attempt: AdmittingAcquisitionAttempt,
+  lifecycleSignal: AbortSignal,
+): Promise<ApiPostResponse> {
+  const requestController = new AbortController();
+  let timedOut = false;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    requestController.signal.addEventListener("abort", () => {
+      reject(
+        timedOut
+          ? { code: "admission_timeout" }
+          : new DOMException("Operation aborted", "AbortError"),
+      );
+    }, { once: true });
+  });
+  const onLifecycleAbort = (): void => requestController.abort();
+  lifecycleSignal.addEventListener("abort", onLifecycleAbort, { once: true });
+  if (lifecycleSignal.aborted) onLifecycleAbort();
+  const timeout = globalThis.setTimeout(() => {
+    timedOut = true;
+    requestController.abort();
+  }, ADMISSION_TIMEOUT_MS);
+  try {
+    if (requestController.signal.aborted) return await aborted;
+    return await Promise.race([
+      write(
+        "/api/v1/sources/acquire",
+        {
+          fingerprint: attempt.fingerprint,
+          idempotency_key: attempt.idempotency_key,
+        },
+        requestController.signal,
+      ),
+      aborted,
+    ]);
+  } finally {
+    globalThis.clearTimeout(timeout);
+    lifecycleSignal.removeEventListener("abort", onLifecycleAbort);
+  }
 }
 
 export async function pollJob(

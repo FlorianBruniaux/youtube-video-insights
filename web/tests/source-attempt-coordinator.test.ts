@@ -75,6 +75,56 @@ describe("source attempt identity coordinator", () => {
     await expect(firstTab.claim(FINGERPRINT)).resolves.toBe(generation + 1);
   });
 
+  it("keeps admission validation and POST under one lock, then rejects a stale POST", async () => {
+    const withLock = serialLock();
+    const admittingTab = createAttemptIdentityCoordinator(window.localStorage, withLock);
+    const terminalTab = createAttemptIdentityCoordinator(window.localStorage, withLock);
+    const generation = await admittingTab.claim(FINGERPRINT);
+    let releasePost = (): void => undefined;
+    const postResponse = new Promise<{ readonly job_id: string }>((resolve) => {
+      releasePost = () => resolve({ job_id: "acquire-accepted" });
+    });
+    let markPostStarted = (): void => undefined;
+    const postStarted = new Promise<void>((resolve) => {
+      markPostStarted = resolve;
+    });
+
+    const admission = admittingTab.admit(
+      FINGERPRINT,
+      generation,
+      async (claimedGeneration) => {
+        expect(claimedGeneration).toBe(generation);
+        markPostStarted();
+        return postResponse;
+      },
+    );
+    await postStarted;
+    let terminalSettled = false;
+    const terminal = terminalTab.complete(FINGERPRINT, generation).then((next) => {
+      terminalSettled = true;
+      return next;
+    });
+    await Promise.resolve();
+
+    expect(terminalSettled).toBe(false);
+    releasePost();
+    await expect(admission).resolves.toEqual({
+      status: "admitted",
+      generation,
+      value: { job_id: "acquire-accepted" },
+    });
+    await expect(terminal).resolves.toBe(generation + 1);
+
+    let stalePostCalled = false;
+    await expect(
+      admittingTab.admit(FINGERPRINT, generation, () => {
+        stalePostCalled = true;
+        return Promise.resolve({ job_id: "must-not-post" });
+      }),
+    ).resolves.toEqual({ status: "stale", generation: generation + 1 });
+    expect(stalePostCalled).toBe(false);
+  });
+
   it("fails closed when shared coordination state is corrupt", async () => {
     window.localStorage.setItem(
       `yt-insights:source-attempt-generation:${FINGERPRINT}`,

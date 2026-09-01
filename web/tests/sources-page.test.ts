@@ -9,6 +9,7 @@ import type {
 } from "../src/lib/types";
 import { attachDashboard } from "../src/lib/pages/dashboard";
 import { attachSourcesPage, pollJob } from "../src/lib/pages/sources";
+import { createAttemptIdentityCoordinator } from "../src/lib/source-attempt-coordinator";
 
 const SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v3";
 const LEGACY_V2_SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v2";
@@ -61,6 +62,23 @@ const preview: SourcePreviewResult = {
   discovery_error_count: 1,
 };
 
+function serialLock(): <T>(name: string, task: () => T | Promise<T>) => Promise<T> {
+  let tail = Promise.resolve();
+  return async <T>(_name: string, task: () => T | Promise<T>): Promise<T> => {
+    const previous = tail;
+    let release = (): void => undefined;
+    tail = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release();
+    }
+  };
+}
+
 function renderSourcesDom(): HTMLElement {
   document.body.innerHTML = `
     <main data-sources-page>
@@ -103,6 +121,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   window.sessionStorage.clear();
   window.localStorage.clear();
@@ -555,6 +574,68 @@ describe("source inventory and acquisition", () => {
     });
   });
 
+  it("bounds a hung admission, releases its lock, and never POSTs a stale retry", async () => {
+    const root = renderSourcesDom();
+    root.querySelector<HTMLInputElement>("[name=source]")!.value =
+      "https://www.youtube.com/@example";
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(sourcesFixture)
+      .mockResolvedValueOnce(job("source_preview", preview, "preview-job"));
+    const hungAdmission = new Promise<never>(() => undefined);
+    const write = vi
+      .fn()
+      .mockResolvedValueOnce({ schema_version: 1, job_id: "preview-job" })
+      .mockReturnValueOnce(hungAdmission);
+    const withLock = serialLock();
+    const admittingTab = createAttemptIdentityCoordinator(window.localStorage, withLock);
+    const terminalTab = createAttemptIdentityCoordinator(window.localStorage, withLock);
+    attachSourcesPage(root, {
+      read,
+      write,
+      wait: vi.fn(),
+      coordinator: admittingTab,
+    });
+    root.querySelector("form")?.dispatchEvent(
+      new SubmitEvent("submit", { bubbles: true, cancelable: true }),
+    );
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-source-acquire]")?.disabled).toBe(false),
+    );
+    vi.useFakeTimers();
+
+    root.querySelector<HTMLButtonElement>("[data-source-acquire]")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(write).toHaveBeenCalledTimes(2);
+    let terminalSettled = false;
+    const terminal = terminalTab.complete(preview.fingerprint, 0).then((next) => {
+      terminalSettled = true;
+      return next;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(terminalSettled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await expect(terminal).resolves.toBe(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(root.querySelector<HTMLButtonElement>("[data-source-retry-admission]")?.hidden).toBe(false);
+    expect(JSON.parse(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY) ?? "null")).toEqual({
+      version: 3,
+      stage: "admitting",
+      job_id: null,
+      kind: "source_acquisition",
+      fingerprint: "a".repeat(64),
+      generation: 0,
+      idempotency_key: `web-source-acquire-${"a".repeat(64)}-0`,
+    });
+
+    root.querySelector<HTMLButtonElement>("[data-source-retry-admission]")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY)).toBeNull();
+    vi.useRealTimers();
+  });
+
   it("does not submit acquisition when its admission identity cannot be persisted", async () => {
     const root = renderSourcesDom();
     root.querySelector<HTMLInputElement>("[name=source]")!.value =
@@ -715,6 +796,7 @@ describe("source inventory and acquisition", () => {
       wait: vi.fn(),
       coordinator: {
         claim: unavailable,
+        admit: unavailable,
         isCurrent: unavailable,
         complete: unavailable,
       },
@@ -802,6 +884,46 @@ describe("source inventory and acquisition", () => {
       ) ?? "null",
     )).toMatchObject({ generation: 1 });
     expect(root.querySelector<HTMLButtonElement>("[data-source-preview-submit]")?.disabled).toBe(false);
+  });
+
+  it.each([
+    [
+      "another job ID",
+      job("source_acquisition", { selected: 0 }, "another-job"),
+    ],
+    [
+      "another job kind",
+      job("source_preview", preview, "acquire-terminal"),
+    ],
+  ])("does not rotate an acquisition generation for a terminal response from %s", async (_case, outcome) => {
+    window.localStorage.setItem(
+      `yt-insights:source-attempt-generation:${"a".repeat(64)}`,
+      `{"version":1,"fingerprint":"${"a".repeat(64)}","generation":0}`,
+    );
+    window.sessionStorage.setItem(
+      SOURCE_ATTEMPT_STORAGE_KEY,
+      `{"version":3,"stage":"polling","job_id":"acquire-terminal","kind":"source_acquisition","fingerprint":"${"a".repeat(64)}","generation":0,"idempotency_key":"web-source-acquire-${"a".repeat(64)}-0"}`,
+    );
+    const root = renderSourcesDom();
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(sourcesFixture)
+      .mockResolvedValueOnce(outcome);
+
+    attachSourcesPage(root, { read, write: vi.fn(), wait: vi.fn() });
+
+    await vi.waitFor(() =>
+      expect(root.querySelector("[data-source-job]")?.textContent).toContain(
+        "could not be verified",
+      ),
+    );
+    expect(JSON.parse(
+      window.localStorage.getItem(
+        `yt-insights:source-attempt-generation:${"a".repeat(64)}`,
+      ) ?? "null",
+    )).toMatchObject({ generation: 0 });
+    expect(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY)).not.toBeNull();
+    expect(root.querySelector<HTMLButtonElement>("[data-source-continue]")?.hidden).toBe(false);
   });
 
   it.each(["plan_changed", "stale_revision"])(
