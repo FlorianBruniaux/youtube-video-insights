@@ -18,6 +18,9 @@ export function attachSearchPage(
   restoreForm(form, new URLSearchParams(window.location.search));
 
   const run = async (updateHistory: boolean): Promise<void> => {
+    active?.abort();
+    active = null;
+    const currentRequest = ++requestNumber;
     const params = searchParameters(form);
     if ((params.get("q") ?? "").trim() === "") {
       setText(state, "Enter a search query to search the local corpus.");
@@ -26,10 +29,8 @@ export function attachSearchPage(
       return;
     }
 
-    active?.abort();
     const controller = new AbortController();
     active = controller;
-    const currentRequest = ++requestNumber;
     if (updateHistory) {
       window.history.pushState({}, "", `${window.location.pathname}?${params}`);
     }

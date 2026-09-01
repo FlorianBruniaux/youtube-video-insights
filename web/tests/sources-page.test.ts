@@ -10,6 +10,8 @@ import type {
 import { attachDashboard } from "../src/lib/pages/dashboard";
 import { attachSourcesPage, pollJob } from "../src/lib/pages/sources";
 
+const SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v1";
+
 const sourcesFixture: SourcesResponse = {
   schema_version: 1,
   items: [
@@ -18,7 +20,7 @@ const sourcesFixture: SourcesResponse = {
       title: "Local inference explained",
       published_at: "2026-08-20T10:00:00Z",
       languages: ["en"],
-      sources: ["channel"],
+      sources: ["channel", "<img src=x onerror=alert(1)>"],
       url: "https://www.youtube.com/watch?v=abc123DEF45",
       artifact_count: 2,
       transcript_state: "available",
@@ -69,11 +71,15 @@ function renderSourcesDom(): HTMLElement {
         <input name="source" type="url" />
         <input name="language" value="en" />
         <input name="analyze" type="checkbox" />
-        <button type="submit">Preview source</button>
+        <button data-source-preview-submit type="submit">Preview source</button>
       </form>
       <section data-source-plan hidden aria-labelledby="source-plan-title"></section>
       <button data-source-acquire type="button" hidden>Acquire these videos</button>
-      <div data-source-job role="status"></div>
+      <div data-source-job-region>
+        <div data-source-job role="status"></div>
+        <p>Job <code data-source-job-id></code></p>
+        <button data-source-continue type="button" hidden>Continue checking</button>
+      </div>
     </main>`;
   const root = document.querySelector<HTMLElement>("[data-sources-page]");
   if (!root) throw new Error("sources fixture missing");
@@ -82,6 +88,7 @@ function renderSourcesDom(): HTMLElement {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  window.sessionStorage.clear();
   document.body.replaceChildren();
 });
 
@@ -97,6 +104,8 @@ describe("source inventory and acquisition", () => {
     expect(root.querySelector("[data-source-state]")?.textContent).toContain(
       "Loading a bounded source page",
     );
+    expect(root.querySelector<HTMLButtonElement>("[data-source-prev]")?.disabled).toBe(true);
+    expect(root.querySelector<HTMLButtonElement>("[data-source-next]")?.disabled).toBe(true);
   });
 
   it("loads a bounded page and exposes safe responsive inventory markup", async () => {
@@ -121,6 +130,13 @@ describe("source inventory and acquisition", () => {
     expect(root.querySelector<HTMLButtonElement>("[data-source-prev]")?.disabled).toBe(true);
     expect(root.querySelector<HTMLButtonElement>("[data-source-next]")?.disabled).toBe(true);
     expect(root.querySelectorAll("a")[0]?.rel).toBe("noopener noreferrer");
+    expect(root.querySelector("[data-source-list]")?.textContent).toContain(
+      "Published: 2026-08-20",
+    );
+    expect(root.querySelector("[data-source-list]")?.textContent).toContain(
+      "Sources: channel",
+    );
+    expect(root.querySelector("[data-source-list] img")).toBeNull();
   });
 
   it("renders an empty first page without an inverted range", async () => {
@@ -178,7 +194,7 @@ describe("source inventory and acquisition", () => {
     const read = vi
       .fn()
       .mockResolvedValueOnce(sourcesFixture)
-      .mockResolvedValueOnce(job("source_preview", preview))
+      .mockResolvedValueOnce(job("source_preview", preview, "preview-job"))
       .mockResolvedValueOnce(
         job("source_acquisition", {
           selected: 2,
@@ -191,7 +207,7 @@ describe("source inventory and acquisition", () => {
             { video_id: "xyz987QWE12", status: "acquired", error_code: null, source_sha256: "c".repeat(64) },
           ],
           exit_code: 0,
-        }),
+        }, "acquire-job"),
       );
     const write = vi
       .fn()
@@ -232,6 +248,199 @@ describe("source inventory and acquisition", () => {
     );
   });
 
+  it("disables preview admission and persists only the accepted job identity", async () => {
+    const root = renderSourcesDom();
+    root.querySelector<HTMLInputElement>("[name=source]")!.value =
+      "https://www.youtube.com/@example";
+    const never = new Promise<ApiGetResponse>(() => undefined);
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(sourcesFixture)
+      .mockReturnValueOnce(never);
+    const write = vi.fn().mockResolvedValue({
+      schema_version: 1,
+      job_id: "preview-job-safe",
+    });
+    attachSourcesPage(root, { read, write, wait: vi.fn() });
+
+    const form = root.querySelector<HTMLFormElement>("form")!;
+    form.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+    form.dispatchEvent(new SubmitEvent("submit", { bubbles: true, cancelable: true }));
+
+    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    expect(root.querySelector<HTMLButtonElement>("[data-source-preview-submit]")?.disabled).toBe(true);
+    expect(root.querySelector("[data-source-job-id]")?.textContent).toBe(
+      "preview-job-safe",
+    );
+    const stored = window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY);
+    expect(stored).toBe(
+      '{"version":1,"job_id":"preview-job-safe","kind":"source_preview","fingerprint":null,"idempotency_key":null}',
+    );
+    expect(stored).not.toContain("token");
+  });
+
+  it("resumes a stored preview job after reload without resubmitting it", async () => {
+    window.sessionStorage.setItem(
+      SOURCE_ATTEMPT_STORAGE_KEY,
+      '{"version":1,"job_id":"preview-resume","kind":"source_preview","fingerprint":null,"idempotency_key":null}',
+    );
+    const root = renderSourcesDom();
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(sourcesFixture)
+      .mockResolvedValueOnce({
+        ...job("source_preview", preview),
+        job: { ...job("source_preview", preview).job, job_id: "preview-resume" },
+      });
+    const write = vi.fn();
+
+    attachSourcesPage(root, { read, write, wait: vi.fn() });
+
+    await vi.waitFor(() =>
+      expect(root.querySelector("[data-source-plan]")?.textContent).toContain(
+        "abc123DEF45",
+      ),
+    );
+    expect(write).not.toHaveBeenCalled();
+    expect(read).toHaveBeenCalledWith(
+      "/api/v1/jobs/preview-resume",
+      expect.any(AbortSignal),
+    );
+    expect(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY)).toBeNull();
+  });
+
+  it("persists the acquisition fingerprint and the admitted idempotency key", async () => {
+    const root = renderSourcesDom();
+    root.querySelector<HTMLInputElement>("[name=source]")!.value =
+      "https://www.youtube.com/@example";
+    const runningAcquisition = {
+      schema_version: 1,
+      job: {
+        job_id: "acquire-slow",
+        kind: "source_acquisition",
+        status: "running",
+        result: null,
+        error_code: null,
+      },
+    } as const;
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(sourcesFixture)
+      .mockResolvedValueOnce(job("source_preview", preview, "preview-job"));
+    for (let index = 0; index < 60; index += 1) {
+      read.mockResolvedValueOnce(runningAcquisition);
+    }
+    const write = vi
+      .fn()
+      .mockResolvedValueOnce({ schema_version: 1, job_id: "preview-job" })
+      .mockResolvedValueOnce({ schema_version: 1, job_id: "acquire-slow" });
+    attachSourcesPage(root, { read, write, wait: vi.fn() });
+    root.querySelector("form")?.dispatchEvent(
+      new SubmitEvent("submit", { bubbles: true, cancelable: true }),
+    );
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-source-acquire]")?.disabled).toBe(false),
+    );
+
+    root.querySelector<HTMLButtonElement>("[data-source-acquire]")!.click();
+
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-source-continue]")?.hidden).toBe(false),
+    );
+    const admittedBody = write.mock.calls[1]?.[1] as {
+      fingerprint: string;
+      idempotency_key: string;
+    };
+    expect(JSON.parse(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY) ?? "null")).toEqual({
+      version: 1,
+      job_id: "acquire-slow",
+      kind: "source_acquisition",
+      fingerprint: "a".repeat(64),
+      idempotency_key: admittedBody.idempotency_key,
+    });
+  });
+
+  it("keeps a timed-out job and continues polling the same ID only after confirmation", async () => {
+    window.sessionStorage.setItem(
+      SOURCE_ATTEMPT_STORAGE_KEY,
+      '{"version":1,"job_id":"preview-slow","kind":"source_preview","fingerprint":null,"idempotency_key":null}',
+    );
+    const root = renderSourcesDom();
+    const running = {
+      schema_version: 1,
+      job: {
+        job_id: "preview-slow",
+        kind: "source_preview",
+        status: "running",
+        result: null,
+        error_code: null,
+      },
+    } as const;
+    const completed = {
+      ...job("source_preview", preview),
+      job: { ...job("source_preview", preview).job, job_id: "preview-slow" },
+    };
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(sourcesFixture)
+      .mockResolvedValueOnce(running);
+    for (let index = 1; index < 60; index += 1) read.mockResolvedValueOnce(running);
+    read.mockResolvedValueOnce(completed);
+    const write = vi.fn();
+    attachSourcesPage(root, { read, write, wait: vi.fn() });
+
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-source-continue]")?.hidden).toBe(false),
+    );
+    expect(root.querySelector("[data-source-job-id]")?.textContent).toBe("preview-slow");
+    expect(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY)).not.toBeNull();
+    expect(read).toHaveBeenCalledTimes(61);
+    expect(write).not.toHaveBeenCalled();
+
+    root.querySelector<HTMLButtonElement>("[data-source-continue]")!.click();
+
+    await vi.waitFor(() =>
+      expect(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY)).toBeNull(),
+    );
+    expect(read).toHaveBeenLastCalledWith(
+      "/api/v1/jobs/preview-slow",
+      expect.any(AbortSignal),
+    );
+    expect(write).not.toHaveBeenCalled();
+  });
+
+  it("rejects a mismatched returned job without dropping the resumable attempt", async () => {
+    window.sessionStorage.setItem(
+      SOURCE_ATTEMPT_STORAGE_KEY,
+      '{"version":1,"job_id":"preview-expected","kind":"source_preview","fingerprint":null,"idempotency_key":null}',
+    );
+    const root = renderSourcesDom();
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(sourcesFixture)
+      .mockResolvedValueOnce(job("source_preview", preview));
+    attachSourcesPage(root, { read, write: vi.fn(), wait: vi.fn() });
+
+    await vi.waitFor(() =>
+      expect(root.querySelector("[data-source-job]")?.textContent).toContain(
+        "could not be verified",
+      ),
+    );
+    expect(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY)).not.toBeNull();
+    expect(root.querySelector<HTMLButtonElement>("[data-source-continue]")?.hidden).toBe(false);
+  });
+
+  it("ignores an oversized persisted attempt without polling it", async () => {
+    window.sessionStorage.setItem(SOURCE_ATTEMPT_STORAGE_KEY, "x".repeat(5_000));
+    const root = renderSourcesDom();
+    const read = vi.fn().mockResolvedValue(sourcesFixture);
+
+    attachSourcesPage(root, { read, write: vi.fn(), wait: vi.fn() });
+
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+    expect(window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY)).toBeNull();
+  });
+
   it.each([
     ["plan_too_large", "too large"],
     ["stale_revision", "changed"],
@@ -245,7 +454,7 @@ describe("source inventory and acquisition", () => {
       : vi
           .fn()
           .mockResolvedValueOnce(sourcesFixture)
-          .mockResolvedValueOnce(jobError("source_preview", code));
+          .mockResolvedValueOnce(jobError("source_preview", code, "preview-job"));
     const write = vi
       .fn()
       .mockImplementation(() => code === "forbidden"
@@ -274,10 +483,15 @@ describe("bounded job polling", () => {
       job: { job_id: "job-1", kind: "source_preview", status: "running", result: null, error_code: null },
     });
 
-    await expect(pollJob("job-1", read, vi.fn())).rejects.toMatchObject({
+    const wait = vi.fn().mockResolvedValue(undefined);
+    await expect(pollJob("job-1", read, wait)).rejects.toMatchObject({
       code: "poll_timeout",
     });
-    expect(read).toHaveBeenCalledTimes(8);
+    expect(read).toHaveBeenCalledTimes(60);
+    expect(wait.mock.calls.slice(0, 10).map(([delay]) => delay)).toEqual([
+      500, 500, 500, 500, 500, 500, 500, 500, 500, 1_000,
+    ]);
+    expect(wait).toHaveBeenLastCalledWith(2_000);
   });
 });
 
@@ -317,6 +531,59 @@ describe("progressive dashboard", () => {
     expect(root.querySelector("[data-dashboard-exports]")?.textContent).toContain("No exports");
   });
 
+  it("renders resumable research state, required action, and update time", async () => {
+    document.body.innerHTML = `
+      <main data-dashboard>
+        <p data-dashboard-status></p>
+        <div data-dashboard-metrics></div>
+        <div data-dashboard-sessions></div>
+        <div data-dashboard-exports></div>
+      </main>`;
+    const root = document.querySelector<HTMLElement>("[data-dashboard]")!;
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce({
+        schema_version: 1,
+        status: "ok",
+        corpus: { health: "ready", videos: 1, transcripts: 1, documents_indexed: 1, passages_indexed: 2 },
+      })
+      .mockResolvedValueOnce({
+        schema_version: 1,
+        items: [{
+          session_id: "session_1",
+          topic: "Local inference",
+          queries: ["local inference"],
+          languages: ["en"],
+          freshness_profile: "standard",
+          discovery_fingerprint: "a".repeat(64),
+          state: "awaiting_sufficiency_confirmation",
+          revision: 2,
+          retry_target: null,
+          created_at: "2026-08-31T10:00:00Z",
+          updated_at: "2026-09-01T09:30:00Z",
+          required_user_action: "confirm_sufficiency_or_refresh",
+        }],
+        limit: 5,
+        offset: 0,
+      })
+      .mockResolvedValueOnce({
+        schema_version: 1,
+        items: [],
+        limit: 5,
+        truncated: false,
+        inventory_complete: true,
+        inventory_examined: 0,
+        inventory_limit: 32,
+      });
+
+    await attachDashboard(root, read);
+
+    const sessions = root.querySelector("[data-dashboard-sessions]")?.textContent ?? "";
+    expect(sessions).toContain("Awaiting sufficiency confirmation");
+    expect(sessions).toContain("Needs your decision");
+    expect(sessions).toContain("Updated 2026-09-01 09:30 UTC");
+  });
+
   it("shows a bounded offline state without attempting secondary panels", async () => {
     document.body.innerHTML = `
       <main data-dashboard>
@@ -336,13 +603,17 @@ describe("progressive dashboard", () => {
   });
 });
 
-function job(kind: "source_preview" | "source_acquisition", result: unknown): JobResponse {
+function job(
+  kind: "source_preview" | "source_acquisition",
+  result: unknown,
+  jobId = "job-1",
+): JobResponse {
   return {
     schema_version: 1,
-    job: { job_id: "job-1", kind, status: "succeeded", result, error_code: null } as JobResponse["job"],
+    job: { job_id: jobId, kind, status: "succeeded", result, error_code: null } as JobResponse["job"],
   };
 }
 
-function jobError(kind: "source_preview", code: string): JobResponse {
-  return job(kind, { schema_version: 1, error: { code } });
+function jobError(kind: "source_preview", code: string, jobId = "job-1"): JobResponse {
+  return job(kind, { schema_version: 1, error: { code } }, jobId);
 }

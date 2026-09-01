@@ -27,10 +27,16 @@
       <input name="analyze" type="checkbox" />
       Run analysis after acquisition
     </label>
-    <button class="button" type="submit">Preview source</button>
+    <button class="button" data-source-preview-submit type="submit">Preview source</button>
   </form>
 
-  <div class="job-status" data-source-job role="status" aria-live="polite"></div>
+  <div class="job-status" data-source-job-region>
+    <div data-source-job role="status" aria-live="polite"></div>
+    <p class="job-identity">Job <code data-source-job-id></code></p>
+    <button class="button button-secondary" data-source-continue type="button" hidden>
+      Continue checking
+    </button>
+  </div>
   <section class="source-plan" data-source-plan hidden aria-labelledby="source-plan-title"></section>
   <button class="button acquire-button" data-source-acquire type="button" hidden disabled>
     Acquire these videos

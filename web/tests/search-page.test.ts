@@ -118,6 +118,34 @@ describe("corpus search page", () => {
     );
   });
 
+  it("aborts and invalidates a late response when popstate clears the query", async () => {
+    window.history.replaceState({}, "", "/search/?q=first&limit=10");
+    const root = renderSearchDom();
+    let resolveFirst: ((value: ApiGetResponse) => void) | undefined;
+    let firstSignal: AbortSignal | undefined;
+    const read = vi.fn((_path: string, signal?: AbortSignal) => {
+      firstSignal = signal;
+      return new Promise<ApiGetResponse>((resolve) => {
+        resolveFirst = resolve;
+      });
+    });
+    attachSearchPage(root, read);
+    await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+
+    window.history.pushState({}, "", "/search/");
+    window.dispatchEvent(new PopStateEvent("popstate"));
+
+    expect(firstSignal?.aborted).toBe(true);
+    expect(root.querySelector("[data-search-state]")?.textContent).toContain(
+      "Enter a search query",
+    );
+    resolveFirst?.(searchFixture);
+    await Promise.resolve();
+    expect(root.querySelector("[data-search-results]")?.textContent).not.toContain(
+      "Run models on your laptop",
+    );
+  });
+
   it("rejects an empty query without a request", async () => {
     const root = renderSearchDom();
     const read = vi.fn();

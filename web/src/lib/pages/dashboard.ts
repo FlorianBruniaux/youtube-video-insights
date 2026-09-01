@@ -80,13 +80,35 @@ function renderSessions(target: HTMLElement, response: ResearchListResponse): vo
   const list = document.createElement("ul");
   for (const item of response.items) {
     const row = document.createElement("li");
+    row.className = "dashboard-session";
     const link = document.createElement("a");
     link.href = `/research/${encodeURIComponent(item.session_id)}/`;
     link.textContent = item.topic;
-    row.append(link);
+    const metadata = document.createElement("p");
+    metadata.className = "dashboard-session-meta";
+    metadata.textContent = `${stateLabel(item.state)} · Updated ${formatUpdatedAt(item.updated_at)}`;
+    row.append(link, metadata);
+    if (item.required_user_action !== null) {
+      const warning = document.createElement("p");
+      warning.className = "dashboard-session-warning";
+      warning.textContent = item.required_user_action === "confirm_sufficiency_or_refresh"
+        ? "Needs your decision: confirm the corpus is sufficient or refresh it."
+        : "Needs your decision: approve candidates or cancel this research.";
+      row.append(warning);
+    }
     list.append(row);
   }
   replaceChildren(target, [list]);
+}
+
+function stateLabel(value: string): string {
+  const words = value.replaceAll("_", " ");
+  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+}
+
+function formatUpdatedAt(value: string): string {
+  const dateAndTime = value.slice(0, 16).replace("T", " ");
+  return `${dateAndTime} UTC`;
 }
 
 function renderExports(target: HTMLElement, response: ExportsResponse): void {

@@ -311,6 +311,22 @@ a {
   padding-left: 1.25rem;
 }
 
+.dashboard-session + .dashboard-session {
+  margin-top: var(--space-3);
+}
+
+.dashboard-session-meta,
+.dashboard-session-warning {
+  margin: var(--space-1) 0 0;
+  color: var(--color-ink-muted);
+  font-size: 0.86rem;
+}
+
+.dashboard-session-warning {
+  color: var(--color-focus);
+  font-weight: 750;
+}
+
 .search-form {
   display: grid;
   grid-template-columns: minmax(14rem, 2fr) minmax(10rem, 1fr) minmax(6rem, 0.45fr) minmax(6rem, 0.4fr) auto;
@@ -422,6 +438,25 @@ a {
   min-height: 1.5rem;
   margin-top: var(--space-4);
   color: var(--color-ink-muted);
+}
+
+.job-status:has([data-source-job-id]:empty) .job-identity {
+  display: none;
+}
+
+.job-identity {
+  margin: var(--space-2) 0 0;
+  color: var(--color-ink-muted);
+  font-size: 0.86rem;
+}
+
+.job-identity code {
+  color: var(--color-ink);
+  font-family: var(--font-mono);
+}
+
+[data-source-continue] {
+  margin-top: var(--space-3);
 }
 
 .source-plan {

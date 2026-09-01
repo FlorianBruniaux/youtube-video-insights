@@ -27,7 +27,33 @@ interface SourceDependencies {
 }
 
 const PAGE_SIZE = 20;
-const POLL_DELAYS = [0, 150, 250, 400, 650, 1_000, 1_500, 2_000] as const;
+const MAX_STORED_ATTEMPT_BYTES = 1_024;
+const JOB_ID = /^[A-Za-z0-9_-]{1,200}$/;
+const SHA256 = /^[0-9a-f]{64}$/;
+const POLL_DELAYS: readonly number[] = [
+  0,
+  ...Array<number>(9).fill(500),
+  ...Array<number>(20).fill(1_000),
+  ...Array<number>(30).fill(2_000),
+];
+
+export const SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v1";
+
+type SourceAttempt =
+  | {
+      readonly version: 1;
+      readonly job_id: string;
+      readonly kind: "source_preview";
+      readonly fingerprint: null;
+      readonly idempotency_key: null;
+    }
+  | {
+      readonly version: 1;
+      readonly job_id: string;
+      readonly kind: "source_acquisition";
+      readonly fingerprint: string;
+      readonly idempotency_key: string;
+    };
 
 export function attachSourcesPage(
   root: HTMLElement,
@@ -42,18 +68,31 @@ export function attachSourcesPage(
   const next = requireElement<HTMLButtonElement>(root, "[data-source-next]");
   const pageLabel = requireElement<HTMLElement>(root, "[data-source-page-label]");
   const form = requireElement<HTMLFormElement>(root, "[data-source-preview-form]");
+  const previewSubmit = requireElement<HTMLButtonElement>(
+    root,
+    "[data-source-preview-submit]",
+  );
   const planTarget = requireElement<HTMLElement>(root, "[data-source-plan]");
   const acquire = requireElement<HTMLButtonElement>(root, "[data-source-acquire]");
   const jobTarget = requireElement<HTMLElement>(root, "[data-source-job]");
+  const jobIdTarget = requireElement<HTMLElement>(root, "[data-source-job-id]");
+  const continueChecking = requireElement<HTMLButtonElement>(
+    root,
+    "[data-source-continue]",
+  );
   let offset = 0;
   let inventoryController: AbortController | null = null;
   let mutationController: AbortController | null = null;
   let approvedPlan: SourcePreviewResult | null = null;
+  let activeAttempt = readStoredAttempt();
+  let checkingAttempt = false;
 
   const loadPage = async (): Promise<void> => {
     inventoryController?.abort();
     const controller = new AbortController();
     inventoryController = controller;
+    previous.disabled = true;
+    next.disabled = true;
     setText(state, "Loading a bounded source page…");
     try {
       const response = (await read(
@@ -92,22 +131,31 @@ export function attachSourcesPage(
   };
   const onPreview = (event: SubmitEvent): void => {
     event.preventDefault();
-    mutationController?.abort();
-    const controller = new AbortController();
-    mutationController = controller;
+    if (checkingAttempt) return;
+    if (activeAttempt !== null) {
+      void checkAttempt(activeAttempt);
+      return;
+    }
     approvedPlan = null;
     planTarget.hidden = true;
     acquire.hidden = true;
     acquire.disabled = true;
     replaceChildren(planTarget, []);
-    setText(jobTarget, "Preparing a safe source preview…");
     const data = new FormData(form);
     const source = String(data.get("source") ?? "").trim();
     const language = String(data.get("language") ?? "en").trim().toLowerCase();
     if (!isYouTubeSource(source)) {
       setText(jobTarget, "Enter a YouTube video, playlist, or channel URL.");
+      previewSubmit.disabled = false;
       return;
     }
+    mutationController?.abort();
+    const controller = new AbortController();
+    mutationController = controller;
+    checkingAttempt = true;
+    previewSubmit.disabled = true;
+    continueChecking.hidden = true;
+    setText(jobTarget, "Preparing a safe source preview…");
     void runPreview(source, language, data.get("analyze") === "on", controller);
   };
   const runPreview = async (
@@ -123,36 +171,35 @@ export function attachSourcesPage(
         controller.signal,
       );
       if (!("job_id" in accepted)) throw new Error("unexpected response");
-      const completed = await pollJob(accepted.job_id, read, wait, controller.signal);
-      if (controller.signal.aborted) return;
-      const result = requireJobSuccess(completed, "source_preview");
-      if (isJobResultError(result)) {
-        setText(jobTarget, jobResultMessage(result.error.code));
-        return;
-      }
-      if (!isSourcePreview(result)) {
-        setText(jobTarget, "The preview response could not be used safely.");
-        return;
-      }
-      approvedPlan = result;
-      renderPlan(planTarget, result);
-      planTarget.hidden = false;
-      acquire.hidden = false;
-      acquire.disabled = false;
-      setText(jobTarget, "Preview ready. Review every selected video ID before acquiring.");
+      const attempt: SourceAttempt = {
+        version: 1,
+        job_id: accepted.job_id,
+        kind: "source_preview",
+        fingerprint: null,
+        idempotency_key: null,
+      };
+      activeAttempt = attempt;
+      writeStoredAttempt(attempt);
+      checkingAttempt = false;
+      await checkAttempt(attempt, controller);
     } catch (error: unknown) {
       if (isAbort(error)) return;
+      checkingAttempt = false;
+      previewSubmit.disabled = false;
       setText(jobTarget, mutationError(error));
     }
   };
 
   const onAcquire = (): void => {
-    if (approvedPlan === null) return;
+    if (approvedPlan === null || activeAttempt !== null || checkingAttempt) return;
     const plan = approvedPlan;
     acquire.disabled = true;
     mutationController?.abort();
     const controller = new AbortController();
     mutationController = controller;
+    checkingAttempt = true;
+    previewSubmit.disabled = true;
+    continueChecking.hidden = true;
     setText(jobTarget, "Acquiring the approved videos…");
     void runAcquire(plan, controller);
   };
@@ -160,18 +207,80 @@ export function attachSourcesPage(
     plan: SourcePreviewResult,
     controller: AbortController,
   ): Promise<void> => {
+    const key = idempotencyKey();
     try {
       const accepted = await write(
         "/api/v1/sources/acquire",
-        { fingerprint: plan.fingerprint, idempotency_key: idempotencyKey() },
+        { fingerprint: plan.fingerprint, idempotency_key: key },
         controller.signal,
       );
       if (!("job_id" in accepted)) throw new Error("unexpected response");
-      const completed = await pollJob(accepted.job_id, read, wait, controller.signal);
+      const attempt: SourceAttempt = {
+        version: 1,
+        job_id: accepted.job_id,
+        kind: "source_acquisition",
+        fingerprint: plan.fingerprint,
+        idempotency_key: key,
+      };
+      activeAttempt = attempt;
+      approvedPlan = null;
+      writeStoredAttempt(attempt);
+      checkingAttempt = false;
+      await checkAttempt(attempt, controller);
+    } catch (error: unknown) {
+      if (isAbort(error)) return;
+      checkingAttempt = false;
+      previewSubmit.disabled = false;
+      acquire.disabled = approvedPlan === null;
+      setText(jobTarget, mutationError(error));
+    }
+  };
+
+  const checkAttempt = async (
+    attempt: SourceAttempt,
+    existingController?: AbortController,
+  ): Promise<void> => {
+    if (checkingAttempt || activeAttempt?.job_id !== attempt.job_id) return;
+    if (mutationController !== existingController) mutationController?.abort();
+    const controller = existingController ?? new AbortController();
+    mutationController = controller;
+    checkingAttempt = true;
+    previewSubmit.disabled = true;
+    acquire.disabled = true;
+    continueChecking.hidden = true;
+    continueChecking.disabled = true;
+    exposeAttempt(jobIdTarget, attempt);
+    setText(jobTarget, `Checking accepted ${attempt.kind === "source_preview" ? "preview" : "acquisition"} job…`);
+    try {
+      const completed = await pollJob(
+        attempt.job_id,
+        read,
+        wait,
+        controller.signal,
+      );
       if (controller.signal.aborted) return;
-      const result = requireJobSuccess(completed, "source_acquisition");
+      checkingAttempt = false;
+      activeAttempt = null;
+      clearStoredAttempt();
+      previewSubmit.disabled = false;
+      continueChecking.hidden = true;
+      continueChecking.disabled = false;
+      const result = requireJobSuccess(completed, attempt.kind);
       if (isJobResultError(result)) {
         setText(jobTarget, jobResultMessage(result.error.code));
+        return;
+      }
+      if (attempt.kind === "source_preview") {
+        if (!isSourcePreview(result)) {
+          setText(jobTarget, "The preview response could not be used safely.");
+          return;
+        }
+        approvedPlan = result;
+        renderPlan(planTarget, result);
+        planTarget.hidden = false;
+        acquire.hidden = false;
+        acquire.disabled = false;
+        setText(jobTarget, "Preview ready. Review every selected video ID before acquiring.");
         return;
       }
       if (!isAcquisitionResult(result)) {
@@ -185,15 +294,28 @@ export function attachSourcesPage(
       void loadPage();
     } catch (error: unknown) {
       if (isAbort(error)) return;
+      checkingAttempt = false;
+      previewSubmit.disabled = false;
+      continueChecking.hidden = activeAttempt === null;
+      continueChecking.disabled = false;
       setText(jobTarget, mutationError(error));
     }
+  };
+
+  const onContinue = (): void => {
+    if (activeAttempt !== null && !checkingAttempt) void checkAttempt(activeAttempt);
   };
 
   previous.addEventListener("click", onPrevious);
   next.addEventListener("click", onNext);
   form.addEventListener("submit", onPreview);
   acquire.addEventListener("click", onAcquire);
+  continueChecking.addEventListener("click", onContinue);
   void loadPage();
+  if (activeAttempt !== null) {
+    exposeAttempt(jobIdTarget, activeAttempt);
+    void checkAttempt(activeAttempt);
+  }
 
   return () => {
     inventoryController?.abort();
@@ -202,6 +324,7 @@ export function attachSourcesPage(
     next.removeEventListener("click", onNext);
     form.removeEventListener("submit", onPreview);
     acquire.removeEventListener("click", onAcquire);
+    continueChecking.removeEventListener("click", onContinue);
   };
 }
 
@@ -218,6 +341,7 @@ export async function pollJob(
       `/api/v1/jobs/${encodeURIComponent(jobId)}`,
       signal,
     )) as JobResponse;
+    if (response.job.job_id !== jobId) throw { code: "job_mismatch" };
     if (response.job.status === "succeeded" || response.job.status === "failed") {
       return response;
     }
@@ -238,7 +362,14 @@ function renderInventory(target: HTMLElement, items: readonly SourceItem[]): voi
   caption.textContent = "Videos in the local corpus";
   const head = document.createElement("thead");
   const header = document.createElement("tr");
-  for (const label of ["Video", "Language", "Transcript", "Index"]) {
+  for (const label of [
+    "Video",
+    "Published",
+    "Source labels",
+    "Language",
+    "Transcript",
+    "Index",
+  ]) {
     const cell = document.createElement("th");
     cell.scope = "col";
     cell.textContent = label;
@@ -250,6 +381,8 @@ function renderInventory(target: HTMLElement, items: readonly SourceItem[]): voi
     const row = document.createElement("tr");
     row.append(
       tableVideoCell(item),
+      textCell(formatPublishedAt(item.published_at)),
+      textCell(item.sources.join(", ") || "Unknown"),
       textCell(item.languages.join(", ") || "Unknown"),
       textCell(item.transcript_state),
       textCell(item.index_state.replaceAll("_", " ")),
@@ -288,10 +421,12 @@ function sourceCard(item: SourceItem): HTMLElement {
   const link = createYouTubeWatchLink(item.title, item.url);
   if (link) title.append(link);
   const id = labelledValue("Video ID", item.video_id);
+  const published = labelledValue("Published", formatPublishedAt(item.published_at));
+  const sources = labelledValue("Sources", item.sources.join(", ") || "Unknown");
   const language = labelledValue("Language", item.languages.join(", ") || "Unknown");
   const transcript = labelledValue("Transcript", item.transcript_state);
   const index = labelledValue("Index", item.index_state.replaceAll("_", " "));
-  replaceChildren(article, [title, id, language, transcript, index]);
+  replaceChildren(article, [title, id, published, sources, language, transcript, index]);
   return article;
 }
 
@@ -356,7 +491,8 @@ function mutationError(error: unknown): string {
   if (code === "forbidden") return "The server denied mutation permission. Reload the page and preview again.";
   if (code === "plan_changed" || code === "stale_revision") return "The source plan changed. Preview it again before acquiring.";
   if (code === "job_queue_full" || code === "server_busy") return "The local job queue is busy. Start a new explicit attempt later.";
-  if (code === "poll_timeout") return "The job is still running. Reload the page to check it before starting another attempt.";
+  if (code === "poll_timeout") return "The job is still running. Use Continue checking to resume this exact job.";
+  if (code === "job_mismatch") return "The accepted job could not be verified. Continue checking the original job before starting another attempt.";
   return "Cannot complete this operation. Check that the local server is running.";
 }
 
@@ -389,6 +525,126 @@ function isYouTubeSource(value: string): boolean {
 function idempotencyKey(): string {
   const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
   return `web-source-${random}`;
+}
+
+function formatPublishedAt(value: string | null): string {
+  return value === null ? "Unknown" : value.slice(0, 10);
+}
+
+function exposeAttempt(target: HTMLElement, attempt: SourceAttempt): void {
+  target.textContent = attempt.job_id;
+}
+
+function readStoredAttempt(): SourceAttempt | null {
+  let raw: string | null;
+  try {
+    raw = window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+  if (raw === null) return null;
+  if (raw.length > MAX_STORED_ATTEMPT_BYTES) {
+    discardInvalidStoredAttempt();
+    return null;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch {
+    discardInvalidStoredAttempt();
+    return null;
+  }
+  if (!isRecord(value)) {
+    discardInvalidStoredAttempt();
+    return null;
+  }
+  const keys = Object.keys(value).sort();
+  const expected = [
+    "fingerprint",
+    "idempotency_key",
+    "job_id",
+    "kind",
+    "version",
+  ];
+  if (
+    keys.length !== expected.length ||
+    keys.some((key, index) => key !== expected[index]) ||
+    value.version !== 1 ||
+    typeof value.job_id !== "string" ||
+    !JOB_ID.test(value.job_id)
+  ) {
+    discardInvalidStoredAttempt();
+    return null;
+  }
+  if (
+    value.kind === "source_preview" &&
+    value.fingerprint === null &&
+    value.idempotency_key === null
+  ) {
+    return {
+      version: 1,
+      job_id: value.job_id,
+      kind: "source_preview",
+      fingerprint: null,
+      idempotency_key: null,
+    };
+  }
+  if (
+    value.kind === "source_acquisition" &&
+    typeof value.fingerprint === "string" &&
+    SHA256.test(value.fingerprint) &&
+    typeof value.idempotency_key === "string" &&
+    isSafeIdempotencyKey(value.idempotency_key)
+  ) {
+    return {
+      version: 1,
+      job_id: value.job_id,
+      kind: "source_acquisition",
+      fingerprint: value.fingerprint,
+      idempotency_key: value.idempotency_key,
+    };
+  }
+  discardInvalidStoredAttempt();
+  return null;
+}
+
+function writeStoredAttempt(attempt: SourceAttempt): void {
+  try {
+    window.sessionStorage.setItem(
+      SOURCE_ATTEMPT_STORAGE_KEY,
+      JSON.stringify(attempt),
+    );
+  } catch {
+    // The in-memory attempt remains authoritative for this page lifecycle.
+  }
+}
+
+function clearStoredAttempt(): void {
+  try {
+    window.sessionStorage.removeItem(SOURCE_ATTEMPT_STORAGE_KEY);
+  } catch {
+    // Terminal state remains authoritative even when browser storage is unavailable.
+  }
+}
+
+function discardInvalidStoredAttempt(): void {
+  try {
+    window.sessionStorage.removeItem(SOURCE_ATTEMPT_STORAGE_KEY);
+  } catch {
+    // Invalid browser state is ignored when storage cannot be changed.
+  }
+}
+
+function isSafeIdempotencyKey(value: string): boolean {
+  if (value.length === 0 || value.length > 200) return false;
+  return [...value].every((character) => {
+    const code = character.codePointAt(0);
+    return code !== undefined && code >= 0x20 && code <= 0x7e;
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function delay(milliseconds: number): Promise<void> {
