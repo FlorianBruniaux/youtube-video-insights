@@ -1,0 +1,51 @@
+---
+interface Props {
+  title: string;
+  message?: string;
+  tone?: "info" | "success" | "warning" | "error";
+}
+
+const { title, message, tone = "info" } = Astro.props;
+const role = tone === "error" ? "alert" : "status";
+---
+
+<section class:list={["status-notice", `status-notice-${tone}`]} {role} aria-live="polite">
+  <h2>{title}</h2>
+  {message && <p>{message}</p>}
+  <slot />
+</section>
+
+<style>
+  .status-notice {
+    padding: var(--space-4);
+    border: 1px solid var(--notice-line, var(--color-line));
+    border-radius: var(--radius-md);
+    background: var(--notice-surface, var(--color-surface));
+  }
+
+  .status-notice h2 {
+    margin: 0;
+    color: var(--notice-ink, var(--color-ink));
+    font-size: 1rem;
+  }
+
+  .status-notice p {
+    margin: var(--space-2) 0 0;
+    color: var(--color-ink-muted);
+  }
+
+  .status-notice-success {
+    --notice-line: color-mix(in srgb, var(--color-accent) 48%, var(--color-line));
+    --notice-surface: color-mix(in srgb, var(--color-accent) 9%, var(--color-surface));
+  }
+
+  .status-notice-warning {
+    --notice-line: #c78a24;
+    --notice-surface: color-mix(in srgb, #f1a62a 10%, var(--color-surface));
+  }
+
+  .status-notice-error {
+    --notice-line: var(--color-focus);
+    --notice-surface: color-mix(in srgb, var(--color-focus) 8%, var(--color-surface));
+  }
+</style>

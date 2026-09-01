@@ -1,0 +1,65 @@
+---
+interface Props {
+  title: string;
+  description: string;
+}
+
+const { title, description } = Astro.props;
+---
+
+<section class="empty-state">
+  <div class="empty-state-mark" aria-hidden="true">○</div>
+  <h2>{title}</h2>
+  <p>{description}</p>
+  <div class="empty-state-actions">
+    <slot />
+  </div>
+</section>
+
+<style>
+  .empty-state {
+    display: grid;
+    min-height: 14rem;
+    place-items: center;
+    align-content: center;
+    padding: var(--space-6);
+    border: 1px dashed var(--color-line);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface);
+    text-align: center;
+  }
+
+  .empty-state-mark {
+    display: grid;
+    width: 2.75rem;
+    height: 2.75rem;
+    place-items: center;
+    border-radius: 50%;
+    background: var(--color-brand-soft);
+    color: var(--color-brand-strong);
+    font-size: 1.5rem;
+  }
+
+  .empty-state h2 {
+    margin: var(--space-3) 0 0;
+    font-size: 1.1rem;
+  }
+
+  .empty-state p {
+    max-width: 34rem;
+    margin: var(--space-2) 0 0;
+    color: var(--color-ink-muted);
+  }
+
+  .empty-state-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-3);
+    margin-top: var(--space-4);
+  }
+
+  .empty-state-actions:empty {
+    display: none;
+  }
+</style>
