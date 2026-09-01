@@ -1,0 +1,55 @@
+plans/specs/AGENT-PLATFORM.md
+  s_0a442347250965::t_2aa961c61c54b6 3,27,136-137,140-141,145
+docs/superpowers/plans/2026-08-31-local-astro-frontend.md
+  s_0a442347250965::t_2f34f828419051 13-16
+ROADMAP.md
+  s_0a442347250965::t_d75e78074912aa 58,78-79,99
+CHANGELOG.md
+  s_0a442347250965::t_1cd3580a58d2d1 45-51,132-139,163-165
+docs/claude-code.md
+  s_0a442347250965::t_527ad413416a15 132-134,136-138
+plans/README.md
+  s_0a442347250965::t_ad772dd7d3348f 3,13-19,32-33,46-47,75-77,79
+INSTALL.md
+  s_0a442347250965::t_dace503b5ac34d 7-10,333-334,499-501
+  s_cfc1f7ec5defa9::t_93c781e16849ac 502
+plans/PARALLEL-SESSIONS.md
+  s_0a442347250965::t_acb329dfe1e323 3,41-44,94-95,108-109,111
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_08b54610c14868 9,14-16,117,180
+llms.txt
+  s_0a442347250965::t_0ab272dcba3d58 5-6,71-72,102-103,149,161-166,173-176,185-186,193-194,200
+docs/superpowers/plans/2026-08-31-local-web-api.md
+  s_0a442347250965::t_2f34f828419051 13-16
+README.md
+  s_0a442347250965::t_41e91dc50ce8c9 30-35,896-902,904,908
+.gitignore
+  s_0a442347250965::t_9e788af628d5fe 13
+docs/DELIVERY-RECAP.md
+  s_0a442347250965::t_717b8d737c4f70 5,29,73
+  s_0a442347250965::t_2b68740f38a276 1-4,6-28,30-72,74-128
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "583fdfeb7cc3e62c604663e397c8627277ccb0f8",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_cfc1f7ec5defa9": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05bfb-d057-7e32-9a62-37c2f5096ae3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
