@@ -192,6 +192,33 @@ def test_parse_start_session_returns_stripped_typed_values() -> None:
     assert parsed.idempotency_key == "start-1"
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {
+            "topic": "valid\u0001topic",
+            "queries": ["local AI"],
+            "languages": ["fr"],
+            "freshness_profile": "standard",
+            "idempotency_key": "start-1",
+        },
+        {
+            "topic": "Local AI",
+            "queries": ["AI  code", "ai code"],
+            "languages": ["fr"],
+            "freshness_profile": "standard",
+            "idempotency_key": "start-1",
+        },
+    ],
+)
+def test_parse_start_session_rejects_domain_invalid_text_before_workflow(
+    payload: dict[str, object],
+) -> None:
+    """Parser/domain drift would turn invalid public input into an HTTP 500."""
+    with pytest.raises(RequestValidationError):
+        parse_start_session(_json_body(payload))
+
+
 def test_parse_decision_rejects_boolean_revision() -> None:
     with pytest.raises(RequestValidationError):
         parse_decision(
@@ -449,7 +476,15 @@ def test_source_facade_bounds_the_video_sample_without_losing_the_fingerprint(
 
     assert payload["fingerprint"]
     assert payload["videos_truncated"] is True
-    assert len(json.dumps(payload, ensure_ascii=False).encode("utf-8")) < 20 * 1024
+    assert payload["video_ids"] == [video.video_id for video in videos]
+    assert (
+        len(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode(
+                "utf-8"
+            )
+        )
+        < 20 * 1024
+    )
 
 
 def test_source_facade_rejects_more_than_one_thousand_selected_videos(
@@ -492,6 +527,31 @@ def test_source_facade_rejects_more_than_one_thousand_selected_videos(
     with pytest.raises(PlanChanged):
         facade.prepare_acquisition("a" * 64)
     assert calls == ["classify", "fetch", "build"]
+
+
+def test_source_facade_rejects_a_plan_with_unpaired_acquisition_urls(
+    tmp_path: Path,
+) -> None:
+    """A hidden URL without a displayed video ID would bypass exact-ID approval."""
+    paths = DataPaths.from_root(tmp_path / "private-data")
+    base = _source_plan(paths)
+    unsafe = replace(base, selected_urls=())
+    facade = SourceAcquisitionFacade(
+        paths,
+        classify=lambda source: SourceKind.CHANNEL,
+        fetch=lambda source: VideoListResult(),
+        build=lambda **kwargs: unsafe,
+    )
+
+    payload = facade.preview(
+        parse_source_preview(
+            _json_body({"source": base.source, "language": "fr", "analyze": False})
+        )
+    )
+
+    assert payload == {"schema_version": 1, "error": {"code": "plan_too_large"}}
+    with pytest.raises(PlanChanged):
+        facade.prepare_acquisition("a" * 64)
 
 
 def test_source_facade_rejects_an_oversized_canonical_plan_before_caching(
@@ -686,7 +746,7 @@ def test_source_confirmation_requires_a_cached_preview(tmp_path: Path) -> None:
         facade.prepare_acquisition("a" * 64)
 
 
-def test_source_plan_fingerprint_covers_selected_count_and_every_data_path(
+def test_source_plan_rejects_inconsistent_count_and_fingerprints_every_data_path(
     tmp_path: Path,
 ) -> None:
     paths = DataPaths.from_root(tmp_path / "data")
@@ -698,7 +758,7 @@ def test_source_plan_fingerprint_covers_selected_count_and_every_data_path(
     )
 
     fingerprints = []
-    for plan in (base, changed_count, changed_paths):
+    for plan in (base, changed_paths):
         facade = SourceAcquisitionFacade(
             paths,
             classify=lambda source: SourceKind.CHANNEL,
@@ -716,7 +776,18 @@ def test_source_plan_fingerprint_covers_selected_count_and_every_data_path(
             )["fingerprint"]
         )
 
-    assert len(set(fingerprints)) == 3
+    assert len(set(fingerprints)) == 2
+    rejected = SourceAcquisitionFacade(
+        paths,
+        classify=lambda source: SourceKind.CHANNEL,
+        fetch=lambda source: VideoListResult(),
+        build=lambda **kwargs: changed_count,
+    ).preview(
+        parse_source_preview(
+            _json_body({"source": base.source, "language": "fr", "analyze": False})
+        )
+    )
+    assert rejected == {"schema_version": 1, "error": {"code": "plan_too_large"}}
 
 
 def test_source_plan_mutation_after_admission_never_executes(tmp_path: Path) -> None:

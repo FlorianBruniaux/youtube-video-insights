@@ -33,6 +33,7 @@ from .security import (
 _MAX_TARGET_BYTES = 2_048
 _MAX_BODY_BYTES = 65_536
 _CONNECTION_TIMEOUT_SECONDS = 1.0
+_DEFAULT_MAX_REQUEST_WORKERS = 16
 _BAD_PERCENT_ENCODING = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _CONTENT_LENGTH = re.compile(r"[0-9]{1,5}")
 _RESEARCH_ROUTE = re.compile(r"/research/([^/]+)")
@@ -97,12 +98,20 @@ class _LoopbackServer(ThreadingHTTPServer):
         address: tuple[str, int],
         app: WebApplication,
         static_root: Traversable,
+        max_request_workers: int,
     ) -> None:
+        if (
+            isinstance(max_request_workers, bool)
+            or not isinstance(max_request_workers, int)
+            or not 1 <= max_request_workers <= 128
+        ):
+            raise ValueError("request worker limit must be between 1 and 128")
         self._lifecycle_lock = threading.Lock()
         self._dispatch_lock = threading.Lock()
         self._closing = False
         self._active_sockets: set[socket.socket] = set()
         self._worker_threads: set[threading.Thread] = set()
+        self._request_slots = threading.BoundedSemaphore(max_request_workers)
         self.web_application = app
         routes, workspace_shell = _build_static_routes(static_root)
         self.static_routes = routes
@@ -127,6 +136,9 @@ class _LoopbackServer(ThreadingHTTPServer):
         if not isinstance(request, socket.socket):
             super().shutdown_request(request)
             return
+        if not self._request_slots.acquire(blocking=False):
+            self._reject_busy(request)
+            return
         worker = threading.Thread(
             target=self._run_request_worker,
             args=(request, client_address),
@@ -142,9 +154,11 @@ class _LoopbackServer(ThreadingHTTPServer):
             with self._lifecycle_lock:
                 self._worker_threads.discard(worker)
             self.shutdown_request(request)
+            self._request_slots.release()
             raise
         if closing:
             self.shutdown_request(request)
+            self._request_slots.release()
             return
 
     def shutdown_request(self, request: _SocketRequest) -> None:
@@ -184,6 +198,28 @@ class _LoopbackServer(ThreadingHTTPServer):
         finally:
             with self._lifecycle_lock:
                 self._worker_threads.discard(worker)
+            self._request_slots.release()
+
+    def _reject_busy(self, request: socket.socket) -> None:
+        body = json.dumps(
+            {"error": {"code": "server_busy"}, "schema_version": 1},
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        headers = [
+            b"HTTP/1.1 503 Service Unavailable",
+            b"Content-Type: application/json; charset=utf-8",
+            f"Content-Length: {len(body)}".encode("ascii"),
+            b"Connection: close",
+        ]
+        headers.extend(
+            f"{name}: {value}".encode("ascii")
+            for name, value in security_headers(api=True)
+        )
+        response = b"\r\n".join(headers) + b"\r\n\r\n" + body
+        with suppress(OSError):
+            request.sendall(response)
+        self.shutdown_request(request)
 
     def _start_closing(self) -> None:
         with self._dispatch_lock, self._lifecycle_lock:
@@ -480,6 +516,7 @@ def create_server(
     host: str,
     port: int,
     static_root: Traversable,
+    max_request_workers: int = _DEFAULT_MAX_REQUEST_WORKERS,
 ) -> ThreadingHTTPServer:
     """Create an inactive exact-loopback server with a frozen static table."""
     validated_host = validate_bind_host(host)
@@ -488,7 +525,12 @@ def create_server(
     server_class: type[_LoopbackServer] = (
         _IPv6LoopbackServer if validated_host == "::1" else _LoopbackServer
     )
-    return server_class((validated_host, port), app, static_root)
+    return server_class(
+        (validated_host, port),
+        app,
+        static_root,
+        max_request_workers,
+    )
 
 
 def _build_static_routes(

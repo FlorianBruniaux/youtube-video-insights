@@ -98,6 +98,15 @@ class FakeCatalog:
             "offset": offset,
         }
 
+    def corpus_status(self) -> dict[str, object]:
+        return {
+            "health": "ready",
+            "videos": 12,
+            "transcripts": 10,
+            "documents_indexed": 10,
+            "passages_indexed": 42,
+        }
+
 
 def _session(
     *,
@@ -155,6 +164,27 @@ class FakeStore:
     def get_session_history(self, session_id: str) -> object:
         raise AssertionError(f"full history loaded for {session_id}")
 
+    def get_public_timeline(self, session_id: str, *, limit: int) -> object:
+        assert session_id == SESSION_ID
+        assert limit == 100
+        created_at = datetime(2026, 8, 31, 12, tzinfo=UTC)
+        return SimpleNamespace(
+            decisions=(
+                SimpleNamespace(action="refresh", created_at=created_at),
+            ),
+            events=(
+                SimpleNamespace(
+                    event_id=1,
+                    from_state=None,
+                    to_state=ResearchState.ASSESSING,
+                    event_code="session_created",
+                    created_at=created_at,
+                ),
+            ),
+            decisions_truncated=False,
+            events_truncated=False,
+        )
+
     def get_decision_replay(
         self,
         session_id: str,
@@ -196,7 +226,20 @@ class FakeStore:
 
 class FakeExports:
     def list_exports(self, *, limit: int) -> dict[str, object]:
-        return {"items": [{"name": "safe-export"}], "limit": limit, "truncated": False}
+        return {
+            "items": [
+                {
+                    "name": "safe-export",
+                    "export_id": "a" * 64,
+                    "open_url": "/api/v1/exports/" + "a" * 64 + "/dossier",
+                }
+            ],
+            "limit": limit,
+            "truncated": False,
+        }
+
+    def read_dossier(self, export_id: str) -> bytes | None:
+        return b"# Safe dossier\n" if export_id == "a" * 64 else None
 
 
 class FakeWorkflow:
@@ -426,6 +469,7 @@ def test_search_delegates_to_existing_service(services: SimpleNamespace) -> None
     assert services.search.queries[0].text == "local"
     assert len(response.json_body["hits"][0]["excerpt"]) == 1_500
     assert len(response.json_body["hits"][0]["title"]) == 300
+    assert "source" not in response.json_body["hits"][0]
 
 
 def test_status_route_returns_the_versioned_liveness_contract(
@@ -434,7 +478,17 @@ def test_status_route_returns_the_versioned_liveness_contract(
     response = services.app.handle(WebRequest.get("/api/v1/status"))
 
     assert response.status == 200
-    assert response.json_body == {"schema_version": 1, "status": "ok"}
+    assert response.json_body == {
+        "schema_version": 1,
+        "status": "ok",
+        "corpus": {
+            "health": "ready",
+            "videos": 12,
+            "transcripts": 10,
+            "documents_indexed": 10,
+            "passages_indexed": 42,
+        },
+    }
 
 
 def test_read_routes_delegate_with_bounded_pagination(
@@ -458,7 +512,42 @@ def test_read_routes_delegate_with_bounded_pagination(
     assert services.store.calls == [(6, 1)]
     assert exports.json_body["items"][0]["name"] == "safe-export"
     assert session.json_body["session"]["session_id"] == SESSION_ID
+    assert session.json_body["history"] == {
+        "decisions": [
+            {"action": "refresh", "created_at": "2026-08-31T12:00:00Z"}
+        ],
+        "events": [
+            {
+                "event_id": 1,
+                "from_state": None,
+                "to_state": "assessing",
+                "event_code": "session_created",
+                "created_at": "2026-08-31T12:00:00Z",
+            }
+        ],
+        "decisions_truncated": False,
+        "events_truncated": False,
+    }
     assert job.json_body["job"]["result"] == {"done": True}
+
+
+def test_export_dossier_is_opened_by_opaque_id_without_a_path(
+    services: SimpleNamespace,
+) -> None:
+    export_id = "a" * 64
+
+    response = services.app.handle(
+        WebRequest.get(f"/api/v1/exports/{export_id}/dossier")
+    )
+    missing = services.app.handle(
+        WebRequest.get(f"/api/v1/exports/{'b' * 64}/dossier")
+    )
+
+    assert response.status == 200
+    assert response.content_type == "text/markdown; charset=utf-8"
+    assert response.body == b"# Safe dossier\n"
+    assert response.headers == (("Content-Disposition", 'inline; filename="dossier.md"'),)
+    assert missing.status == 404
 
 
 def test_research_mutations_delegate_to_workflow_and_queue_long_jobs(

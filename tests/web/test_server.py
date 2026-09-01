@@ -133,12 +133,14 @@ def running_server(
     static_root: Traversable,
     *,
     host: str = "127.0.0.1",
+    max_request_workers: int = 16,
 ) -> Iterator[tuple[ThreadingHTTPServer, threading.Thread]]:
     server = create_server(
         cast(WebApplication, application),
         host=host,
         port=0,
         static_root=static_root,
+        max_request_workers=max_request_workers,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -833,6 +835,48 @@ def test_incomplete_headers_are_closed_within_the_connection_timeout(
 
     assert elapsed < 1.5
     assert application.requests == []
+
+
+def test_request_worker_limit_rejects_excess_connections_with_fixed_json(
+    static_root: Path,
+) -> None:
+    """Spawning one thread per accepted socket permits local resource exhaustion."""
+    application = RecordingApplication()
+
+    with running_server(
+        application,
+        static_root,
+        max_request_workers=2,
+    ) as (server, _):
+        address = server.server_address
+        port = int(address[1])
+        host = str(address[0])
+        clients = [socket.create_connection((host, port), timeout=2.0) for _ in range(2)]
+        try:
+            for client in clients:
+                client.sendall(
+                    b"GET /api/v1/status HTTP/1.1\r\n"
+                    + f"Host: {host}:{port}\r\n".encode("ascii")
+                )
+            deadline = time.monotonic() + 0.5
+            while len(tuple(vars(server).get("_worker_threads", ()))) < 2:
+                if time.monotonic() >= deadline:
+                    pytest.fail("request workers did not reach the configured limit")
+                time.sleep(0.005)
+
+            response = raw_request_bytes(server, b"GET", b"/api/v1/status")
+
+            status, headers, body = parse_raw_response(response)
+            assert status == 503
+            assert headers["cache-control"] == "no-store"
+            assert json.loads(body) == {
+                "error": {"code": "server_busy"},
+                "schema_version": 1,
+            }
+            assert len(tuple(vars(server).get("_worker_threads", ()))) <= 2
+        finally:
+            for client in clients:
+                client.close()
 
 
 def test_shutdown_closes_partial_post_and_prevents_late_dispatch(

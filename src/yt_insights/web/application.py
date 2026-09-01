@@ -14,7 +14,11 @@ from typing import Protocol, TypeVar, runtime_checkable
 
 from yt_insights.catalog import CatalogError
 from yt_insights.research.dossier import DossierExportRequest, DossierExportResult
-from yt_insights.research.models import ResearchSession, ResearchState
+from yt_insights.research.models import (
+    PublicSessionTimeline,
+    ResearchSession,
+    ResearchState,
+)
 from yt_insights.research.store import (
     DecisionReplayStatus,
     ResearchIdempotencyConflict,
@@ -64,7 +68,9 @@ _SESSION_ACTION_ROUTE = re.compile(
     r"/api/v1/research/sessions/([^/]+)/(decisions|discovery|approvals|acquisition|retry|exports)"
 )
 _JOB_ROUTE = re.compile(r"/api/v1/jobs/([^/]+)")
+_EXPORT_DOSSIER_ROUTE = re.compile(r"/api/v1/exports/([0-9a-f]{64})/dossier")
 _MAX_REPLAY_RECORDS = 100
+_MAX_TIMELINE_ITEMS = 100
 _DECISION_STATES = frozenset({ResearchState.AWAITING_SUFFICIENCY})
 _DISCOVERY_STATES = frozenset({ResearchState.DISCOVERING})
 _APPROVAL_STATES = frozenset({ResearchState.AWAITING_CANDIDATES})
@@ -262,7 +268,14 @@ class WebApplication:
     def _get(self, request: WebRequest) -> WebResponse:
         if request.path == "/api/v1/status":
             _require_empty_query(request)
-            return WebResponse.json(200, {"schema_version": 1, "status": "ok"})
+            return WebResponse.json(
+                200,
+                {
+                    "schema_version": 1,
+                    "status": "ok",
+                    "corpus": self._catalog.corpus_status(),
+                },
+            )
         if request.path == "/api/v1/search":
             query = parse_search(request.query)
             return WebResponse.json(
@@ -302,13 +315,32 @@ class WebApplication:
                 200,
                 {"schema_version": 1, **self._exports.list_exports(limit=page.limit)},
             )
+        export_match = _EXPORT_DOSSIER_ROUTE.fullmatch(request.path)
+        if export_match is not None:
+            _require_empty_query(request)
+            dossier = self._exports.read_dossier(export_match.group(1))
+            if dossier is None:
+                raise ResourceNotFound()
+            return WebResponse(
+                200,
+                dossier,
+                "text/markdown; charset=utf-8",
+                (("Content-Disposition", 'inline; filename="dossier.md"'),),
+            )
         session_match = _SESSION_ROUTE.fullmatch(request.path)
         if session_match is not None:
             _require_empty_query(request)
             session_id = validate_session_id(session_match.group(1))
             self._require_session(session_id)
             response = self._workflow.status(session_id)
-            return WebResponse.json(200, response.to_dict())
+            payload = response.to_dict()
+            payload["history"] = _timeline_payload(
+                self._research_store.get_public_timeline(
+                    session_id,
+                    limit=_MAX_TIMELINE_ITEMS,
+                )
+            )
+            return WebResponse.json(200, payload)
         job_match = _JOB_ROUTE.fullmatch(request.path)
         if job_match is not None:
             _require_empty_query(request)
@@ -703,6 +735,32 @@ def _response_job_id(response: WebResponse) -> str | None:
 
 def _job_error(code: str) -> dict[str, object]:
     return {"schema_version": 1, "error": {"code": code}}
+
+
+def _timeline_payload(timeline: PublicSessionTimeline) -> dict[str, object]:
+    return {
+        "decisions": [
+            {
+                "action": decision.action,
+                "created_at": decision.created_at.isoformat().replace("+00:00", "Z"),
+            }
+            for decision in timeline.decisions
+        ],
+        "events": [
+            {
+                "event_id": event.event_id,
+                "from_state": (
+                    None if event.from_state is None else event.from_state.value
+                ),
+                "to_state": event.to_state.value,
+                "event_code": event.event_code,
+                "created_at": event.created_at.isoformat().replace("+00:00", "Z"),
+            }
+            for event in timeline.events
+        ],
+        "decisions_truncated": timeline.decisions_truncated,
+        "events_truncated": timeline.events_truncated,
+    }
 
 
 def _error(status: int, code: str) -> WebResponse:

@@ -32,7 +32,7 @@ from .search.sqlite_fts import SearchIndexError, SQLiteFtsIndex
 from .web.api import SourceAcquisitionFacade
 from .web.application import WebApplication
 from .web.jobs import JobExecutor
-from .web.readers import CatalogWebReader, ExportReader
+from .web.readers import CatalogWebReader, ExportReader, SearchIndexWebReader
 from .web.server import create_server
 
 _LOOPBACK_HOST = "127.0.0.1"
@@ -127,7 +127,10 @@ def create_web_runtime(
     try:
         application = WebApplication(
             search=SearchService(search_index),
-            catalog=CatalogWebReader(paths.catalog_database),
+            catalog=CatalogWebReader(
+                paths.catalog_database,
+                search_index=SearchIndexWebReader(search_index),
+            ),
             workflow=workflow,
             research_store=store,
             exports=ExportReader(paths.exports),

@@ -9,6 +9,8 @@ from click.testing import CliRunner
 from yt_insights import cli_web
 from yt_insights.cli import cli
 from yt_insights.paths import DataPaths
+from yt_insights.search.sqlite_fts import SQLiteFtsIndex
+from yt_insights.web.readers import SearchIndexWebReader
 
 
 class _FakeJobs:
@@ -33,6 +35,37 @@ class _FakeServer:
 
     def server_close(self) -> None:
         self._events.append("server-close")
+
+
+def test_create_runtime_wires_the_validated_search_index_into_corpus_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitting the index projection would leave dashboard and source state unknown."""
+    paths = DataPaths.from_root(tmp_path / "data")
+    search_index = SQLiteFtsIndex(paths.search_database)
+    captured: dict[str, object] = {}
+    server = _FakeServer([])
+
+    monkeypatch.setattr(
+        cli_web,
+        "_validate_corpus_databases",
+        lambda _paths: search_index,
+    )
+
+    def create_server(application: object, **_kwargs: object) -> _FakeServer:
+        captured["application"] = application
+        return server
+
+    monkeypatch.setattr(cli_web, "create_server", create_server)
+
+    runtime = cli_web.create_web_runtime(paths, host="127.0.0.1", port=0)
+    application = captured["application"]
+    catalog = vars(application)["_catalog"]
+
+    assert runtime.server is server
+    assert isinstance(vars(catalog)["_search_index"], SearchIndexWebReader)
+    runtime.jobs.close()
 
 
 @pytest.mark.parametrize("port", ["0", "65536", "true", "false"])

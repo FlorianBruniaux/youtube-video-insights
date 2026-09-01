@@ -342,6 +342,24 @@ class SessionHistory:
 
 
 @dataclass(frozen=True, slots=True)
+class PublicSessionTimeline:
+    """Latest bounded decisions and events for an interactive session view."""
+
+    decisions: tuple[DecisionRecord, ...]
+    events: tuple[EventRecord, ...]
+    decisions_truncated: bool
+    events_truncated: bool
+
+    def __post_init__(self) -> None:
+        _require_tuple(self.decisions, label="decisions")
+        _require_tuple(self.events, label="events")
+        if not isinstance(self.decisions_truncated, bool):
+            raise TypeError("decisions_truncated must be a boolean")
+        if not isinstance(self.events_truncated, bool):
+            raise TypeError("events_truncated must be a boolean")
+
+
+@dataclass(frozen=True, slots=True)
 class ResearchPublicSnapshot:
     """One revision-bound, bounded read model for public workflow responses."""
 

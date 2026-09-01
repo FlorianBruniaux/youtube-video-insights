@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -9,9 +10,57 @@ import pytest
 import yt_insights.web.readers as readers_module
 from yt_insights.catalog import Catalog
 from yt_insights.downloader import VideoInfo, VideoListResult
-from yt_insights.web.readers import CatalogWebReader, ExportReader
+from yt_insights.search.corpus import CorpusManifest
+from yt_insights.search.models import (
+    BuildReport,
+    DocumentRef,
+    Passage,
+    compute_document_id,
+    compute_passage_id,
+    youtube_url,
+)
+from yt_insights.search.sqlite_fts import SQLiteFtsIndex
+from yt_insights.web.readers import (
+    CatalogWebReader,
+    ExportReader,
+    SearchIndexWebReader,
+)
 
 VIDEO_ID = "abc123DEF45"
+
+
+def test_search_index_reader_returns_counts_and_exact_video_membership(
+    tmp_path: Path,
+) -> None:
+    """Inferring index state from transcript presence would report stale indexes as ready."""
+    document_id = compute_document_id("channel-a", VIDEO_ID, "en")
+    document = DocumentRef(
+        document_id=document_id,
+        source_relpath=f"channel-a/transcripts/Local [{VIDEO_ID}].en.vtt",
+        source_sha256="a" * 64,
+        channel_id="channel-a",
+        channel_title="Channel A",
+        video_id=VIDEO_ID,
+        video_title="Local model",
+        language="en",
+    )
+    passage = Passage(
+        passage_id=compute_passage_id(document_id, 0, 1.0, 3.0, "Local evidence"),
+        document_id=document_id,
+        ordinal=0,
+        start_seconds=1.0,
+        end_seconds=3.0,
+        text="Local evidence",
+        youtube_url=youtube_url(VIDEO_ID, 1.0),
+    )
+    index = SQLiteFtsIndex(tmp_path / "search.sqlite3")
+    index.rebuild(CorpusManifest((document,), (passage,), (), 1, 1, 0))
+    reader = SearchIndexWebReader(index)
+
+    assert reader.status().documents_indexed == 1
+    assert reader.indexed_video_ids((VIDEO_ID, "missingVid1")) == frozenset(
+        {VIDEO_ID}
+    )
 
 
 def _write_transcript(root: Path, *, language: str) -> None:
@@ -62,7 +111,15 @@ def _manifest(*, session_id: str = "s" * 32) -> dict[str, object]:
 
 def test_catalog_reader_projects_only_bounded_public_source_fields(tmp_path: Path) -> None:
     """Leaking database columns, paths, or unchecked links breaks this projection."""
-    reader = CatalogWebReader(_catalog(tmp_path))
+    class IndexReader:
+        def status(self) -> BuildReport:
+            return BuildReport(2, 1, 1, 1, 3)
+
+        def indexed_video_ids(self, video_ids: tuple[str, ...]) -> frozenset[str]:
+            assert video_ids == (VIDEO_ID,)
+            return frozenset({VIDEO_ID})
+
+    reader = CatalogWebReader(_catalog(tmp_path), search_index=IndexReader())
 
     payload = reader.list_sources(limit=1, offset=0)
 
@@ -76,6 +133,8 @@ def test_catalog_reader_projects_only_bounded_public_source_fields(tmp_path: Pat
                 "sources": ["example"],
                 "url": f"https://www.youtube.com/watch?v={VIDEO_ID}",
                 "artifact_count": 2,
+                "transcript_state": "available",
+                "index_state": "indexed",
             }
         ],
         "limit": 1,
@@ -92,6 +151,16 @@ def test_catalog_reader_projects_only_bounded_public_source_fields(tmp_path: Pat
         "sources",
         "url",
         "artifact_count",
+        "transcript_state",
+        "index_state",
+    }
+
+    assert reader.corpus_status() == {
+        "health": "ready",
+        "videos": 1,
+        "transcripts": 2,
+        "documents_indexed": 1,
+        "passages_indexed": 3,
     }
 
 
@@ -105,7 +174,11 @@ def test_export_reader_reads_nested_dossiers_and_hides_unsafe_entries(
     outside = tmp_path / "outside"
     for directory in (valid, malformed, outside / "2026-08-31-outside"):
         directory.mkdir(parents=True)
-    (valid / "manifest.json").write_text(json.dumps(_manifest()), encoding="utf-8")
+    dossier = b"# Local AI dossier\n"
+    valid_manifest = _manifest()
+    valid_manifest["dossier_sha256"] = hashlib.sha256(dossier).hexdigest()
+    (valid / "manifest.json").write_text(json.dumps(valid_manifest), encoding="utf-8")
+    (valid / "dossier.md").write_bytes(dossier)
     (outside / "2026-08-31-outside" / "manifest.json").write_text(
         json.dumps(_manifest()),
         encoding="utf-8",
@@ -117,7 +190,11 @@ def test_export_reader_reads_nested_dossiers_and_hides_unsafe_entries(
     os.symlink(outside, exports / "linked-topic")
     os.symlink(outside, exports / "local-ai" / "linked-dossier")
 
-    payload = ExportReader(exports).list_exports(limit=10)
+    reader = ExportReader(exports)
+    payload = reader.list_exports(limit=10)
+    export_id = hashlib.sha256(
+        ("local-ai\x00" + valid.name).encode("utf-8")
+    ).hexdigest()
 
     assert payload == {
         "items": [
@@ -126,12 +203,18 @@ def test_export_reader_reads_nested_dossiers_and_hides_unsafe_entries(
                 "session_id": "s" * 32,
                 "created_at": "2026-08-31T10:00:00+00:00",
                 "manifest_valid": True,
+                "export_id": export_id,
+                "open_url": f"/api/v1/exports/{export_id}/dossier",
             },
             {
                 "name": "2026-08-31-" + "x" * 32,
                 "session_id": None,
                 "created_at": None,
                 "manifest_valid": False,
+                "export_id": hashlib.sha256(
+                    ("unsafe\x00" + malformed.name).encode("utf-8")
+                ).hexdigest(),
+                "open_url": None,
             },
         ],
         "limit": 10,
@@ -147,9 +230,19 @@ def test_export_reader_reads_nested_dossiers_and_hides_unsafe_entries(
     assert isinstance(items, list)
     assert all(
         isinstance(item, dict)
-        and set(item) == {"name", "session_id", "created_at", "manifest_valid"}
+        and set(item)
+        == {
+            "name",
+            "session_id",
+            "created_at",
+            "manifest_valid",
+            "export_id",
+            "open_url",
+        }
         for item in items
     )
+    assert reader.read_dossier(export_id) == dossier
+    assert reader.read_dossier("b" * 64) is None
 
 
 def test_export_reader_caps_descriptor_inventory_without_listdir_materialization(
@@ -271,3 +364,33 @@ def test_export_reader_marks_unopenable_candidate_directories_incomplete(
         "inventory_examined": inventory_examined,
         "inventory_limit": 32,
     }
+
+
+def test_export_reader_marks_unreadable_manifest_incomplete(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Treating an I/O race as a malformed manifest would overstate completeness."""
+    exports = tmp_path / "exports"
+    dossier = exports / "topic" / "2026-08-31-dossier"
+    dossier.mkdir(parents=True)
+    (dossier / "manifest.json").write_text(json.dumps(_manifest()), encoding="utf-8")
+    original_open = os.open
+
+    def denied_open(
+        name: str | Path,
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if name == "manifest.json" and dir_fd is not None:
+            raise PermissionError("test manifest became unreadable")
+        return original_open(name, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(readers_module.os, "open", denied_open)
+
+    payload = ExportReader(exports).list_exports(limit=10)
+
+    assert payload["inventory_complete"] is False
+    assert payload["truncated"] is True

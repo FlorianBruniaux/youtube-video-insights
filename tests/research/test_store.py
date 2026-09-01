@@ -182,6 +182,56 @@ def test_list_sessions_is_bounded_and_stably_sorted(tmp_path: object) -> None:
         store.list_sessions(limit=1, offset=-1)
 
 
+def test_public_timeline_returns_latest_bounded_decisions_and_events(
+    tmp_path: object,
+) -> None:
+    """Loading unbounded history would let one old session exhaust the web read."""
+    store = _store(tmp_path)
+    _create(store)
+    database = tmp_path / "research.sqlite3"  # type: ignore[operator]
+    with sqlite3.connect(database) as connection:
+        for index in range(3):
+            created_at = f"2026-08-31T10:0{index + 1}:00+00:00"
+            connection.execute(
+                "INSERT INTO research_decisions VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    f"decision-{index}",
+                    SESSION_ID,
+                    index,
+                    f"action-{index}",
+                    "{}",
+                    created_at,
+                ),
+            )
+            connection.execute(
+                "INSERT INTO research_events(session_id, from_state, to_state, "
+                "event_code, payload_json, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                (
+                    SESSION_ID,
+                    ResearchState.ASSESSING.value,
+                    ResearchState.ASSESSING.value,
+                    f"event-{index}",
+                    "{}",
+                    created_at,
+                ),
+            )
+
+    timeline = store.get_public_timeline(SESSION_ID, limit=2)
+
+    assert [decision.action for decision in timeline.decisions] == [
+        "action-1",
+        "action-2",
+    ]
+    assert [event.event_code for event in timeline.events] == [
+        "event-1",
+        "event-2",
+    ]
+    assert timeline.decisions_truncated is True
+    assert timeline.events_truncated is True
+    with pytest.raises(ValueError, match="limit"):
+        store.get_public_timeline(SESSION_ID, limit=0)
+
+
 def test_assessment_sufficiency_and_refresh_transitions_are_revision_checked(tmp_path: object) -> None:
     """Removing a state/revision guard must make one of these calls mutate incorrectly."""
     store = _store(tmp_path)

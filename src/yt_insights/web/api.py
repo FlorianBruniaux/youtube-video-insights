@@ -7,6 +7,7 @@ import hmac
 import json
 import re
 import threading
+import unicodedata
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -23,7 +24,11 @@ from yt_insights.acquisition import (
 )
 from yt_insights.downloader import VideoListResult, fetch_video_list
 from yt_insights.paths import DataPaths
-from yt_insights.research.models import FreshnessProfile, ResearchSession
+from yt_insights.research.models import (
+    FreshnessProfile,
+    ResearchSession,
+    normalize_research_text,
+)
 from yt_insights.search.models import SearchHit, SearchQuery
 from yt_insights.web.jobs import JobSnapshot
 
@@ -166,6 +171,12 @@ def parse_start_session(body: bytes) -> StartSessionRequest:
     )
     topic = _string(payload.get("topic"))
     queries = _string_list(payload.get("queries"), minimum=1, maximum=8)
+    try:
+        normalized_queries = tuple(normalize_research_text(query) for query in queries)
+    except (TypeError, ValueError) as exc:
+        raise RequestValidationError() from exc
+    if len(set(normalized_queries)) != len(normalized_queries):
+        raise RequestValidationError()
     languages = _string_list(payload.get("languages"), minimum=0, maximum=20)
     profile_text = _string(payload.get("freshness_profile"))
     try:
@@ -377,10 +388,14 @@ class SourceAcquisitionFacade:
     def preview(self, request: SourcePreviewRequest) -> Mapping[str, object]:
         """Build a fresh preview and return no source or directory fields."""
         plan = self._plan(request)
+        selected_ids = tuple(video.video_id for video in plan.selected_videos)
         if (
             len(plan.selected_videos) > self._max_selected_videos
             or len(plan.selected_urls) > self._max_selected_videos
             or not 0 <= plan.selected_count <= self._max_selected_videos
+            or len(plan.selected_videos) != len(plan.selected_urls)
+            or plan.selected_count != len(plan.selected_videos)
+            or len(set(selected_ids)) != len(selected_ids)
         ):
             return _plan_too_large()
         identity = _canonical_plan_bytes(plan)
@@ -391,6 +406,9 @@ class SourceAcquisitionFacade:
         ):
             return _plan_too_large()
         fingerprint = _fingerprint(identity)
+        safe_plan = _safe_plan(plan, fingerprint=fingerprint)
+        if "error" in safe_plan:
+            return safe_plan
         with self._plan_lock:
             prior = self._prepared_plans.pop(fingerprint, None)
             if prior is not None:
@@ -404,7 +422,7 @@ class SourceAcquisitionFacade:
                 self._retained_identity_bytes -= evicted.identity_size
             self._prepared_plans[fingerprint] = _PreparedPlan(plan, identity_size)
             self._retained_identity_bytes += identity_size
-        return _safe_plan(plan, fingerprint=fingerprint)
+        return safe_plan
 
     def prepare_acquisition(
         self, fingerprint: str
@@ -543,7 +561,11 @@ def _string(value: object) -> str:
     if not isinstance(value, str):
         raise RequestValidationError()
     stripped = value.strip()
-    if not stripped or len(stripped) > _MAX_STRING or "\x00" in stripped:
+    if (
+        not stripped
+        or len(stripped) > _MAX_STRING
+        or any(unicodedata.category(character) == "Cc" for character in value)
+    ):
         raise RequestValidationError()
     return stripped
 
@@ -618,7 +640,6 @@ def _search_hit_payload(hit: SearchHit) -> dict[str, object]:
         "start_seconds": hit.passage.start_seconds,
         "end_seconds": hit.passage.end_seconds,
         "url": hit.passage.youtube_url,
-        "source": _clip(hit.document.source_relpath, 500),
     }
 
 
@@ -703,6 +724,7 @@ def _safe_plan(
         "fingerprint": fingerprint or _plan_fingerprint(plan),
         "source_kind": plan.source_kind.value,
         "selected_count": plan.selected_count,
+        "video_ids": [video.video_id for video in plan.selected_videos],
         "videos": videos,
         "videos_returned": len(videos),
         "videos_truncated": False,
@@ -717,7 +739,7 @@ def _safe_plan(
         payload["videos_returned"] = len(videos)
         payload["videos_truncated"] = True
     if _serialized_size(payload) >= _MAX_SAFE_PLAN_BYTES:
-        raise RuntimeError("source preview is unavailable")
+        return _plan_too_large()
     return payload
 
 
