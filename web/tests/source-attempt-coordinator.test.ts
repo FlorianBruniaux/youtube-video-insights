@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   acquisitionAttemptKey,
   createAttemptIdentityCoordinator,
+  researchAttemptKey,
 } from "../src/lib/source-attempt-coordinator";
 
 const FINGERPRINT = "a".repeat(64);
@@ -43,6 +44,28 @@ describe("source attempt identity coordinator", () => {
       acquisitionAttemptKey(FINGERPRINT, second),
     );
     expect(acquisitionAttemptKey(FINGERPRINT, 999_999_999)).toHaveLength(93);
+  });
+
+  it("keeps research generations in an isolated namespace and rotates their bounded key", async () => {
+    const withLock = serialLock();
+    const source = createAttemptIdentityCoordinator(window.localStorage, withLock);
+    const research = createAttemptIdentityCoordinator(
+      window.localStorage,
+      withLock,
+      "research",
+    );
+    const sourceGeneration = await source.claim(FINGERPRINT);
+    const researchGeneration = await research.claim(FINGERPRINT);
+
+    expect(sourceGeneration).toBe(0);
+    expect(researchGeneration).toBe(0);
+    await research.complete(FINGERPRINT, researchGeneration);
+    await expect(research.claim(FINGERPRINT)).resolves.toBe(1);
+    await expect(source.claim(FINGERPRINT)).resolves.toBe(0);
+    expect(researchAttemptKey(FINGERPRINT, 1)).toBe(
+      `web-research-${FINGERPRINT}-1`,
+    );
+    expect(researchAttemptKey(FINGERPRINT, 999_999_999)).toHaveLength(87);
   });
 
   it("keeps a lost-response identity current until a terminal observer rotates it", async () => {

@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { attachExportsPage } from "../src/lib/pages/exports";
 import { attachResearchNewPage } from "../src/lib/pages/research-new";
 import { attachResearchWorkspace } from "../src/lib/pages/research-workspace";
-import { pollResearchJob } from "../src/lib/research-job";
+import {
+  pollResearchJob,
+  researchActionScope,
+  researchScopeFingerprint,
+} from "../src/lib/research-job";
+import { createAttemptIdentityCoordinator } from "../src/lib/source-attempt-coordinator";
 import type {
   ExportsResponse,
   JobResponse,
@@ -171,14 +176,54 @@ function submit(form: HTMLFormElement): void {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   window.sessionStorage.clear();
+  window.localStorage.clear();
   window.history.replaceState({}, "", "/");
   Object.defineProperty(document, "hidden", { configurable: true, value: false });
   Reflect.deleteProperty(window, "confirm");
   document.body.replaceChildren();
 });
 
+function serialLock(): <T>(name: string, task: () => T | Promise<T>) => Promise<T> {
+  let tail = Promise.resolve();
+  return async <T>(_name: string, task: () => T | Promise<T>): Promise<T> => {
+    const previous = tail;
+    let release = (): void => undefined;
+    tail = new Promise<void>((resolve) => { release = resolve; });
+    await previous;
+    try {
+      return await task();
+    } finally {
+      release();
+    }
+  };
+}
+
 describe("bounded research job polling", () => {
+  it("binds the collision-resistant research scope to language and exact action fields", async () => {
+    const english = researchActionScope(
+      sessionId,
+      "research_acquisition",
+      7,
+      "en",
+    );
+    const french = researchActionScope(
+      sessionId,
+      "research_acquisition",
+      7,
+      "fr",
+    );
+
+    expect(english).toBe(
+      '["research_session_1","research_acquisition",7,"en"]',
+    );
+    expect(await researchScopeFingerprint(english)).toMatch(/^[0-9a-f]{64}$/);
+    expect(await researchScopeFingerprint(english)).not.toBe(
+      await researchScopeFingerprint(french),
+    );
+  });
+
   it("uses 0.5, 1, then 2 second backoff and validates the exact job identity", async () => {
     const delays: number[] = [];
     const read = vi
@@ -434,7 +479,12 @@ describe("cumulative research workspace", () => {
     const current = session("awaiting_sufficiency_confirmation", "confirm_sufficiency_or_refresh", 2);
     const read = vi.fn().mockResolvedValue(current);
     const write = vi.fn().mockRejectedValue({ code: "stale_revision", status: 409 });
-    attachResearchWorkspace(root, { read, write, wait: vi.fn() });
+    attachResearchWorkspace(root, {
+      read,
+      write,
+      wait: vi.fn(),
+      coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
+    });
     await vi.waitFor(() => expect(root.querySelectorAll("[data-primary-choice]")).toHaveLength(2));
 
     root.querySelector<HTMLButtonElement>("[data-decision=sufficient]")!.click();
@@ -456,7 +506,12 @@ describe("cumulative research workspace", () => {
       .mockResolvedValueOnce(job("research_discovery", "failed", null))
       .mockResolvedValueOnce(session("failed_retryable", null, 3));
     const write = vi.fn().mockResolvedValue({ schema_version: 1, job_id: "job_discovery_1" });
-    attachResearchWorkspace(root, { read, write, wait: vi.fn() });
+    attachResearchWorkspace(root, {
+      read,
+      write,
+      wait: vi.fn(),
+      coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
+    });
     await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
 
     root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
@@ -466,7 +521,7 @@ describe("cumulative research workspace", () => {
     expect(write).toHaveBeenCalledTimes(1);
     expect(write.mock.calls[0]?.[1]).toEqual({
       expected_revision: 2,
-      idempotency_key: `web:research_discovery:${sessionId}:2`,
+      idempotency_key: expect.stringMatching(/^web-research-[0-9a-f]{64}-0$/),
     });
     expect(root.querySelector("[data-job-message]")?.textContent).toContain("failed");
     expect(window.sessionStorage.getItem("yt-insights:research-job:v1")).toBeNull();
@@ -489,7 +544,12 @@ describe("cumulative research workspace", () => {
           ? Promise.reject({ code: "unexpected_response" })
           : Promise.resolve({ schema_version: 1 as const, job_id: "job_discovery_1" });
       });
-    attachResearchWorkspace(root, { read, write, wait: vi.fn() });
+    attachResearchWorkspace(root, {
+      read,
+      write,
+      wait: vi.fn(),
+      coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
+    });
     await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
 
     root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
@@ -503,6 +563,218 @@ describe("cumulative research workspace", () => {
     expect(write.mock.calls[1]?.[1]).toEqual(write.mock.calls[0]?.[1]);
     await vi.waitFor(() => expect(root.querySelector("[data-retry-research]")).not.toBeNull());
     expect(window.sessionStorage.getItem("yt-insights:research-admission:v1")).toBeNull();
+  });
+
+  it("rotates the shared identity only after an exact failed terminal job", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    const root = renderWorkspaceDom();
+    const coordinator = createAttemptIdentityCoordinator(
+      window.localStorage,
+      serialLock(),
+      "research",
+    );
+    const firstFailed: JobResponse = {
+      schema_version: 1,
+      job: {
+        job_id: "job_generation_0",
+        kind: "research_discovery",
+        status: "failed",
+        result: null,
+        error_code: "operation_failed",
+      },
+    };
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(session("discovering", null, 2))
+      .mockResolvedValueOnce(firstFailed)
+      .mockResolvedValueOnce(session("discovering", null, 2));
+    const write = vi
+      .fn()
+      .mockResolvedValueOnce({ schema_version: 1, job_id: "job_generation_0" })
+      .mockResolvedValueOnce({ schema_version: 1, job_id: "job_generation_1" });
+    attachResearchWorkspace(root, { read, write, wait: vi.fn(), coordinator });
+    await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
+
+    root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
+    await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
+    await new Promise<void>((resolve) => globalThis.setTimeout(resolve, 0));
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
+
+    await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+    const firstKey = (write.mock.calls[0]?.[1] as { idempotency_key: string }).idempotency_key;
+    const secondKey = (write.mock.calls[1]?.[1] as { idempotency_key: string }).idempotency_key;
+    expect(firstKey).toMatch(/^web-research-[0-9a-f]{64}-0$/);
+    expect(secondKey).toBe(firstKey.replace(/-0$/, "-1"));
+  });
+
+  it("preserves a v1 admitted key when reloading an ambiguous admission", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    const legacyKey = `web:research_discovery:${sessionId}:2`;
+    window.sessionStorage.setItem(
+      "yt-insights:research-admission:v1",
+      JSON.stringify({
+        version: 1,
+        session_id: sessionId,
+        kind: "research_discovery",
+        expected_revision: 2,
+        idempotency_key: legacyKey,
+        language: null,
+      }),
+    );
+    const root = renderWorkspaceDom();
+    const write = vi.fn().mockRejectedValue(new TypeError("response lost"));
+    attachResearchWorkspace(root, {
+      read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
+      write,
+      wait: vi.fn(),
+      coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
+    });
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")?.hidden).toBe(false),
+    );
+
+    root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")!.click();
+
+    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    expect((write.mock.calls[0]?.[1] as { idempotency_key: string }).idempotency_key).toBe(legacyKey);
+  });
+
+  it("clears workflow conflicts, reloads the snapshot, and requires review", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    const root = renderWorkspaceDom();
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(session("discovering", null, 2))
+      .mockResolvedValueOnce(session("awaiting_sufficiency_confirmation", "confirm_sufficiency_or_refresh", 3));
+    const write = vi.fn().mockRejectedValue({ code: "workflow_conflict", status: 409 });
+    attachResearchWorkspace(root, {
+      read,
+      write,
+      wait: vi.fn(),
+      coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
+    });
+    await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
+
+    root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
+
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(window.sessionStorage.getItem("yt-insights:research-admission:v1")).toBeNull();
+    expect(root.querySelector("[data-research-status]")?.textContent).toBe(
+      "The research workflow changed. Review the current session before starting again.",
+    );
+    expect(root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")?.hidden).toBe(true);
+  });
+
+  it("clears a missing session admission and unlocks the rendered controls", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    const root = renderWorkspaceDom();
+    const write = vi.fn().mockRejectedValue({ code: "not_found", status: 404 });
+    attachResearchWorkspace(root, {
+      read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
+      write,
+      wait: vi.fn(),
+      coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
+    });
+    await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
+
+    root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
+
+    await vi.waitFor(() =>
+      expect(root.querySelector("[data-research-status]")?.textContent).toBe(
+        "This research session was not found.",
+      ),
+    );
+    expect(window.sessionStorage.getItem("yt-insights:research-admission:v1")).toBeNull();
+    expect(root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")?.hidden).toBe(true);
+    expect(root.querySelector<HTMLButtonElement>("[data-start-discovery]")?.disabled).toBe(false);
+  });
+
+  it.each([
+    ["request in progress", { code: "request_in_progress", status: 409 }],
+    ["rate limit", { code: "job_queue_full", status: 429 }],
+    ["temporary outage", { code: "jobs_unavailable", status: 503 }],
+    ["network loss", new TypeError("network lost")],
+    ["ambiguous server failure", { code: "internal_error", status: 500 }],
+  ])("retains the exact admission after %s", async (_case, failure) => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    const root = renderWorkspaceDom();
+    const write = vi.fn().mockRejectedValue(failure);
+    attachResearchWorkspace(root, {
+      read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
+      write,
+      wait: vi.fn(),
+      coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
+    });
+    await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
+
+    root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
+
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")?.hidden).toBe(false),
+    );
+    expect(window.sessionStorage.getItem("yt-insights:research-admission:v1")).not.toBeNull();
+    expect(write).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["invalid request", { code: "invalid_request", status: 400 }],
+    ["identity conflict", { code: "idempotency_conflict", status: 409 }],
+    ["forbidden", { code: "forbidden", status: 403 }],
+  ])("discards the admission after definitive %s", async (_case, failure) => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    const root = renderWorkspaceDom();
+    const write = vi.fn().mockRejectedValue(failure);
+    attachResearchWorkspace(root, {
+      read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
+      write,
+      wait: vi.fn(),
+      coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
+    });
+    await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
+
+    root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
+
+    await vi.waitFor(() =>
+      expect(root.querySelector("[data-research-status]")?.textContent).not.toContain(
+        "Submitting",
+      ),
+    );
+    expect(write).toHaveBeenCalledOnce();
+    expect(window.sessionStorage.getItem("yt-insights:research-admission:v1")).toBeNull();
+    expect(root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")?.hidden).toBe(true);
+    expect(root.querySelector<HTMLButtonElement>("[data-start-discovery]")?.disabled).toBe(false);
+  });
+
+  it("bounds a pending admission to 15 seconds and retains the exact key", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    const root = renderWorkspaceDom();
+    const write = vi.fn().mockReturnValue(new Promise(() => undefined));
+    const coordinator = createAttemptIdentityCoordinator(
+      window.localStorage,
+      serialLock(),
+      "research",
+    );
+    attachResearchWorkspace(root, {
+      read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
+      write,
+      wait: vi.fn(),
+      coordinator,
+    });
+    await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
+    vi.useFakeTimers();
+
+    root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(write).toHaveBeenCalledOnce();
+    const admittedKey = (write.mock.calls[0]?.[1] as { idempotency_key: string }).idempotency_key;
+
+    await vi.advanceTimersByTimeAsync(15_000);
+
+    expect(root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")?.hidden).toBe(false);
+    expect(window.sessionStorage.getItem("yt-insights:research-admission:v1")).toContain(admittedKey);
+    const fingerprint = admittedKey.slice("web-research-".length, -2);
+    await expect(coordinator.claim(fingerprint)).resolves.toBe(0);
   });
 
   it("retains the accepted admission when the job identity cannot be persisted", async () => {
@@ -521,6 +793,7 @@ describe("cumulative research workspace", () => {
       read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
       write,
       wait: vi.fn().mockResolvedValue(undefined),
+      coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
     });
     await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
     Object.defineProperty(document, "hidden", { configurable: true, value: true });
@@ -528,13 +801,12 @@ describe("cumulative research workspace", () => {
     root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
 
     await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    const admittedKey = (write.mock.calls[0]?.[1] as { idempotency_key: string }).idempotency_key;
     const storedJob = window.sessionStorage.getItem("yt-insights:research-job:v1");
     const storedAdmission = window.sessionStorage.getItem("yt-insights:research-admission:v1");
     setItemSpy.mockRestore();
     expect(storedJob).toBeNull();
-    expect(storedAdmission).toContain(
-      `web:research_discovery:${sessionId}:2`,
-    );
+    expect(storedAdmission).toContain(admittedKey);
     dispose();
 
     Object.defineProperty(document, "hidden", { configurable: true, value: false });
@@ -568,6 +840,42 @@ describe("cumulative research workspace", () => {
     attachResearchWorkspace(root, { read, write: vi.fn(), wait: vi.fn() });
 
     await vi.waitFor(() => expect(root.querySelector("[data-decision-panel]")?.textContent).toContain("Approve exact videos"));
+    expect(window.sessionStorage.getItem("yt-insights:research-job:v1")).toBeNull();
+  });
+
+  it("rejects a persisted job whose generation scope does not match its action", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    window.sessionStorage.setItem(
+      "yt-insights:research-job:v1",
+      JSON.stringify({
+        version: 2,
+        session_id: sessionId,
+        job_id: "forged_scope_job",
+        kind: "research_discovery",
+        expected_revision: 2,
+        language: null,
+        scope_fingerprint: "a".repeat(64),
+        generation: 0,
+        idempotency_key: `web-research-${"a".repeat(64)}-0`,
+      }),
+    );
+    const root = renderWorkspaceDom();
+    const read = vi.fn().mockResolvedValue(session("discovering", null, 2));
+
+    attachResearchWorkspace(root, {
+      read,
+      write: vi.fn(),
+      wait: vi.fn(),
+      coordinator: createAttemptIdentityCoordinator(window.localStorage, serialLock(), "research"),
+    });
+
+    await vi.waitFor(() =>
+      expect(root.querySelector("[data-research-status]")?.textContent).toBe(
+        "The stored background job identity was invalid. The durable session was reloaded.",
+      ),
+    );
+    expect(read).toHaveBeenCalledOnce();
+    expect(read.mock.calls[0]?.[0]).toBe(`/api/v1/research/sessions/${sessionId}`);
     expect(window.sessionStorage.getItem("yt-insights:research-job:v1")).toBeNull();
   });
 });

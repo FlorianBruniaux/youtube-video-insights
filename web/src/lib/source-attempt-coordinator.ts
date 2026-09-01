@@ -1,8 +1,7 @@
 const SHA256 = /^[0-9a-f]{64}$/;
 const MAX_GENERATION = 999_999_999;
 const MAX_RECORD_BYTES = 256;
-const STORAGE_PREFIX = "yt-insights:source-attempt-generation:";
-const LOCK_PREFIX = "yt-insights-source-attempt-generation-";
+type AttemptNamespace = "source" | "research";
 
 interface StorageLike {
   getItem(key: string): string | null;
@@ -56,27 +55,38 @@ export function acquisitionAttemptKey(
   return `web-source-acquire-${fingerprint}-${generation}`;
 }
 
+export function researchAttemptKey(
+  fingerprint: string,
+  generation: number,
+): string {
+  requireFingerprint(fingerprint);
+  requireGeneration(generation);
+  return `web-research-${fingerprint}-${generation}`;
+}
+
 export function createAttemptIdentityCoordinator(
   storage: StorageLike,
   withLock: WithExclusiveLock,
+  namespace: AttemptNamespace = "source",
 ): AttemptIdentityCoordinator {
   return {
-    claim: (fingerprint) => withGenerationLock(fingerprint, withLock, () => {
-      const current = readRecord(storage, fingerprint);
+    claim: (fingerprint) => withGenerationLock(namespace, fingerprint, withLock, () => {
+      const current = readRecord(storage, namespace, fingerprint);
       if (current !== null) return current.generation;
-      writeRecord(storage, { version: 1, fingerprint, generation: 0 });
+      writeRecord(storage, namespace, { version: 1, fingerprint, generation: 0 });
       return 0;
     }),
     admit: async (fingerprint, expectedGeneration, task) => {
       const result = await withGenerationLock(
+        namespace,
         fingerprint,
         withLock,
         async (): Promise<LockedAdmissionResult<Awaited<ReturnType<typeof task>>>> => {
           if (expectedGeneration !== null) requireGeneration(expectedGeneration);
-          const current = readRecord(storage, fingerprint);
+          const current = readRecord(storage, namespace, fingerprint);
           const generation = current?.generation ?? 0;
           if (current === null) {
-            writeRecord(storage, { version: 1, fingerprint, generation });
+            writeRecord(storage, namespace, { version: 1, fingerprint, generation });
           }
           if (
             expectedGeneration !== null &&
@@ -99,29 +109,37 @@ export function createAttemptIdentityCoordinator(
       return result;
     },
     isCurrent: (fingerprint, generation) =>
-      withGenerationLock(fingerprint, withLock, () => {
+      withGenerationLock(namespace, fingerprint, withLock, () => {
         requireGeneration(generation);
-        const current = readRecord(storage, fingerprint);
+        const current = readRecord(storage, namespace, fingerprint);
         if (current === null) throw coordinationError();
         return current.generation === generation;
       }),
     complete: (fingerprint, completedGeneration) =>
-      withGenerationLock(fingerprint, withLock, () => {
+      withGenerationLock(namespace, fingerprint, withLock, () => {
         requireGeneration(completedGeneration);
         if (completedGeneration >= MAX_GENERATION) throw coordinationError();
-        const current = readRecord(storage, fingerprint);
+        const current = readRecord(storage, namespace, fingerprint);
         const next = Math.max(
           current?.generation ?? 0,
           completedGeneration + 1,
         );
         requireGeneration(next);
-        writeRecord(storage, { version: 1, fingerprint, generation: next });
+        writeRecord(storage, namespace, { version: 1, fingerprint, generation: next });
         return next;
       }),
   };
 }
 
 export function createBrowserAttemptIdentityCoordinator(): AttemptIdentityCoordinator {
+  return createBrowserCoordinator("source");
+}
+
+export function createBrowserResearchAttemptIdentityCoordinator(): AttemptIdentityCoordinator {
+  return createBrowserCoordinator("research");
+}
+
+function createBrowserCoordinator(namespace: AttemptNamespace): AttemptIdentityCoordinator {
   let storage: Storage;
   try {
     storage = window.localStorage;
@@ -140,17 +158,18 @@ export function createBrowserAttemptIdentityCoordinator(): AttemptIdentityCoordi
       throw coordinationError();
     }
   };
-  return createAttemptIdentityCoordinator(storage, withLock);
+  return createAttemptIdentityCoordinator(storage, withLock, namespace);
 }
 
 function withGenerationLock<T>(
+  namespace: AttemptNamespace,
   fingerprint: string,
   withLock: WithExclusiveLock,
   task: () => T | Promise<T>,
 ): Promise<T> {
   requireFingerprint(fingerprint);
   try {
-    return withLock(`${LOCK_PREFIX}${fingerprint}`, task);
+    return withLock(lockKey(namespace, fingerprint), task);
   } catch {
     return Promise.reject(coordinationError());
   }
@@ -158,11 +177,12 @@ function withGenerationLock<T>(
 
 function readRecord(
   storage: StorageLike,
+  namespace: AttemptNamespace,
   fingerprint: string,
 ): GenerationRecord | null {
   let raw: string | null;
   try {
-    raw = storage.getItem(`${STORAGE_PREFIX}${fingerprint}`);
+    raw = storage.getItem(storageKey(namespace, fingerprint));
   } catch {
     throw coordinationError();
   }
@@ -193,15 +213,27 @@ function readRecord(
   };
 }
 
-function writeRecord(storage: StorageLike, record: GenerationRecord): void {
+function writeRecord(
+  storage: StorageLike,
+  namespace: AttemptNamespace,
+  record: GenerationRecord,
+): void {
   try {
     storage.setItem(
-      `${STORAGE_PREFIX}${record.fingerprint}`,
+      storageKey(namespace, record.fingerprint),
       JSON.stringify(record),
     );
   } catch {
     throw coordinationError();
   }
+}
+
+function storageKey(namespace: AttemptNamespace, fingerprint: string): string {
+  return `yt-insights:${namespace}-attempt-generation:${fingerprint}`;
+}
+
+function lockKey(namespace: AttemptNamespace, fingerprint: string): string {
+  return `yt-insights-${namespace}-attempt-generation-${fingerprint}`;
 }
 
 function requireFingerprint(value: string): void {

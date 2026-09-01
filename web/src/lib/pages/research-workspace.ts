@@ -7,11 +7,15 @@ import {
   pollResearchJob,
   readResearchAdmission,
   readResearchJobAttempt,
+  researchActionScope,
   researchAdmissionBody,
+  researchScopeFingerprint,
   writeResearchAdmission,
   writeResearchJobAttempt,
 } from "../research-job";
 import type { ResearchAdmissionAttempt, ResearchJobAttempt } from "../research-job";
+import { createBrowserResearchAttemptIdentityCoordinator } from "../source-attempt-coordinator";
+import type { AttemptIdentityCoordinator } from "../source-attempt-coordinator";
 import type {
   ApiGetResponse,
   ApiPath,
@@ -32,11 +36,13 @@ interface WorkspaceDependencies {
   readonly write?: WriteApi;
   readonly wait?: Wait;
   readonly createId?: () => string;
+  readonly coordinator?: AttemptIdentityCoordinator;
 }
 
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const JOB_ID = /^[A-Za-z0-9_-]{1,200}$/;
 const LANGUAGE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const ADMISSION_TIMEOUT_MS = 15_000;
 const STALE_MESSAGE = "The session changed. Review the current evidence before deciding again.";
 
 export function attachResearchWorkspace(
@@ -47,6 +53,8 @@ export function attachResearchWorkspace(
   const write = dependencies.write ?? ((path, body, signal) => apiPost(path as ApiPath, body, signal));
   const wait = dependencies.wait ?? delay;
   const createId = dependencies.createId ?? (() => crypto.randomUUID());
+  const coordinator = dependencies.coordinator ??
+    createBrowserResearchAttemptIdentityCoordinator();
   const status = requireElement<HTMLElement>(root, "[data-research-status]");
   const heading = requireElement<HTMLElement>(root, "[data-research-heading]");
   const evidence = requireElement<HTMLElement>(root, "[data-evidence-panel]");
@@ -142,12 +150,16 @@ export function attachResearchWorkspace(
   };
 
   const submitAdmission = async (
-    admission: ResearchAdmissionAttempt,
+    kind: ResearchAdmissionAttempt["kind"],
+    expectedRevision: number,
+    language: string | null,
+    retryAttempt: ResearchAdmissionAttempt | null,
   ): Promise<void> => {
     if (
       busy ||
       activeJob !== null ||
-      activeAdmission?.idempotency_key !== admission.idempotency_key
+      (retryAttempt !== null &&
+        activeAdmission?.idempotency_key !== retryAttempt.idempotency_key)
     ) return;
     busy = true;
     setDecisionButtonsDisabled(decision, true);
@@ -157,22 +169,59 @@ export function attachResearchWorkspace(
     const controller = new AbortController();
     requestController?.abort();
     requestController = controller;
+    let attempt = retryAttempt;
     try {
-      const response = await write(
-        researchAdmissionPath(admission),
-        researchAdmissionBody(admission),
-        controller.signal,
+      const scope = researchActionScope(
+        sessionId,
+        kind,
+        expectedRevision,
+        language,
       );
+      const scopeFingerprint = await researchScopeFingerprint(scope);
+      if (
+        retryAttempt?.version === 2 &&
+        retryAttempt.scope_fingerprint !== scopeFingerprint
+      ) throw { code: "invalid_request", status: 400 };
+      const admission = await coordinator.admit(
+        scopeFingerprint,
+        retryAttempt === null
+          ? null
+          : retryAttempt.version === 2
+            ? retryAttempt.generation
+            : 0,
+        async (generation) => {
+          const coordinatedAttempt = retryAttempt ?? createResearchAdmission(
+            sessionId,
+            kind,
+            expectedRevision,
+            language,
+            scopeFingerprint,
+            generation,
+          );
+          attempt = coordinatedAttempt;
+          activeAdmission = coordinatedAttempt;
+          if (!writeResearchAdmission(coordinatedAttempt)) {
+            throw { code: "attempt_storage_unavailable" };
+          }
+          return awaitAdmissionResponse(write, coordinatedAttempt, controller.signal);
+        },
+      );
+      if (admission.status === "stale") {
+        clearResearchAdmission();
+        activeAdmission = null;
+        await loadSnapshot();
+        status.textContent = "This research attempt already ended. Review the current session before starting again.";
+        busy = false;
+        setDecisionButtonsDisabled(decision, false);
+        return;
+      }
+      const response = admission.value;
       if (!("job_id" in response) || !JOB_ID.test((response as JobAcceptedResponse).job_id)) {
         throw new Error("Invalid accepted job");
       }
+      if (attempt === null) throw new Error("Missing research admission");
       const accepted = response as JobAcceptedResponse;
-      const jobAttempt: ResearchJobAttempt = {
-        version: 1,
-        session_id: sessionId,
-        job_id: accepted.job_id,
-        kind: admission.kind,
-      };
+      const jobAttempt = acceptedJobAttempt(attempt, accepted.job_id);
       if (writeResearchJobAttempt(jobAttempt)) {
         clearResearchAdmission();
         activeAdmission = null;
@@ -183,18 +232,35 @@ export function attachResearchWorkspace(
       busy = false;
       await checkJob(jobAttempt, false);
     } catch (error: unknown) {
-      if (isAbort(error)) return;
-      if (publicCode(error) === "stale_revision") {
+      if (isAbort(error)) {
+        busy = false;
+        return;
+      }
+      const code = publicCode(error);
+      if (code === "stale_revision") {
         clearResearchAdmission();
         activeAdmission = null;
         await handleStale();
-      } else if (publicCode(error) === "idempotency_conflict" || publicCode(error) === "invalid_request") {
+      } else if (code === "workflow_conflict") {
+        clearResearchAdmission();
+        activeAdmission = null;
+        await loadSnapshot();
+        status.textContent = "The research workflow changed. Review the current session before starting again.";
+      } else if (code === "not_found") {
+        clearResearchAdmission();
+        activeAdmission = null;
+        status.textContent = "This research session was not found.";
+      } else if (code === "attempt_storage_unavailable") {
+        clearResearchAdmission();
+        activeAdmission = null;
+        status.textContent = "Browser session storage is unavailable. No background job was submitted.";
+      } else if (attempt !== null && shouldRetainAdmission(error)) {
+        showAdmission(jobRegion, jobMessage, jobId, retryAdmission, attempt);
+        status.textContent = "The admission response was not confirmed. Retry explicitly to reuse the same request identity.";
+      } else {
         clearResearchAdmission();
         activeAdmission = null;
         status.textContent = mutationMessage(error);
-      } else {
-        showAdmission(jobRegion, jobMessage, jobId, retryAdmission, admission);
-        status.textContent = "The admission response was not confirmed. Retry explicitly to reuse the same request identity.";
       }
       busy = false;
       setDecisionButtonsDisabled(decision, false);
@@ -206,24 +272,12 @@ export function attachResearchWorkspace(
     language: string | null = null,
   ): void => {
     if (busy || activeJob !== null || activeAdmission !== null || snapshot === null) return;
-    let attempt: ResearchAdmissionAttempt;
-    try {
-      attempt = createResearchAdmission(
-        sessionId,
-        kind,
-        snapshot.session.revision,
-        language,
-      );
-    } catch {
-      status.textContent = "Cannot create a bounded admission identity.";
-      return;
-    }
-    if (!writeResearchAdmission(attempt)) {
-      status.textContent = "Browser session storage is unavailable. No background job was submitted.";
-      return;
-    }
-    activeAdmission = attempt;
-    void submitAdmission(attempt);
+    void submitAdmission(
+      kind,
+      snapshot.session.revision,
+      language,
+      null,
+    );
   };
 
   const checkJob = async (attempt: ResearchJobAttempt, immediate: boolean): Promise<void> => {
@@ -234,6 +288,22 @@ export function attachResearchWorkspace(
     jobController = controller;
     showJob(jobRegion, jobMessage, jobId, continueJob, attempt, "Checking the background job…", false);
     try {
+      if (attempt.version === 2) {
+        const expectedScope = researchActionScope(
+          attempt.session_id,
+          attempt.kind,
+          attempt.expected_revision,
+          attempt.language,
+        );
+        const expectedFingerprint = await researchScopeFingerprint(expectedScope);
+        if (expectedFingerprint !== attempt.scope_fingerprint) {
+          clearResearchJobAttempt();
+          activeJob = null;
+          await loadSnapshot();
+          status.textContent = "The stored background job identity was invalid. The durable session was reloaded.";
+          return;
+        }
+      }
       const result = await pollResearchJob(attempt, read, wait, controller.signal, { immediate });
       if (disposed) return;
       if (result.status === "paused") {
@@ -245,9 +315,9 @@ export function attachResearchWorkspace(
         showJob(jobRegion, jobMessage, jobId, continueJob, attempt, message, true);
         return;
       }
-      clearResearchJobAttempt();
-      activeJob = null;
       if (result.status === "missing") {
+        clearResearchJobAttempt();
+        activeJob = null;
         showJob(jobRegion, jobMessage, jobId, continueJob, attempt, "The background job is no longer retained. Reloading the durable session…", false);
         const loaded = await loadSnapshot();
         if (loaded !== null) clearAdmissionForJob(attempt);
@@ -256,6 +326,27 @@ export function attachResearchWorkspace(
       }
       const terminalMessage = terminalJobMessage(result.job);
       showJob(jobRegion, jobMessage, jobId, continueJob, attempt, terminalMessage, false);
+      if (attempt.version === 2) {
+        try {
+          await coordinator.complete(
+            attempt.scope_fingerprint,
+            attempt.generation,
+          );
+        } catch {
+          showJob(
+            jobRegion,
+            jobMessage,
+            jobId,
+            continueJob,
+            attempt,
+            "The job ended, but its attempt identity could not be finalized. Continue checking this exact job.",
+            true,
+          );
+          return;
+        }
+      }
+      clearResearchJobAttempt();
+      activeJob = null;
       const loaded = await loadSnapshot();
       if (loaded !== null) clearAdmissionForJob(attempt);
       status.textContent = terminalMessage;
@@ -355,7 +446,14 @@ export function attachResearchWorkspace(
     if (activeJob !== null && !busy) void checkJob(activeJob, true);
   };
   const onRetryAdmission = (): void => {
-    if (activeAdmission !== null && !busy) void submitAdmission(activeAdmission);
+    if (activeAdmission !== null && !busy) {
+      void submitAdmission(
+        activeAdmission.kind,
+        activeAdmission.expected_revision,
+        activeAdmission.language,
+        activeAdmission,
+      );
+    }
   };
   const onVisibility = (): void => {
     if (document.hidden) {
@@ -668,6 +766,70 @@ function showAdmission(
   retry.disabled = false;
 }
 
+function acceptedJobAttempt(
+  admission: ResearchAdmissionAttempt,
+  jobId: string,
+): ResearchJobAttempt {
+  if (admission.version === 1) {
+    return {
+      version: 1,
+      session_id: admission.session_id,
+      job_id: jobId,
+      kind: admission.kind,
+    };
+  }
+  return {
+    version: 2,
+    session_id: admission.session_id,
+    job_id: jobId,
+    kind: admission.kind,
+    expected_revision: admission.expected_revision,
+    language: admission.language,
+    scope_fingerprint: admission.scope_fingerprint,
+    generation: admission.generation,
+    idempotency_key: admission.idempotency_key,
+  };
+}
+
+async function awaitAdmissionResponse(
+  write: WriteApi,
+  attempt: ResearchAdmissionAttempt,
+  lifecycleSignal: AbortSignal,
+): Promise<ApiPostResponse> {
+  const requestController = new AbortController();
+  let timedOut = false;
+  const aborted = new Promise<never>((_resolve, reject) => {
+    requestController.signal.addEventListener("abort", () => {
+      reject(
+        timedOut
+          ? { code: "admission_timeout" }
+          : new DOMException("Operation aborted", "AbortError"),
+      );
+    }, { once: true });
+  });
+  const onLifecycleAbort = (): void => requestController.abort();
+  lifecycleSignal.addEventListener("abort", onLifecycleAbort, { once: true });
+  if (lifecycleSignal.aborted) onLifecycleAbort();
+  const timeout = globalThis.setTimeout(() => {
+    timedOut = true;
+    requestController.abort();
+  }, ADMISSION_TIMEOUT_MS);
+  try {
+    if (requestController.signal.aborted) return await aborted;
+    return await Promise.race([
+      write(
+        researchAdmissionPath(attempt),
+        researchAdmissionBody(attempt),
+        requestController.signal,
+      ),
+      aborted,
+    ]);
+  } finally {
+    globalThis.clearTimeout(timeout);
+    lifecycleSignal.removeEventListener("abort", onLifecycleAbort);
+  }
+}
+
 function researchAdmissionPath(attempt: ResearchAdmissionAttempt): string {
   const action = {
     research_discovery: "discovery",
@@ -726,6 +888,23 @@ function mutationMessage(error: unknown): string {
 function publicCode(error: unknown): string | null {
   if (typeof error !== "object" || error === null || !("code" in error)) return null;
   return typeof error.code === "string" ? error.code : null;
+}
+
+function shouldRetainAdmission(error: unknown): boolean {
+  const code = publicCode(error);
+  if (
+    code === "request_in_progress" ||
+    code === "admission_timeout" ||
+    code === "unexpected_response"
+  ) return true;
+  const status = publicStatus(error);
+  if (status === 429 || status === 503 || (status !== null && status >= 500)) return true;
+  return code === null;
+}
+
+function publicStatus(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("status" in error)) return null;
+  return typeof error.status === "number" ? error.status : null;
 }
 
 function humanize(value: string): string {

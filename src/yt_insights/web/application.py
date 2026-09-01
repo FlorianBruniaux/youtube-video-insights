@@ -709,6 +709,8 @@ class WebApplication:
             return operation()
         except ResearchRevisionConflict:
             raise
+        except ResearchIdempotencyConflict:
+            raise
         except ValueError as exc:
             code = self._workflow_value_error_code(
                 session_id,
@@ -892,7 +894,7 @@ def _exception_response(exc: Exception) -> WebResponse:
         return _error(409, "stale_revision")
     if isinstance(exc, WorkflowConflict):
         return _error(409, "workflow_conflict")
-    if isinstance(exc, IdempotencyConflict):
+    if isinstance(exc, (IdempotencyConflict, ResearchIdempotencyConflict)):
         return _error(409, "idempotency_conflict")
     if isinstance(exc, (JobQueueFull, ReplayRegistryFull)):
         return _error(429, "job_queue_full")

@@ -1,9 +1,11 @@
 import type { ApiGetResponse, Job, JobKind, JobResponse } from "./types";
+import { researchAttemptKey } from "./source-attempt-coordinator";
 
 export const RESEARCH_JOB_STORAGE_KEY = "yt-insights:research-job:v1";
 export const RESEARCH_ADMISSION_STORAGE_KEY = "yt-insights:research-admission:v1";
 const JOB_ID = /^[A-Za-z0-9_-]{1,200}$/;
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
+const SHA256 = /^[0-9a-f]{64}$/;
 const RESEARCH_JOB_KINDS = new Set<JobKind>([
   "research_discovery",
   "research_acquisition",
@@ -12,7 +14,7 @@ const RESEARCH_JOB_KINDS = new Set<JobKind>([
 const MAX_POLLS = 60;
 const LANGUAGE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
-export interface ResearchJobAttempt {
+interface LegacyResearchJobAttempt {
   readonly version: 1;
   readonly session_id: string;
   readonly job_id: string;
@@ -22,17 +24,50 @@ export interface ResearchJobAttempt {
     | "research_retry";
 }
 
-export interface ResearchAdmissionAttempt {
+interface CoordinatedResearchJobAttempt {
+  readonly version: 2;
+  readonly session_id: string;
+  readonly job_id: string;
+  readonly kind: ResearchJobKind;
+  readonly expected_revision: number;
+  readonly language: string | null;
+  readonly scope_fingerprint: string;
+  readonly generation: number;
+  readonly idempotency_key: string;
+}
+
+export type ResearchJobAttempt =
+  | LegacyResearchJobAttempt
+  | CoordinatedResearchJobAttempt;
+
+interface LegacyResearchAdmissionAttempt {
   readonly version: 1;
   readonly session_id: string;
-  readonly kind:
-    | "research_discovery"
-    | "research_acquisition"
-    | "research_retry";
+  readonly kind: ResearchJobKind;
   readonly expected_revision: number;
   readonly idempotency_key: string;
   readonly language: string | null;
 }
+
+interface CoordinatedResearchAdmissionAttempt {
+  readonly version: 2;
+  readonly session_id: string;
+  readonly kind: ResearchJobKind;
+  readonly expected_revision: number;
+  readonly idempotency_key: string;
+  readonly language: string | null;
+  readonly scope_fingerprint: string;
+  readonly generation: number;
+}
+
+export type ResearchAdmissionAttempt =
+  | LegacyResearchAdmissionAttempt
+  | CoordinatedResearchAdmissionAttempt;
+
+type ResearchJobKind =
+  | "research_discovery"
+  | "research_acquisition"
+  | "research_retry";
 
 type ReadApi = (path: string, signal?: AbortSignal) => Promise<ApiGetResponse>;
 type Wait = (milliseconds: number) => Promise<void>;
@@ -97,15 +132,31 @@ async function waitUntilReady(waiting: Promise<void>, signal: AbortSignal): Prom
 export function isResearchJobAttempt(value: unknown): value is ResearchJobAttempt {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const object = value as Record<string, unknown>;
-  return (
-    Object.keys(object).length === 4 &&
-    object.version === 1 &&
+  const common =
     typeof object.session_id === "string" &&
     SESSION_ID.test(object.session_id) &&
     typeof object.job_id === "string" &&
     JOB_ID.test(object.job_id) &&
     typeof object.kind === "string" &&
-    RESEARCH_JOB_KINDS.has(object.kind as JobKind)
+    RESEARCH_JOB_KINDS.has(object.kind as JobKind);
+  if (!common) return false;
+  if (object.version === 1) return (
+    Object.keys(object).length === 4 &&
+    object.version === 1
+  );
+  return (
+    object.version === 2 &&
+    Object.keys(object).length === 9 &&
+    isRevision(object.expected_revision) &&
+    isResearchLanguage(object.kind as ResearchJobKind, object.language) &&
+    typeof object.scope_fingerprint === "string" &&
+    SHA256.test(object.scope_fingerprint) &&
+    isGeneration(object.generation) &&
+    typeof object.idempotency_key === "string" &&
+    object.idempotency_key === coordinatedKey(
+      object.scope_fingerprint,
+      object.generation,
+    )
   );
 }
 
@@ -149,29 +200,61 @@ export function createResearchAdmission(
   sessionId: string,
   kind: ResearchAdmissionAttempt["kind"],
   expectedRevision: number,
-  language: string | null = null,
+  language: string | null,
+  scopeFingerprint: string,
+  generation: number,
 ): ResearchAdmissionAttempt {
   if (
     !SESSION_ID.test(sessionId) ||
     !RESEARCH_JOB_KINDS.has(kind) ||
-    !Number.isSafeInteger(expectedRevision) ||
-    expectedRevision < 0 ||
-    (kind === "research_acquisition") !== (language !== null) ||
-    (language !== null && (!LANGUAGE.test(language) || [...language].length > 500))
+    !isRevision(expectedRevision) ||
+    !isResearchLanguage(kind, language) ||
+    !SHA256.test(scopeFingerprint) ||
+    !isGeneration(generation)
   ) {
     throw new TypeError("Invalid research admission identity");
   }
-  const languageSuffix = language === null ? "" : `:${hashText(language)}`;
-  const key = `web:${kind}:${sessionId}:${expectedRevision}${languageSuffix}`;
-  if (key.length > 200) throw new TypeError("Research admission identity is too long");
   return {
-    version: 1,
+    version: 2,
     session_id: sessionId,
     kind,
     expected_revision: expectedRevision,
-    idempotency_key: key,
+    idempotency_key: coordinatedKey(scopeFingerprint, generation),
     language,
+    scope_fingerprint: scopeFingerprint,
+    generation,
   };
+}
+
+export function researchActionScope(
+  sessionId: string,
+  kind: ResearchJobKind,
+  expectedRevision: number,
+  language: string | null,
+): string {
+  if (
+    !SESSION_ID.test(sessionId) ||
+    !RESEARCH_JOB_KINDS.has(kind) ||
+    !isRevision(expectedRevision) ||
+    !isResearchLanguage(kind, language)
+  ) throw new TypeError("Invalid research action scope");
+  return JSON.stringify([sessionId, kind, expectedRevision, language]);
+}
+
+export async function researchScopeFingerprint(scope: string): Promise<string> {
+  if (scope.length < 1 || [...scope].length > 800) {
+    throw new TypeError("Invalid research action scope");
+  }
+  const subtle = globalThis.crypto?.subtle;
+  if (subtle === undefined) throw { code: "attempt_coordination_unavailable" };
+  try {
+    const digest = await subtle.digest("SHA-256", new TextEncoder().encode(scope));
+    return [...new Uint8Array(digest)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  } catch {
+    throw { code: "attempt_coordination_unavailable" };
+  }
 }
 
 export function researchAdmissionBody(
@@ -228,27 +311,50 @@ function isResearchAdmissionAttempt(value: unknown): value is ResearchAdmissionA
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const object = value as Record<string, unknown>;
   if (
-    Object.keys(object).length !== 6 ||
-    object.version !== 1 ||
     typeof object.session_id !== "string" ||
     !SESSION_ID.test(object.session_id) ||
     typeof object.kind !== "string" ||
     !RESEARCH_JOB_KINDS.has(object.kind as JobKind) ||
-    typeof object.expected_revision !== "number" ||
-    !Number.isSafeInteger(object.expected_revision) ||
-    object.expected_revision < 0 ||
+    !isRevision(object.expected_revision) ||
     typeof object.idempotency_key !== "string" ||
     object.idempotency_key.length > 200 ||
     !/^[\x20-\x7e]+$/.test(object.idempotency_key) ||
-    (object.language !== null && typeof object.language !== "string")
+    !isResearchLanguage(object.kind as ResearchJobKind, object.language)
   ) return false;
-  const expected = createResearchAdmission(
-    object.session_id,
-    object.kind as ResearchAdmissionAttempt["kind"],
-    object.expected_revision,
-    object.language as string | null,
+  if (object.version === 1) {
+    if (Object.keys(object).length !== 6) return false;
+    return object.idempotency_key === legacyKey(
+      object.session_id,
+      object.kind as ResearchJobKind,
+      object.expected_revision,
+      object.language as string | null,
+    );
+  }
+  return (
+    object.version === 2 &&
+    Object.keys(object).length === 8 &&
+    typeof object.scope_fingerprint === "string" &&
+    SHA256.test(object.scope_fingerprint) &&
+    isGeneration(object.generation) &&
+    object.idempotency_key === coordinatedKey(
+      object.scope_fingerprint,
+      object.generation,
+    )
   );
-  return expected.idempotency_key === object.idempotency_key;
+}
+
+function coordinatedKey(scopeFingerprint: string, generation: number): string {
+  return researchAttemptKey(scopeFingerprint, generation);
+}
+
+function legacyKey(
+  sessionId: string,
+  kind: ResearchJobKind,
+  expectedRevision: number,
+  language: string | null,
+): string {
+  const languageSuffix = language === null ? "" : `:${hashText(language)}`;
+  return `web:${kind}:${sessionId}:${expectedRevision}${languageSuffix}`;
 }
 
 function hashText(value: string): string {
@@ -258,6 +364,24 @@ function hashText(value: string): string {
     hash = BigInt.asUintN(64, hash * 0x100000001b3n);
   }
   return hash.toString(16).padStart(16, "0");
+}
+
+function isRevision(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isGeneration(value: unknown): value is number {
+  return typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= 999_999_999;
+}
+
+function isResearchLanguage(kind: ResearchJobKind, value: unknown): boolean {
+  if (kind !== "research_acquisition") return value === null;
+  return typeof value === "string" &&
+    LANGUAGE.test(value) &&
+    [...value].length <= 500;
 }
 
 function publicCode(error: unknown): string | null {

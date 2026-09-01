@@ -717,6 +717,45 @@ def test_candidate_cancellation_is_explicit_replayable_and_state_guarded(
     assert incompatible.json_body["error"] == {"code": "workflow_conflict"}
 
 
+def test_recreated_application_maps_durable_cancellation_mismatch(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(
+        state=ResearchState.AWAITING_CANDIDATES, revision=5
+    )
+    original = _post(
+        f"/api/v1/research/sessions/{SESSION_ID}/cancellations",
+        '{"expected_revision":5,"idempotency_key":"cancel-recreated"}',
+    )
+    assert services.app.handle(original).status == 200
+
+    services.store.session = _session(state=ResearchState.CANCELLED, revision=6)
+    services.workflow.error = ResearchIdempotencyConflict()
+    recreated = WebApplication(
+        search=services.search,
+        catalog=services.catalog,
+        workflow=services.workflow,
+        research_store=services.store,
+        exports=services.exports,
+        jobs=services.jobs,
+        source_acquisition=services.sources,
+        export_request_factory=lambda session_id, force: SimpleNamespace(
+            session_id=session_id, force=force
+        ),
+        package_version="0.2.0",
+    )
+
+    mismatch = recreated.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/cancellations",
+            '{"expected_revision":4,"idempotency_key":"cancel-recreated"}',
+        )
+    )
+
+    assert mismatch.status == 409
+    assert mismatch.json_body["error"] == {"code": "idempotency_conflict"}
+
+
 @pytest.mark.parametrize(
     ("action", "payload", "changed_payload"),
     (
