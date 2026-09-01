@@ -2,11 +2,15 @@ from __future__ import annotations
 
 import http.client
 import json
+import os
 import socket
 import threading
+import time
+import zipfile
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from http.server import ThreadingHTTPServer
+from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import cast
 
@@ -42,6 +46,62 @@ class RecordingApplication:
         )
 
 
+class UnenumeratedFile:
+    name = "index.html"
+
+    def is_dir(self) -> bool:
+        return False
+
+    def is_file(self) -> bool:
+        return True
+
+    def iterdir(self) -> Iterator[UnenumeratedFile]:
+        return iter(())
+
+    def joinpath(self, *descendants: str) -> UnenumeratedFile:
+        return self
+
+    def open(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError("open is not part of this witness")
+
+    def read_bytes(self) -> bytes:
+        return b"unconfined-generic-shell"
+
+    def read_text(self, encoding: str | None = None, errors: str | None = None) -> str:
+        return self.read_bytes().decode(encoding or "utf-8", errors or "strict")
+
+    def __truediv__(self, child: str) -> UnenumeratedFile:
+        return self.joinpath(child)
+
+
+class UnenumeratedRoot:
+    name = "static"
+
+    def is_dir(self) -> bool:
+        return True
+
+    def is_file(self) -> bool:
+        return False
+
+    def iterdir(self) -> Iterator[UnenumeratedFile]:
+        return iter(())
+
+    def joinpath(self, *descendants: str) -> UnenumeratedFile:
+        return UnenumeratedFile()
+
+    def open(self, *args: object, **kwargs: object) -> object:
+        raise AssertionError("open is not part of this witness")
+
+    def read_bytes(self) -> bytes:
+        raise AssertionError("directories are not readable")
+
+    def read_text(self, encoding: str | None = None, errors: str | None = None) -> str:
+        raise AssertionError("directories are not readable")
+
+    def __truediv__(self, child: str) -> UnenumeratedFile:
+        return self.joinpath(child)
+
+
 @pytest.fixture
 def static_root(tmp_path: Path) -> Path:
     root = tmp_path / "static"
@@ -70,7 +130,7 @@ def static_root(tmp_path: Path) -> Path:
 @contextmanager
 def running_server(
     application: RecordingApplication,
-    static_root: Path,
+    static_root: Traversable,
     *,
     host: str = "127.0.0.1",
 ) -> Iterator[tuple[ThreadingHTTPServer, threading.Thread]]:
@@ -119,6 +179,76 @@ def request(
         )
     finally:
         connection.close()
+
+
+def raw_exchange(
+    server: ThreadingHTTPServer,
+    payload: bytes,
+    *,
+    shutdown_write: bool = True,
+    timeout: float = 2.0,
+) -> bytes:
+    address = server.server_address
+    connection = socket.create_connection(
+        (str(address[0]), int(address[1])), timeout=2.0
+    )
+    connection.settimeout(timeout)
+    try:
+        connection.sendall(payload)
+        if shutdown_write:
+            connection.shutdown(socket.SHUT_WR)
+        chunks: list[bytes] = []
+        while True:
+            chunk = connection.recv(65_536)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    finally:
+        connection.close()
+
+
+def raw_request_bytes(
+    server: ThreadingHTTPServer,
+    method: bytes,
+    target: bytes,
+    *,
+    extra_headers: tuple[bytes, ...] = (),
+) -> bytes:
+    address = server.server_address
+    host = str(address[0])
+    port = int(address[1])
+    host_value = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    headers = (f"Host: {host_value}".encode("ascii"), *extra_headers)
+    return raw_exchange(
+        server,
+        b" ".join((method, target, b"HTTP/1.1\r\n"))
+        + b"\r\n".join(headers)
+        + b"\r\n\r\n",
+    )
+
+
+def parse_raw_response(response: bytes) -> tuple[int, dict[str, str], bytes]:
+    head, body = response.split(b"\r\n\r\n", 1)
+    lines = head.decode("iso-8859-1").split("\r\n")
+    status = int(lines[0].split(" ", 2)[1])
+    headers = {
+        name.lower(): value.strip()
+        for name, value in (line.split(":", 1) for line in lines[1:])
+    }
+    return status, headers, body
+
+
+def assert_fixed_json_error(response: bytes, expected_status: int) -> None:
+    status, headers, body = parse_raw_response(response)
+    assert status == expected_status
+    assert headers["content-type"] == "application/json; charset=utf-8"
+    assert headers["cache-control"] == "no-store"
+    assert headers["x-content-type-options"] == "nosniff"
+    assert headers["content-security-policy"]
+    assert "access-control-allow-origin" not in headers
+    payload = json.loads(body)
+    assert payload["schema_version"] == 1
+    assert set(payload) == {"error", "schema_version"}
 
 
 def bootstrap_token(server: ThreadingHTTPServer) -> str:
@@ -304,6 +434,34 @@ def test_request_target_boundary_is_checked_before_url_parsing(
     assert len(application.requests) == 1
 
 
+def test_raw_target_limit_precedes_leading_slash_normalization(
+    static_root: Path,
+) -> None:
+    """Normalizing thousands of leading slashes first would bypass the byte cap."""
+    application = RecordingApplication()
+    target = b"/" * 2_049 + b"api/v1/status"
+
+    with running_server(application, static_root) as (server, _):
+        response = raw_request_bytes(server, b"GET", target)
+
+    assert_fixed_json_error(response, 414)
+    assert target not in response
+    assert application.requests == []
+
+
+def test_doubled_leading_slash_is_rejected_before_framework_normalization(
+    static_root: Path,
+) -> None:
+    """Collapsing //api into /api would dispatch a request with different authority semantics."""
+    application = RecordingApplication()
+
+    with running_server(application, static_root) as (server, _):
+        response = raw_request_bytes(server, b"GET", b"//api/v1/status")
+
+    assert_fixed_json_error(response, 400)
+    assert application.requests == []
+
+
 def test_request_body_boundary_is_enforced_before_dispatch(static_root: Path) -> None:
     """Reading a 65,537-byte mutation body would cross the documented memory bound."""
     application = RecordingApplication()
@@ -355,6 +513,25 @@ def test_content_length_is_bounded_before_integer_conversion(static_root: Path) 
             connection.close()
 
     assert status == 400
+    assert application.requests == []
+
+
+def test_non_ascii_mutation_token_returns_the_fixed_403(static_root: Path) -> None:
+    """A Latin-1 token must not escape the constant-time comparison as a TypeError."""
+    application = RecordingApplication()
+
+    with running_server(application, static_root) as (server, _):
+        response = raw_request_bytes(
+            server,
+            b"POST",
+            b"/api/v1/research/sessions",
+            extra_headers=(
+                b"X-YT-Insights-Token: \xff",
+                b"Content-Length: 0",
+            ),
+        )
+
+    assert_fixed_json_error(response, 403)
     assert application.requests == []
 
 
@@ -438,6 +615,109 @@ def test_static_confinement_rejects_traversal_symlinks_and_unknowns(
     assert b"pyproject.toml" not in body
 
 
+def test_symlinked_static_directories_are_never_mapped(tmp_path: Path) -> None:
+    """Checking only a final file would follow a symlinked page-shell ancestor."""
+    root = tmp_path / "static"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    (outside / "search").mkdir(parents=True)
+    (outside / "search" / "index.html").write_bytes(b"escaped-search-shell")
+    (outside / "_astro").mkdir()
+    (outside / "_astro" / "escaped.js").write_bytes(b"escaped-asset")
+    (root / "search").symlink_to(outside / "search", target_is_directory=True)
+    (root / "_astro").symlink_to(outside / "_astro", target_is_directory=True)
+    application = RecordingApplication()
+
+    with running_server(application, root) as (server, _):
+        page_status, _, page_body = request(server, "GET", "/search")
+        asset_status, _, asset_body = request(server, "GET", "/_astro/escaped.js")
+
+    assert (page_status, asset_status) == (404, 404)
+    assert b"escaped" not in page_body + asset_body
+
+
+def test_static_file_replacement_after_validation_reads_the_opened_inode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Replacing a validated path before reading must not substitute new bytes."""
+    root = tmp_path / "static"
+    root.mkdir()
+    target = root / "index.html"
+    target.write_bytes(b"original-shell")
+    target_inode = os.stat(target, follow_symlinks=False).st_ino
+    replacement = b"replacement-shell"
+    replaced = False
+    original_is_file = Path.is_file
+    original_fstat = os.fstat
+
+    def replace_target() -> None:
+        nonlocal replaced
+        if replaced:
+            return
+        replaced = True
+        target.rename(root / "original-index.html")
+        target.write_bytes(replacement)
+
+    def racing_is_file(path: Path) -> bool:
+        result = original_is_file(path)
+        if path == target and result:
+            replace_target()
+        return result
+
+    def racing_fstat(descriptor: int) -> os.stat_result:
+        result = original_fstat(descriptor)
+        if result.st_ino == target_inode:
+            replace_target()
+        return result
+
+    monkeypatch.setattr(Path, "is_file", racing_is_file)
+    monkeypatch.setattr(os, "fstat", racing_fstat)
+    application = RecordingApplication()
+
+    with running_server(application, root) as (server, _):
+        status, _, body = request(server, "GET", "/")
+
+    assert replaced
+    assert status == 200
+    assert body == b"original-shell"
+
+
+def test_unenumerated_generic_descendant_is_rejected(tmp_path: Path) -> None:
+    """A generic joinpath result absent from its parent listing is not confined."""
+    application = RecordingApplication()
+
+    with running_server(
+        application,
+        cast(Traversable, UnenumeratedRoot()),
+    ) as (server, _):
+        status, _, body = request(server, "GET", "/")
+
+    assert status == 404
+    assert b"unconfined-generic-shell" not in body
+
+
+def test_zip_package_traversable_loads_fixed_descendants_once(tmp_path: Path) -> None:
+    """Rejecting every non-Path resource would break valid packaged zip resources."""
+    archive_path = tmp_path / "assets.zip"
+    with zipfile.ZipFile(archive_path, "w") as archive:
+        archive.writestr("static/index.html", b"zip-dashboard-shell")
+        archive.writestr("static/_astro/app.Zip1.js", b"zip-asset")
+    application = RecordingApplication()
+
+    with zipfile.ZipFile(archive_path) as archive:
+        resource = zipfile.Path(archive, "static/")
+        with running_server(
+            application,
+            resource,
+        ) as (server, _):
+            page_status, _, page_body = request(server, "GET", "/")
+            asset_status, _, asset_body = request(server, "GET", "/_astro/app.Zip1.js")
+
+    assert (page_status, asset_status) == (200, 200)
+    assert page_body == b"zip-dashboard-shell"
+    assert asset_body == b"zip-asset"
+
+
 def test_research_session_route_serves_only_the_fixed_workspace_shell(
     static_root: Path,
 ) -> None:
@@ -490,3 +770,134 @@ def test_shutdown_stops_the_serving_thread(static_root: Path) -> None:
         assert not thread.is_alive()
     finally:
         server.server_close()
+
+
+@pytest.mark.parametrize(
+    ("payload", "status"),
+    [
+        (b"GET /private/canary extra HTTP/1.1\r\n\r\n", 400),
+        (b"GET / HTTP/1.1\r\nX-Oversized: " + b"a" * 65_537 + b"\r\n\r\n", 431),
+    ],
+)
+def test_parser_failures_use_fixed_secure_json(
+    static_root: Path, payload: bytes, status: int
+) -> None:
+    """Inherited send_error would reflect parser input in an HTML response."""
+    application = RecordingApplication()
+
+    with running_server(application, static_root) as (server, _):
+        response = raw_exchange(server, payload)
+
+    assert_fixed_json_error(response, status)
+    assert b"private/canary" not in response
+    assert b"X-Oversized" not in response
+    assert application.requests == []
+
+
+@pytest.mark.parametrize(
+    "method", [b"HEAD", b"OPTIONS", b"PUT", b"PATCH", b"DELETE", b"BREW"]
+)
+def test_every_unsupported_method_uses_fixed_secure_json(
+    static_root: Path, method: bytes
+) -> None:
+    """An inherited unsupported method would bypass the transport security headers."""
+    application = RecordingApplication()
+
+    with running_server(application, static_root) as (server, _):
+        response = raw_request_bytes(server, method, b"/private/method-canary")
+
+    assert_fixed_json_error(response, 405)
+    assert b"method-canary" not in response
+    assert application.requests == []
+
+
+def test_incomplete_headers_are_closed_within_the_connection_timeout(
+    static_root: Path,
+) -> None:
+    """A client that never terminates headers must not retain a worker indefinitely."""
+    application = RecordingApplication()
+
+    with running_server(application, static_root) as (server, _):
+        address = server.server_address
+        client = socket.create_connection(
+            (str(address[0]), int(address[1])), timeout=2.0
+        )
+        client.settimeout(2.0)
+        started = time.monotonic()
+        try:
+            client.sendall(b"GET / HTTP/1.1\r\nHost: incomplete")
+            assert client.recv(1) == b""
+        finally:
+            client.close()
+        elapsed = time.monotonic() - started
+
+    assert elapsed < 1.5
+    assert application.requests == []
+
+
+def test_shutdown_closes_partial_post_and_prevents_late_dispatch(
+    static_root: Path,
+) -> None:
+    """Completing a body after shutdown starts must never dispatch a mutation."""
+    application = RecordingApplication()
+    server = create_server(
+        cast(WebApplication, application),
+        host="127.0.0.1",
+        port=0,
+        static_root=static_root,
+    )
+    serving_thread = threading.Thread(target=server.serve_forever, daemon=True)
+    serving_thread.start()
+    token = bootstrap_token(server)
+    address = server.server_address
+    client = socket.create_connection((str(address[0]), int(address[1])), timeout=2.0)
+    client.settimeout(1.0)
+    try:
+        port = int(address[1])
+        client.sendall(
+            b"POST /api/v1/research/sessions HTTP/1.1\r\n"
+            + f"Host: 127.0.0.1:{port}\r\n".encode("ascii")
+            + f"X-YT-Insights-Token: {token}\r\n".encode("ascii")
+            + b"Content-Length: 10\r\n\r\n{"
+        )
+        time.sleep(0.05)
+        server.shutdown()
+        serving_thread.join(timeout=1.0)
+        with suppress(OSError):
+            client.sendall(b"123456789")
+        time.sleep(0.05)
+
+        workers = tuple(vars(server).get("_worker_threads", ()))
+        active_sockets = tuple(vars(server).get("_active_sockets", ()))
+        assert not serving_thread.is_alive()
+        assert not any(worker.is_alive() for worker in workers)
+        assert active_sockets == ()
+        assert application.requests == []
+    finally:
+        client.close()
+        server.server_close()
+
+
+def test_invalid_application_content_type_becomes_a_fixed_error(
+    static_root: Path,
+) -> None:
+    """A CRLF-bearing content type must not create a response header."""
+
+    class InvalidContentTypeApplication(RecordingApplication):
+        def handle(self, request: WebRequest) -> WebResponse:
+            self.requests.append(request)
+            return WebResponse(
+                200,
+                b"unsafe-response",
+                "application/json\r\nX-Injected: yes",
+            )
+
+    application = InvalidContentTypeApplication()
+
+    with running_server(application, static_root) as (server, _):
+        status, headers, body = request(server, "GET", "/api/v1/status")
+
+    assert status == 500
+    assert headers["content-type"] == "application/json; charset=utf-8"
+    assert "x-injected" not in headers
+    assert b"unsafe-response" not in body

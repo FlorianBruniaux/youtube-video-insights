@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 import secrets
 import socket
+import stat
+import threading
 from collections.abc import Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources.abc import Traversable
@@ -17,7 +21,7 @@ from urllib.parse import parse_qs, unquote_to_bytes, urlsplit
 
 from .api import RequestValidationError, validate_session_id
 from .application import WebApplication
-from .models import WebRequest
+from .models import WebRequest, WebResponse
 from .security import (
     MUTATION_TOKEN_HEADER,
     expected_host_header,
@@ -28,11 +32,15 @@ from .security import (
 
 _MAX_TARGET_BYTES = 2_048
 _MAX_BODY_BYTES = 65_536
+_CONNECTION_TIMEOUT_SECONDS = 1.0
 _BAD_PERCENT_ENCODING = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _CONTENT_LENGTH = re.compile(r"[0-9]{1,5}")
 _RESEARCH_ROUTE = re.compile(r"/research/([^/]+)")
 _ASSET_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,199}")
 _HEADER_NAME = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+")
+_CONTENT_TYPE = re.compile(r"[\x20-\x7e]+")
+_READ_CHUNK_BYTES = 64 * 1024
+_SocketRequest = socket.socket | tuple[bytes, socket.socket]
 
 _PAGE_ROUTES: tuple[tuple[tuple[str, ...], tuple[str, ...]], ...] = (
     (("/", "/index.html"), ("index.html",)),
@@ -82,7 +90,7 @@ class _StaticResponse:
 
 
 class _LoopbackServer(ThreadingHTTPServer):
-    daemon_threads = True
+    daemon_threads = False
 
     def __init__(
         self,
@@ -90,6 +98,11 @@ class _LoopbackServer(ThreadingHTTPServer):
         app: WebApplication,
         static_root: Traversable,
     ) -> None:
+        self._lifecycle_lock = threading.Lock()
+        self._dispatch_lock = threading.Lock()
+        self._closing = False
+        self._active_sockets: set[socket.socket] = set()
+        self._worker_threads: set[threading.Thread] = set()
         self.web_application = app
         routes, workspace_shell = _build_static_routes(static_root)
         self.static_routes = routes
@@ -100,6 +113,104 @@ class _LoopbackServer(ThreadingHTTPServer):
             address[0], int(self.server_address[1])
         )
 
+    def get_request(self) -> tuple[socket.socket, object]:
+        request, client_address = super().get_request()
+        request.settimeout(_CONNECTION_TIMEOUT_SECONDS)
+        with self._lifecycle_lock:
+            if self._closing:
+                request.close()
+                raise OSError("server is closing")
+            self._active_sockets.add(request)
+        return request, client_address
+
+    def process_request(self, request: _SocketRequest, client_address: object) -> None:
+        if not isinstance(request, socket.socket):
+            super().shutdown_request(request)
+            return
+        worker = threading.Thread(
+            target=self._run_request_worker,
+            args=(request, client_address),
+            daemon=False,
+        )
+        try:
+            with self._lifecycle_lock:
+                closing = self._closing
+                if not closing:
+                    self._worker_threads.add(worker)
+                    worker.start()
+        except BaseException:
+            with self._lifecycle_lock:
+                self._worker_threads.discard(worker)
+            self.shutdown_request(request)
+            raise
+        if closing:
+            self.shutdown_request(request)
+            return
+
+    def shutdown_request(self, request: _SocketRequest) -> None:
+        if isinstance(request, socket.socket):
+            with self._lifecycle_lock:
+                self._active_sockets.discard(request)
+        super().shutdown_request(request)
+
+    def shutdown(self) -> None:
+        self._start_closing()
+        super().shutdown()
+        self._close_active_sockets()
+        self._wait_for_workers()
+
+    def server_close(self) -> None:
+        self._start_closing()
+        self._close_active_sockets()
+        super().server_close()
+        self._wait_for_workers()
+
+    def handle_error(self, request: object, client_address: object) -> None:
+        """Keep parser and shutdown failures out of local process output."""
+
+    def dispatch_application(self, request: WebRequest) -> WebResponse | None:
+        with self._dispatch_lock:
+            with self._lifecycle_lock:
+                if self._closing:
+                    return None
+            return self.web_application.handle(request)
+
+    def _run_request_worker(
+        self, request: socket.socket, client_address: object
+    ) -> None:
+        worker = threading.current_thread()
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            with self._lifecycle_lock:
+                self._worker_threads.discard(worker)
+
+    def _start_closing(self) -> None:
+        with self._dispatch_lock, self._lifecycle_lock:
+            self._closing = True
+        self._close_active_sockets()
+
+    def _close_active_sockets(self) -> None:
+        with self._lifecycle_lock:
+            active = tuple(self._active_sockets)
+        for request in active:
+            with suppress(OSError):
+                request.shutdown(socket.SHUT_RDWR)
+            with suppress(OSError):
+                request.close()
+
+    def _wait_for_workers(self) -> None:
+        current = threading.current_thread()
+        while True:
+            with self._lifecycle_lock:
+                workers = tuple(
+                    worker for worker in self._worker_threads if worker is not current
+                )
+            if not workers:
+                return
+            for worker in workers:
+                worker.join()
+
 
 class _IPv6LoopbackServer(_LoopbackServer):
     address_family = socket.AF_INET6
@@ -108,6 +219,43 @@ class _IPv6LoopbackServer(_LoopbackServer):
 class _RequestHandler(BaseHTTPRequestHandler):
     server_version = "YTInsights"
     sys_version = ""
+
+    def parse_request(self) -> bool:
+        status, raw_target = _inspect_raw_request_line(
+            getattr(self, "raw_requestline", b"")
+        )
+        if status is not None:
+            self.requestline = ""
+            self.request_version = "HTTP/1.1"
+            self.command = ""
+            self.close_connection = True
+            self.send_error(status)
+            return False
+        if not super().parse_request():
+            return False
+        if raw_target is None:
+            return True
+        self.path = raw_target
+        return True
+
+    def send_error(
+        self,
+        code: int,
+        message: str | None = None,
+        explain: str | None = None,
+    ) -> None:
+        """Replace inherited reflecting HTML errors with one fixed JSON shape."""
+        status = 405 if code == 501 else code
+        if not 400 <= status <= 599:
+            status = 400
+        if (
+            not getattr(self, "request_version", "")
+            or self.request_version == "HTTP/0.9"
+        ):
+            self.request_version = "HTTP/1.0"
+        self.close_connection = True
+        error_code = "method_not_allowed" if status == 405 else "invalid_request"
+        self._error(status, error_code)
 
     def do_GET(self) -> None:
         server = cast(_LoopbackServer, self.server)
@@ -220,7 +368,10 @@ class _RequestHandler(BaseHTTPRequestHandler):
         length = int(lengths[0])
         if length > _MAX_BODY_BYTES:
             return 413
-        body = self.rfile.read(length)
+        try:
+            body = self.rfile.read(length)
+        except OSError:
+            return 400
         if len(body) != length:
             return 400
         return body
@@ -248,8 +399,14 @@ class _RequestHandler(BaseHTTPRequestHandler):
     ) -> None:
         request = WebRequest(method, path, query, self._request_headers(), body)
         try:
-            response = server.web_application.handle(request)
+            response = server.dispatch_application(request)
         except Exception:
+            self._error(500, "internal_error")
+            return
+        if response is None:
+            self._error(503, "server_shutting_down")
+            return
+        if not _valid_content_type(response.content_type):
             self._error(500, "internal_error")
             return
         self._respond(
@@ -288,24 +445,31 @@ class _RequestHandler(BaseHTTPRequestHandler):
         content_type: str,
         *,
         api: bool,
-        extra_headers: tuple[tuple[str, str], ...] = (),
+        extra_headers: tuple[tuple[object, object], ...] = (),
     ) -> None:
+        safe_content_type = (
+            content_type
+            if _valid_content_type(content_type)
+            else "application/octet-stream"
+        )
         self.send_response(status)
-        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Type", safe_content_type)
         self.send_header("Content-Length", str(len(body)))
         for name, value in security_headers(api=api):
             self.send_header(name, value)
-        for name, value in extra_headers:
-            normalized_name = name.lower()
+        for extra_name, extra_value in extra_headers:
+            if not isinstance(extra_name, str) or not isinstance(extra_value, str):
+                continue
+            normalized_name = extra_name.lower()
             if (
                 normalized_name in _MANAGED_RESPONSE_HEADERS
                 or normalized_name.startswith("access-control-")
-                or _HEADER_NAME.fullmatch(name) is None
-                or "\r" in value
-                or "\n" in value
+                or _HEADER_NAME.fullmatch(extra_name) is None
+                or "\r" in extra_value
+                or "\n" in extra_value
             ):
                 continue
-            self.send_header(name, value)
+            self.send_header(extra_name, extra_value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -330,70 +494,321 @@ def create_server(
 def _build_static_routes(
     static_root: Traversable,
 ) -> tuple[Mapping[str, _StaticResponse], _StaticResponse | None]:
+    if isinstance(static_root, Path):
+        return _build_path_static_routes(static_root)
+    return _build_generic_static_routes(static_root)
+
+
+def _build_path_static_routes(
+    static_root: Path,
+) -> tuple[Mapping[str, _StaticResponse], _StaticResponse | None]:
     routes: dict[str, _StaticResponse] = {}
-    if not _safe_directory(static_root):
+    root_descriptor = _open_root_directory(static_root)
+    if root_descriptor is None:
+        return MappingProxyType(routes), None
+    try:
+        for public_routes, parts in _PAGE_ROUTES:
+            response = _read_path_response(
+                root_descriptor, parts, "text/html; charset=utf-8"
+            )
+            if response is None:
+                continue
+            for public_route in public_routes:
+                routes[public_route] = response
+        workspace = _read_path_response(
+            root_descriptor,
+            _WORKSPACE_RESOURCE,
+            "text/html; charset=utf-8",
+        )
+        asset_descriptor = _open_directory_at(root_descriptor, ("_astro",))
+        if asset_descriptor is not None:
+            try:
+                for name in os.listdir(asset_descriptor):
+                    content_type = _asset_content_type(name)
+                    if content_type is None:
+                        continue
+                    response = _read_file_at(asset_descriptor, name, content_type)
+                    if response is not None:
+                        routes[f"/_astro/{name}"] = response
+            except OSError:
+                pass
+            finally:
+                os.close(asset_descriptor)
+    finally:
+        os.close(root_descriptor)
+    return MappingProxyType(routes), workspace
+
+
+def _build_generic_static_routes(
+    static_root: Traversable,
+) -> tuple[Mapping[str, _StaticResponse], _StaticResponse | None]:
+    routes: dict[str, _StaticResponse] = {}
+    if not _generic_directory(static_root):
         return MappingProxyType(routes), None
     for public_routes, parts in _PAGE_ROUTES:
-        response = _read_static_response(static_root, parts, "text/html; charset=utf-8")
+        response = _read_generic_response(
+            static_root, parts, "text/html; charset=utf-8"
+        )
         if response is None:
             continue
         for public_route in public_routes:
             routes[public_route] = response
-    workspace = _read_static_response(
-        static_root, _WORKSPACE_RESOURCE, "text/html; charset=utf-8"
+    workspace = _read_generic_response(
+        static_root,
+        _WORKSPACE_RESOURCE,
+        "text/html; charset=utf-8",
     )
-    asset_root = _fixed_descendant(static_root, ("_astro",))
-    if asset_root is not None and _safe_directory(asset_root):
-        for child in asset_root.iterdir():
-            name = child.name
-            suffix = Path(name).suffix.lower()
-            content_type = _ASSET_CONTENT_TYPES.get(suffix)
-            if (
-                _ASSET_NAME.fullmatch(name) is None
-                or content_type is None
-                or not _regular_file(child)
-            ):
+    asset_root = _generic_descendant_directory(static_root, ("_astro",))
+    if asset_root is not None:
+        try:
+            children = tuple(asset_root.iterdir())
+        except (AttributeError, OSError, TypeError):
+            children = ()
+        for child in children:
+            try:
+                name = child.name
+            except (AttributeError, OSError, TypeError):
                 continue
-            routes[f"/_astro/{name}"] = _StaticResponse(
-                child.read_bytes(), content_type
-            )
+            content_type = _asset_content_type(name)
+            if content_type is None:
+                continue
+            response = _read_generic_direct_child(asset_root, child, name, content_type)
+            if response is not None:
+                routes[f"/_astro/{name}"] = response
     return MappingProxyType(routes), workspace
 
 
-def _read_static_response(
+def _open_root_directory(root: Path) -> int | None:
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        return None
+    try:
+        descriptor = os.open(root, _directory_open_flags())
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            os.close(descriptor)
+            return None
+    except OSError:
+        os.close(descriptor)
+        return None
+    return descriptor
+
+
+def _open_directory_at(root_descriptor: int, parts: tuple[str, ...]) -> int | None:
+    try:
+        current = os.dup(root_descriptor)
+    except OSError:
+        return None
+    for part in parts:
+        try:
+            child = os.open(part, _directory_open_flags(), dir_fd=current)
+        except OSError:
+            os.close(current)
+            return None
+        os.close(current)
+        current = child
+        try:
+            if not stat.S_ISDIR(os.fstat(current).st_mode):
+                os.close(current)
+                return None
+        except OSError:
+            os.close(current)
+            return None
+    return current
+
+
+def _read_path_response(
+    root_descriptor: int,
+    parts: tuple[str, ...],
+    content_type: str,
+) -> _StaticResponse | None:
+    parent_descriptor = _open_directory_at(root_descriptor, parts[:-1])
+    if parent_descriptor is None:
+        return None
+    try:
+        return _read_file_at(parent_descriptor, parts[-1], content_type)
+    finally:
+        os.close(parent_descriptor)
+
+
+def _read_file_at(
+    parent_descriptor: int,
+    name: str,
+    content_type: str,
+) -> _StaticResponse | None:
+    try:
+        descriptor = os.open(name, _file_open_flags(), dir_fd=parent_descriptor)
+    except OSError:
+        return None
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            return None
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, _READ_CHUNK_BYTES)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        after = os.fstat(descriptor)
+        if _file_identity(before) != _file_identity(after):
+            return None
+        body = b"".join(chunks)
+        if len(body) != before.st_size:
+            return None
+        return _StaticResponse(body, content_type)
+    except OSError:
+        return None
+    finally:
+        os.close(descriptor)
+
+
+def _file_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        value.st_dev,
+        value.st_ino,
+        value.st_mode,
+        value.st_size,
+        value.st_mtime_ns,
+    )
+
+
+def _directory_open_flags() -> int:
+    return os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+
+
+def _file_open_flags() -> int:
+    return (
+        os.O_RDONLY
+        | os.O_NOFOLLOW
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
+
+
+def _read_generic_response(
     root: Traversable,
     parts: tuple[str, ...],
     content_type: str,
 ) -> _StaticResponse | None:
-    resource = _fixed_descendant(root, parts)
-    if resource is None or not _regular_file(resource):
+    resource = _generic_descendant_file(root, parts)
+    if resource is None:
         return None
-    return _StaticResponse(resource.read_bytes(), content_type)
-
-
-def _fixed_descendant(root: Traversable, parts: tuple[str, ...]) -> Traversable | None:
-    resource = root
     try:
-        for part in parts:
-            resource = resource.joinpath(part)
-    except (FileNotFoundError, NotADirectoryError, OSError):
+        body = bytes(resource.read_bytes())
+    except (AttributeError, OSError, TypeError):
         return None
+    return _StaticResponse(body, content_type)
+
+
+def _generic_descendant_file(
+    root: Traversable, parts: tuple[str, ...]
+) -> Traversable | None:
+    resource = root
+    for index, part in enumerate(parts):
+        child = _generic_listed_child(resource, part)
+        if child is None:
+            return None
+        resource = child
+        try:
+            if index < len(parts) - 1 and not resource.is_dir():
+                return None
+            if index == len(parts) - 1 and not resource.is_file():
+                return None
+        except (AttributeError, OSError, TypeError):
+            return None
     return resource
 
 
-def _safe_directory(resource: Traversable) -> bool:
-    if isinstance(resource, Path) and resource.is_symlink():
-        return False
+def _generic_descendant_directory(
+    root: Traversable, parts: tuple[str, ...]
+) -> Traversable | None:
+    resource = root
+    for part in parts:
+        child = _generic_listed_child(resource, part)
+        if child is None:
+            return None
+        resource = child
+        try:
+            if not resource.is_dir():
+                return None
+        except (AttributeError, OSError, TypeError):
+            return None
+    return resource
+
+
+def _generic_listed_child(
+    parent: Traversable, expected_name: str
+) -> Traversable | None:
+    try:
+        matches = tuple(
+            child for child in parent.iterdir() if child.name == expected_name
+        )
+    except (AttributeError, OSError, TypeError):
+        return None
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+def _read_generic_direct_child(
+    parent: Traversable,
+    child: Traversable,
+    name: str,
+    content_type: str,
+) -> _StaticResponse | None:
+    try:
+        joined = parent.joinpath(name)
+        if child.name != name or joined.name != name:
+            return None
+        if not child.is_file() or not joined.is_file():
+            return None
+        child_bytes = bytes(child.read_bytes())
+        joined_bytes = bytes(joined.read_bytes())
+    except (AttributeError, OSError, TypeError):
+        return None
+    if child_bytes != joined_bytes:
+        return None
+    return _StaticResponse(child_bytes, content_type)
+
+
+def _generic_directory(resource: Traversable) -> bool:
     try:
         return resource.is_dir()
-    except OSError:
+    except (AttributeError, OSError, TypeError):
         return False
 
 
-def _regular_file(resource: Traversable) -> bool:
-    if isinstance(resource, Path) and resource.is_symlink():
-        return False
+def _asset_content_type(name: str) -> str | None:
+    if _ASSET_NAME.fullmatch(name) is None:
+        return None
+    dot = name.rfind(".")
+    if dot <= 0:
+        return None
+    return _ASSET_CONTENT_TYPES.get(name[dot:].lower())
+
+
+def _inspect_raw_request_line(raw_requestline: bytes) -> tuple[int | None, str | None]:
+    words = raw_requestline.rstrip(b"\r\n").split()
+    if len(words) == 2:
+        return 400, None
+    if len(words) != 3:
+        return None, None
+    target = words[1]
+    if len(target) > _MAX_TARGET_BYTES:
+        return 414, None
+    if target.startswith(b"//"):
+        return 400, None
     try:
-        return resource.is_file()
-    except OSError:
-        return False
+        return None, target.decode("ascii")
+    except UnicodeDecodeError:
+        return 400, None
+
+
+def _valid_content_type(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and _CONTENT_TYPE.fullmatch(value) is not None
+    )

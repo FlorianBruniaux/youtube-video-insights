@@ -52,4 +52,11 @@ def expected_host_header(host: str, port: int) -> str:
 
 def mutation_token_matches(values: list[str], expected: str) -> bool:
     """Require one exact token value without reflecting either value."""
-    return len(values) == 1 and hmac.compare_digest(values[0], expected)
+    if len(values) != 1:
+        return False
+    try:
+        supplied_bytes = values[0].encode("ascii")
+        expected_bytes = expected.encode("ascii")
+    except UnicodeEncodeError:
+        return False
+    return hmac.compare_digest(supplied_bytes, expected_bytes)
