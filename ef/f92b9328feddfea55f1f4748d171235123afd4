@@ -1,0 +1,141 @@
+web/src/lib/dom.ts
+  s_0a442347250965::t_c6537598ab0d27 9,30,60
+web/src/pages/sources.astro
+  s_0a442347250965::t_cdac2b41b8de2e 11-13
+web/tests/i18n.test.ts
+  s_0a442347250965::t_308c483842f05b 1-25,31,33-45,50-53,64-80
+  s_0a442347250965::t_025c0c37725fae 26-30,32,46-49
+  s_0a442347250965::t_1b99704dafc905 54-63
+web/src/lib/pages/dashboard.ts
+  s_0a442347250965::t_dfdaf024ff74a0 112-113
+  s_0a442347250965::t_c6537598ab0d27 3,68,90-93,98-102
+CHANGELOG.md
+  s_0a442347250965::t_0d384ac4d77f61 25-28,57-60
+web/src/lib/pages/research-workspace.ts
+  s_0a442347250965::t_e46ec9a15efd10 161
+  s_0a442347250965::t_b1c2745a122c7f 3,81,105,107,123,149,155,187,233,249,266,269,272,287,292,295,298,338,359,387,417,430,441,457,461,463,506-507,512,515,535-537,541-545
+  s_0a442347250965::t_deaa6527dbb483 551,555,565,570,578-579,581,584-587,599-603,620,622,631,633,642,644,649,651,653,663,665-667,672,675-676,690,693,713-718,720-722,733,736,757,766,777-780,785,812,826,922-923,926-929,931-932,944,992
+  s_0a442347250965::t_908be301f00946 580
+web/src/components/CandidateList.astro
+  s_0a442347250965::t_ac45ec2dfad9b4 2-3
+web/src/lib/i18n.ts
+  s_0a442347250965::t_fd35bc8f4cdc01 228-230
+  s_0a442347250965::t_d31d14e0f5bd34 15
+  s_0a442347250965::t_908be301f00946 398-401
+  s_0a442347250965::t_f97376851a4445 85-90
+  s_0a442347250965::t_a0947f1283633e 83-84,446-457
+  s_0a442347250965::t_2f2a61f45abfac 212,421,423-427
+  s_0a442347250965::t_a529387ed19f5e 6-7,9-10,12-14,16-82,91-204,206-211,213-227,231-397
+  s_0a442347250965::t_b003a21e2e690a 1-5,8,11,205,402-420,422,428-445,458-493
+web/src/components/AppNav.astro
+  s_0a442347250965::t_d31d14e0f5bd34 44
+  s_0a442347250965::t_ac45ec2dfad9b4 19-20,35,43,45-58
+web/public/_astro/language-bootstrap.js
+  s_0a442347250965::t_b003a21e2e690a 1-22
+web/src/styles/global.css
+  s_0a442347250965::t_3ce7d8953d13c3 139-176,1380-1396
+  s_0a442347250965::t_f5b6bbf6eaa0e5 1200-1228
+  s_0a442347250965::t_ec8bfb8a68ccfe 1186,1191-1192
+  s_0a442347250965::t_620f826ad01eeb 1397
+web/src/lib/pages/exports.ts
+  s_0a442347250965::t_c6537598ab0d27 3,16,24-32,37,44,57-61,70
+web/src/components/SearchForm.astro
+  s_0a442347250965::t_ac45ec2dfad9b4 3,11,16,20,24,30
+web/src/components/JobProgress.astro
+  s_0a442347250965::t_ac45ec2dfad9b4 2,4,6,9
+web/src/pages/research/new.astro
+  s_0a442347250965::t_cdac2b41b8de2e 9-11,27,29,32,34,37,41,43-46,50,52
+docs/DELIVERY-RECAP.md
+  s_0a442347250965::t_0d384ac4d77f61 28,100,102,105
+web/src/components/SourceImportPanel.astro
+  s_0a442347250965::t_ac45ec2dfad9b4 3-5,23,28,30,35,37,40,45
+web/src/components/EvidencePanel.astro
+  s_0a442347250965::t_ac45ec2dfad9b4 2-3
+web/src/components/ContextGuide.astro
+  s_0a442347250965::t_ac45ec2dfad9b4 20-21,23,26,33-34,40
+web/src/pages/research/workspace.astro
+  s_0a442347250965::t_cdac2b41b8de2e 16-17
+web/src/lib/pages/research-new.ts
+  s_0a442347250965::t_c6537598ab0d27 2,51,79,83,93,230-232
+web/src/lib/pages/search.ts
+  s_0a442347250965::t_c6537598ab0d27 3,113-118,120,122,150-152,158,161,163
+web/src/lib/pages/sources.ts
+  s_0a442347250965::t_3e132342cfdd19 3,151-155,390-392,450-453,512,551,569,586,686,693,706,716-719,756-759,767,775-781,783-788,790,875
+web/tests/language-bootstrap.test.ts
+  s_0a442347250965::t_308c483842f05b 1-37
+web/src/pages/exports.astro
+  s_0a442347250965::t_cdac2b41b8de2e 9-11,24
+web/src/components/WorkflowGuide.astro
+  s_0a442347250965::t_cd9580538de527 5,9-10,12,21-24,28-31,35-38,42-45,49-52,57-58
+web/src/pages/search.astro
+  s_0a442347250965::t_cdac2b41b8de2e 10-12
+web/src/components/AcquisitionHistory.astro
+  s_0a442347250965::t_ac45ec2dfad9b4 2-3
+web/src/components/SourceTable.astro
+  s_0a442347250965::t_ac45ec2dfad9b4 4-5,7,10-13
+web/src/components/EventTimeline.astro
+  s_0a442347250965::t_ac45ec2dfad9b4 2,4
+web/src/pages/index.astro
+  s_0a442347250965::t_cdac2b41b8de2e 9-11,15-18,27-28,30,35,38-39,41,45-46,48
+README.md
+  s_0a442347250965::t_0d384ac4d77f61 55,84-88,332-337,926-928
+ROADMAP.md
+  s_0a442347250965::t_0d384ac4d77f61 32,57,75-76
+web/src/layouts/AppLayout.astro
+  s_0a442347250965::t_ac45ec2dfad9b4 20,28,32,46-47,52-57,64-66,72-73
+  s_0a442347250965::t_a0947f1283633e 24,31
+web/src/components/DecisionPanel.astro
+  s_0a442347250965::t_ac45ec2dfad9b4 2-3
+docs/IMPLEMENTATION-STATUS.md
+  s_0a442347250965::t_0d384ac4d77f61 12-14,43,69,85-87,124
+src/yt_insights/web/static/_astro/AppLayout.BymDr4Ol.css
+  s_0a442347250965::t_c3a486e905e3d3 1
+src/yt_insights/web/static/_astro/AppLayout.astro_astro_type_script_index_0_lang.BUGfql4U.js
+  s_0a442347250965::t_21e3b7d1c98151 1
+src/yt_insights/web/static/_astro/dom.abdljpwq.js
+  s_0a442347250965::t_70652ea2bea834 1
+src/yt_insights/web/static/_astro/exports.astro_astro_type_script_index_0_lang.CgYZFov-.js
+  s_0a442347250965::t_a76a948f8d3b9a 1
+src/yt_insights/web/static/_astro/i18n.hXf2UcQv.js
+  s_0a442347250965::t_6f0c2dd69eda3d 1
+src/yt_insights/web/static/_astro/index.astro_astro_type_script_index_0_lang.B0lmbdMu.js
+  s_0a442347250965::t_5eae2a13e8dd52 1
+src/yt_insights/web/static/_astro/language-bootstrap.js
+  s_0a442347250965::t_daf256bbe969c0 1-22
+src/yt_insights/web/static/_astro/new.astro_astro_type_script_index_0_lang.x8KKTXRN.js
+  s_0a442347250965::t_f2423b9e046126 1
+src/yt_insights/web/static/_astro/search.astro_astro_type_script_index_0_lang.ChWLGuso.js
+  s_0a442347250965::t_565b650506afc2 1
+src/yt_insights/web/static/_astro/sources.astro_astro_type_script_index_0_lang.DxE8yd4P.js
+  s_0a442347250965::t_e8f280baa528a4 1
+src/yt_insights/web/static/_astro/workspace.astro_astro_type_script_index_0_lang.DaM0q9ZO.js
+  s_0a442347250965::t_ae51db532d5d88 1
+src/yt_insights/web/static/exports/index.html
+  s_0a442347250965::t_545fb0dcf79ddd 1
+src/yt_insights/web/static/index.html
+  s_0a442347250965::t_7324c1705203b5 1
+src/yt_insights/web/static/research/new/index.html
+  s_0a442347250965::t_a560497f342829 1
+src/yt_insights/web/static/research/workspace/index.html
+  s_0a442347250965::t_365cb5af82beab 1
+src/yt_insights/web/static/search/index.html
+  s_0a442347250965::t_565335a7d60a89 1
+src/yt_insights/web/static/sources/index.html
+  s_0a442347250965::t_7e5d3fdf8827af 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "eff92b9328feddfea55f1f4748d171235123afd4",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
