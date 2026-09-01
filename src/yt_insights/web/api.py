@@ -396,6 +396,7 @@ class SourceAcquisitionFacade:
             or len(plan.selected_videos) != len(plan.selected_urls)
             or plan.selected_count != len(plan.selected_videos)
             or len(set(selected_ids)) != len(selected_ids)
+            or not _selected_urls_match_video_ids(plan)
         ):
             return _plan_too_large()
         identity = _canonical_plan_bytes(plan)
@@ -462,6 +463,18 @@ class SourceAcquisitionFacade:
         if plan.source_kind is not expected_kind:
             raise RuntimeError("source classification changed")
         return plan
+
+
+def _selected_urls_match_video_ids(plan: AcquisitionPlan) -> bool:
+    """Require the exact canonical watch URL for every disclosed video ID."""
+    return all(
+        url == f"https://www.youtube.com/watch?v={video.video_id}"
+        for video, url in zip(
+            plan.selected_videos,
+            plan.selected_urls,
+            strict=True,
+        )
+    )
 
 
 def _query_object(

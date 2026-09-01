@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta, timezone
 
 import pytest
@@ -23,6 +24,7 @@ from yt_insights.research.models import (
 from yt_insights.research.store import (
     DecisionReplayStatus,
     ResearchIdempotencyConflict,
+    ResearchRevisionConflict,
     ResearchStore,
 )
 
@@ -184,6 +186,7 @@ def test_list_sessions_is_bounded_and_stably_sorted(tmp_path: object) -> None:
 
 def test_public_timeline_returns_latest_bounded_decisions_and_events(
     tmp_path: object,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Loading unbounded history would let one old session exhaust the web read."""
     store = _store(tmp_path)
@@ -216,7 +219,37 @@ def test_public_timeline_returns_latest_bounded_decisions_and_events(
                 ),
             )
 
-    timeline = store.get_public_timeline(SESSION_ID, limit=2)
+    original_connection = store._connection
+
+    @contextmanager
+    def payload_guarded_connection():
+        with original_connection() as connection:
+            def authorize(
+                action: int,
+                table: str | None,
+                column: str | None,
+                database: str | None,
+                trigger: str | None,
+            ) -> int:
+                del database, trigger
+                if (
+                    action == sqlite3.SQLITE_READ
+                    and table in {"research_decisions", "research_events"}
+                    and column == "payload_json"
+                ):
+                    return sqlite3.SQLITE_DENY
+                return sqlite3.SQLITE_OK
+
+            connection.set_authorizer(authorize)
+            yield connection
+
+    monkeypatch.setattr(store, "_connection", payload_guarded_connection)
+
+    timeline = store.get_public_timeline(
+        SESSION_ID,
+        expected_revision=0,
+        limit=2,
+    )
 
     assert [decision.action for decision in timeline.decisions] == [
         "action-1",
@@ -229,7 +262,9 @@ def test_public_timeline_returns_latest_bounded_decisions_and_events(
     assert timeline.decisions_truncated is True
     assert timeline.events_truncated is True
     with pytest.raises(ValueError, match="limit"):
-        store.get_public_timeline(SESSION_ID, limit=0)
+        store.get_public_timeline(SESSION_ID, expected_revision=0, limit=0)
+    with pytest.raises(ResearchRevisionConflict):
+        store.get_public_timeline(SESSION_ID, expected_revision=1, limit=2)
 
 
 def test_assessment_sufficiency_and_refresh_transitions_are_revision_checked(tmp_path: object) -> None:

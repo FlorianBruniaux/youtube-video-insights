@@ -34,6 +34,7 @@ _MAX_TARGET_BYTES = 2_048
 _MAX_BODY_BYTES = 65_536
 _CONNECTION_TIMEOUT_SECONDS = 1.0
 _DEFAULT_MAX_REQUEST_WORKERS = 16
+_MAX_BUSY_DRAIN_BYTES = 8 * 1024
 _BAD_PERCENT_ENCODING = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _CONTENT_LENGTH = re.compile(r"[0-9]{1,5}")
 _RESEARCH_ROUTE = re.compile(r"/research/([^/]+)")
@@ -219,6 +220,13 @@ class _LoopbackServer(ThreadingHTTPServer):
         response = b"\r\n".join(headers) + b"\r\n\r\n" + body
         with suppress(OSError):
             request.sendall(response)
+            request.shutdown(socket.SHUT_WR)
+            remaining = _MAX_BUSY_DRAIN_BYTES
+            while remaining > 0:
+                chunk = request.recv(min(_READ_CHUNK_BYTES, remaining))
+                if not chunk:
+                    break
+                remaining -= len(chunk)
         self.shutdown_request(request)
 
     def _start_closing(self) -> None:

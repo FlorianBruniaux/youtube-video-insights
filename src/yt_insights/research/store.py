@@ -702,6 +702,7 @@ class ResearchStore:
         self,
         session_id: str,
         *,
+        expected_revision: int,
         limit: int,
     ) -> PublicSessionTimeline:
         """Return the latest bounded decisions and events in chronological order."""
@@ -711,24 +712,33 @@ class ResearchStore:
             or not 1 <= limit <= 100
         ):
             raise ValueError("limit must be between 1 and 100")
+        if (
+            isinstance(expected_revision, bool)
+            or not isinstance(expected_revision, int)
+            or expected_revision < 0
+        ):
+            raise ValueError("expected revision must be a non-negative integer")
         with self._connection() as connection:
-            self._session(connection, session_id)
+            connection.execute("BEGIN")
+            session = self._session(connection, session_id)
+            if session.revision != expected_revision:
+                raise ResearchRevisionConflict("session revision conflict")
             decision_rows = connection.execute(
-                "SELECT idempotency_key, action, payload_json, created_at "
+                "SELECT idempotency_key, action, created_at "
                 "FROM research_decisions WHERE session_id = ? "
                 "ORDER BY rowid DESC LIMIT ?",
                 (session_id, limit + 1),
             ).fetchall()
             event_rows = connection.execute(
-                "SELECT event_id, from_state, to_state, event_code, "
-                "payload_json, created_at FROM research_events "
+                "SELECT event_id, from_state, to_state, event_code, created_at "
+                "FROM research_events "
                 "WHERE session_id = ? ORDER BY event_id DESC LIMIT ?",
                 (session_id, limit + 1),
             ).fetchall()
             decisions_truncated = len(decision_rows) > limit
             events_truncated = len(event_rows) > limit
             decisions = tuple(
-                DecisionRecord(row[0], row[1], row[2], _datetime(row[3]))
+                DecisionRecord(row[0], row[1], "{}", _datetime(row[2]))
                 for row in reversed(decision_rows[:limit])
             )
             events = tuple(
@@ -737,8 +747,8 @@ class ResearchStore:
                     None if row[1] is None else ResearchState(row[1]),
                     ResearchState(row[2]),
                     row[3],
-                    row[4],
-                    _datetime(row[5]),
+                    "{}",
+                    _datetime(row[4]),
                 )
                 for row in reversed(event_rows[:limit])
             )

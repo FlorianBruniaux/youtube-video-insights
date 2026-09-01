@@ -26,7 +26,7 @@ from yt_insights.research.store import (
     ResearchStore,
 )
 from yt_insights.search.models import SearchQuery
-from yt_insights.search.sqlite_fts import SearchIndexNotFound
+from yt_insights.search.sqlite_fts import SearchIndexError, SearchIndexNotFound
 from yt_insights.web.api import PlanChanged, SourcePreviewRequest
 from yt_insights.web.application import WebApplication
 from yt_insights.web.jobs import JobQueueFull, JobSnapshot
@@ -148,6 +148,7 @@ class FakeStore:
         self.acquisition_replay: object | None = None
         self.acquisition_replay_error: Exception | None = None
         self.acquisition_replay_calls: list[tuple[str, int, str, str, str | None]] = []
+        self.timeline_callback: Callable[[], None] | None = None
 
     def list_sessions(self, *, limit: int, offset: int) -> tuple[ResearchSession, ...]:
         self.calls.append((limit, offset))
@@ -164,11 +165,18 @@ class FakeStore:
     def get_session_history(self, session_id: str) -> object:
         raise AssertionError(f"full history loaded for {session_id}")
 
-    def get_public_timeline(self, session_id: str, *, limit: int) -> object:
+    def get_public_timeline(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        limit: int,
+    ) -> object:
         assert session_id == SESSION_ID
+        assert expected_revision == 5
         assert limit == 100
         created_at = datetime(2026, 8, 31, 12, tzinfo=UTC)
-        return SimpleNamespace(
+        timeline = SimpleNamespace(
             decisions=(
                 SimpleNamespace(action="refresh", created_at=created_at),
             ),
@@ -184,6 +192,9 @@ class FakeStore:
             decisions_truncated=False,
             events_truncated=False,
         )
+        if self.timeline_callback is not None:
+            self.timeline_callback()
+        return timeline
 
     def get_decision_replay(
         self,
@@ -548,6 +559,27 @@ def test_export_dossier_is_opened_by_opaque_id_without_a_path(
     assert response.body == b"# Safe dossier\n"
     assert response.headers == (("Content-Disposition", 'inline; filename="dossier.md"'),)
     assert missing.status == 404
+
+
+def test_session_detail_fails_closed_when_revision_changes_between_snapshots(
+    services: SimpleNamespace,
+) -> None:
+    """Combining a response and timeline from different revisions creates false history."""
+    services.store.timeline_callback = lambda: setattr(
+        services.store,
+        "session",
+        _session(state=ResearchState.DISCOVERING, revision=6),
+    )
+
+    response = services.app.handle(
+        WebRequest.get(f"/api/v1/research/sessions/{SESSION_ID}")
+    )
+
+    assert response.status == 409
+    assert response.json_body == {
+        "schema_version": 1,
+        "error": {"code": "stale_revision"},
+    }
 
 
 def test_research_mutations_delegate_to_workflow_and_queue_long_jobs(
@@ -1571,6 +1603,18 @@ def test_catalog_unavailability_uses_a_bounded_error(services: SimpleNamespace) 
 
     assert response.status == 503
     assert response.json_body["error"] == {"code": "catalog_unavailable"}
+
+
+def test_source_index_unavailability_uses_the_search_error_mapping(
+    services: SimpleNamespace,
+) -> None:
+    services.catalog.error = SearchIndexError("/private/search.sqlite3")
+
+    response = services.app.handle(WebRequest.get("/api/v1/sources"))
+
+    assert response.status == 503
+    assert response.json_body["error"] == {"code": "search_unavailable"}
+    assert b"/private/" not in response.body
 
 
 def test_export_response_omits_the_output_directory(services: SimpleNamespace) -> None:

@@ -331,14 +331,22 @@ class WebApplication:
         if session_match is not None:
             _require_empty_query(request)
             session_id = validate_session_id(session_match.group(1))
-            self._require_session(session_id)
+            initial_session = self._require_session(session_id)
             response = self._workflow.status(session_id)
             payload = response.to_dict()
+            response_revision = _response_session_revision(payload, session_id)
+            if response_revision != initial_session.revision:
+                raise ResearchRevisionConflict()
             payload["history"] = _timeline_payload(
                 self._research_store.get_public_timeline(
                     session_id,
+                    expected_revision=response_revision,
                     limit=_MAX_TIMELINE_ITEMS,
                 )
+            )
+            self._require_session_revision(
+                session_id,
+                expected_revision=response_revision,
             )
             return WebResponse.json(200, payload)
         job_match = _JOB_ROUTE.fullmatch(request.path)
@@ -761,6 +769,18 @@ def _timeline_payload(timeline: PublicSessionTimeline) -> dict[str, object]:
         "decisions_truncated": timeline.decisions_truncated,
         "events_truncated": timeline.events_truncated,
     }
+
+
+def _response_session_revision(payload: object, expected_session_id: str) -> int:
+    if not isinstance(payload, dict):
+        raise RuntimeError("research response is invalid")
+    session = payload.get("session")
+    if not isinstance(session, dict) or session.get("session_id") != expected_session_id:
+        raise RuntimeError("research response is invalid")
+    revision = session.get("revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 0:
+        raise RuntimeError("research response is invalid")
+    return revision
 
 
 def _error(status: int, code: str) -> WebResponse:

@@ -16,7 +16,7 @@ from typing import Final, Protocol
 
 from yt_insights.catalog import Catalog, CatalogError, ReadOnlyCatalog
 from yt_insights.search.models import BuildReport
-from yt_insights.search.sqlite_fts import SQLiteFtsIndex
+from yt_insights.search.sqlite_fts import SearchIndexError, SQLiteFtsIndex
 
 _MAX_PAGE_SIZE: Final = 100
 _MAX_METADATA_VALUES: Final = 20
@@ -32,7 +32,10 @@ _DIRECTORY_FLAGS: Final = (
     | getattr(os, "O_CLOEXEC", 0)
 )
 _READ_FLAGS: Final = (
-    os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    os.O_RDONLY
+    | getattr(os, "O_NOFOLLOW", 0)
+    | getattr(os, "O_CLOEXEC", 0)
+    | getattr(os, "O_NONBLOCK", 0)
 )
 _MANIFEST_FIELDS: Final = frozenset(
     {
@@ -80,10 +83,11 @@ class SearchIndexWebReader:
             raise ValueError("video ID is invalid")
         if not video_ids:
             return frozenset()
-        # Validate the full immutable index before this narrow membership read.
-        self._index.status()
-        connection, identity = self._index._open_active_readonly()
+        connection: sqlite3.Connection | None = None
         try:
+            # Validate the full immutable index before this narrow membership read.
+            self._index.status()
+            connection, identity = self._index._open_active_readonly()
             self._index._validate_query_contract(connection, identity)
             placeholders = ",".join("?" for _ in video_ids)
             rows = connection.execute(
@@ -98,8 +102,14 @@ class SearchIndexWebReader:
                 raise ValueError("search index row is invalid")
             self._index._require_database_identity(identity)
             return indexed
+        except SearchIndexError:
+            raise
+        except (sqlite3.Error, TypeError, ValueError, OSError) as exc:
+            raise SearchIndexError("search index membership query failed") from exc
         finally:
-            connection.close()
+            if connection is not None:
+                with suppress(sqlite3.Error):
+                    connection.close()
 
 
 def _require_page(limit: int, offset: int) -> None:

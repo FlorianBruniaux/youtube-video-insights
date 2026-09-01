@@ -554,6 +554,37 @@ def test_source_facade_rejects_a_plan_with_unpaired_acquisition_urls(
         facade.prepare_acquisition("a" * 64)
 
 
+def test_source_facade_rejects_a_url_for_a_different_video_id(
+    tmp_path: Path,
+) -> None:
+    """A displayed ID must never authorize acquisition of another watch URL."""
+    paths = DataPaths.from_root(tmp_path / "private-data")
+    base = _source_plan(paths)
+    unsafe = replace(
+        base,
+        selected_urls=("https://www.youtube.com/watch?v=zyx987WVUT0",),
+    )
+    executed: list[AcquisitionPlan] = []
+    facade = SourceAcquisitionFacade(
+        paths,
+        classify=lambda source: SourceKind.CHANNEL,
+        fetch=lambda source: VideoListResult(),
+        build=lambda **kwargs: unsafe,
+        execute=lambda plan: executed.append(plan) or AcquisitionReport(0, 0, 0, ()),
+    )
+
+    payload = facade.preview(
+        parse_source_preview(
+            _json_body({"source": base.source, "language": "fr", "analyze": False})
+        )
+    )
+
+    assert payload == {"schema_version": 1, "error": {"code": "plan_too_large"}}
+    with pytest.raises(PlanChanged):
+        facade.prepare_acquisition("a" * 64)
+    assert executed == []
+
+
 def test_source_facade_rejects_an_oversized_canonical_plan_before_caching(
     tmp_path: Path,
 ) -> None:

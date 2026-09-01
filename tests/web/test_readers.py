@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sqlite3
 from pathlib import Path
 
 import pytest
@@ -19,7 +20,7 @@ from yt_insights.search.models import (
     compute_passage_id,
     youtube_url,
 )
-from yt_insights.search.sqlite_fts import SQLiteFtsIndex
+from yt_insights.search.sqlite_fts import SearchIndexError, SQLiteFtsIndex
 from yt_insights.web.readers import (
     CatalogWebReader,
     ExportReader,
@@ -61,6 +62,24 @@ def test_search_index_reader_returns_counts_and_exact_video_membership(
     assert reader.indexed_video_ids((VIDEO_ID, "missingVid1")) == frozenset(
         {VIDEO_ID}
     )
+
+
+def test_search_index_reader_translates_membership_storage_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Internal SQLite failures must retain the fixed public index mapping."""
+    index = SQLiteFtsIndex(tmp_path / "search.sqlite3")
+    reader = SearchIndexWebReader(index)
+    monkeypatch.setattr(index, "status", lambda: BuildReport(0, 0, 0, 0, 0))
+
+    def fail_open() -> object:
+        raise sqlite3.OperationalError("private index detail")
+
+    monkeypatch.setattr(index, "_open_active_readonly", fail_open)
+
+    with pytest.raises(SearchIndexError, match="membership query failed"):
+        reader.indexed_video_ids((VIDEO_ID,))
 
 
 def _write_transcript(root: Path, *, language: str) -> None:
@@ -394,3 +413,91 @@ def test_export_reader_marks_unreadable_manifest_incomplete(
 
     assert payload["inventory_complete"] is False
     assert payload["truncated"] is True
+
+
+def test_export_reader_manifest_regular_file_to_fifo_race_is_nonblocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A manifest replaced by a FIFO after stat must not block serialized reads."""
+    nonblocking = getattr(os, "O_NONBLOCK", 0)
+    if not nonblocking or not hasattr(os, "mkfifo"):
+        pytest.skip("nonblocking FIFOs are unavailable")
+    exports = tmp_path / "exports"
+    dossier = exports / "topic" / "2026-08-31-dossier"
+    dossier.mkdir(parents=True)
+    manifest = dossier / "manifest.json"
+    manifest.write_text(json.dumps(_manifest()), encoding="utf-8")
+    original_stat = os.stat
+    original_open = os.open
+    raced = False
+
+    def racing_stat(
+        name: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *,
+        dir_fd: int | None = None,
+        follow_symlinks: bool = True,
+    ) -> os.stat_result:
+        nonlocal raced
+        details = original_stat(name, dir_fd=dir_fd, follow_symlinks=follow_symlinks)
+        if name == "manifest.json" and dir_fd is not None and not raced:
+            raced = True
+            manifest.unlink()
+            os.mkfifo(manifest)
+        return details
+
+    def guarded_open(
+        name: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if name == "manifest.json" and dir_fd is not None:
+            assert flags & nonblocking
+        return original_open(name, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(readers_module.os, "stat", racing_stat)
+    monkeypatch.setattr(readers_module.os, "open", guarded_open)
+
+    payload = ExportReader(exports).list_exports(limit=10)
+
+    assert raced is True
+    assert payload["inventory_complete"] is False
+    assert payload["truncated"] is True
+
+
+def test_export_reader_dossier_fifo_is_rejected_without_blocking(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Opening a dossier FIFO without O_NONBLOCK would hang reads and shutdown."""
+    nonblocking = getattr(os, "O_NONBLOCK", 0)
+    if not nonblocking or not hasattr(os, "mkfifo"):
+        pytest.skip("nonblocking FIFOs are unavailable")
+    exports = tmp_path / "exports"
+    dossier = exports / "topic" / "2026-08-31-dossier"
+    dossier.mkdir(parents=True)
+    (dossier / "manifest.json").write_text(
+        json.dumps(_manifest()), encoding="utf-8"
+    )
+    os.mkfifo(dossier / "dossier.md")
+    original_open = os.open
+
+    def guarded_open(
+        name: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        if name == "dossier.md" and dir_fd is not None:
+            assert flags & nonblocking
+        return original_open(name, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(readers_module.os, "open", guarded_open)
+    reader = ExportReader(exports)
+    item = reader.list_exports(limit=10)["items"][0]
+    assert isinstance(item, dict)
+
+    assert reader.read_dossier(str(item["export_id"])) is None
