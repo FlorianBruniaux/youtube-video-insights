@@ -31,7 +31,6 @@ export function attachExportsPage(
     });
   return () => controller.abort();
 }
-
 function renderExports(target: HTMLElement, items: readonly ExportItem[]): void {
   if (items.length === 0) {
     const empty = document.createElement("p");
@@ -75,4 +74,3 @@ function requireElement<T extends Element>(root: ParentNode, selector: string): 
   if (element === null) throw new Error(`Missing page element: ${selector}`);
   return element;
 }
-
