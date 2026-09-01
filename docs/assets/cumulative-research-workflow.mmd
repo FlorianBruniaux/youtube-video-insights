@@ -16,3 +16,9 @@ flowchart LR
     ACQ --> I[Reindex once]
     I --> A
     D --> E[Explicit current-project copy]
+    WEB[Local web app] --> A
+    CLI[CLI] --> A
+    MCP[Read-only MCP] --> CAT
+    MCP --> FTS
+    AGENTS[Claude Code and Codex] --> MCP
+    DONE --> OUT[Timestamped search, reports, and Shorts]

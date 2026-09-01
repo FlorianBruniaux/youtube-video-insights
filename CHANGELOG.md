@@ -160,12 +160,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Documented
 
+- Replaced the README workflow diagram with the shipped cumulative loop:
+  VTT source of truth, FTS5 without an LLM, local assessment, sufficiency
+  decision, bounded discovery, exact-ID approval, reindexing, local web access,
+  CLI, read-only MCP, and Claude Code/Codex.
 - Aligned README, installation guide, roadmap, implementation status,
   `llms.txt`, agent documentation, and plan indexes with the shipped local web
   interface and hosted CI run on `b62adaa`.
-- Replaced the README workflow image with the implemented branching architecture:
-  VTT remains the source of truth, FTS5 search and exports do not depend on an
-  LLM, and Claude Code or Codex access the corpus through the read-only MCP.
 - Recorded the digest-approved integration of global source commit `62aa9ca`
   and activation of shared release `60cbcac…`. The eight-operation transaction
   is installed, its live check reports `issues: []`, and a fresh Codex session

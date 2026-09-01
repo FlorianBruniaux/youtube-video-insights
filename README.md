@@ -15,29 +15,24 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-Turn YouTube into a cumulative local research corpus: transcripts, structured
-insights, SQLite/FTS5 search, resumable research sessions, deterministic
-evidence dossiers, reports, Shorts, and read-only MCP access for Claude Code or
-Codex.
+Turn YouTube into a cumulative, local-first research system. Acquire VTT
+sources, search timestamped evidence with SQLite/FTS5, measure coverage and
+freshness, grow the corpus through explicit decisions, then use the result from
+the web app, CLI, or a read-only MCP in Claude Code and Codex.
 
-The current implementation checks local evidence first, reports coverage and
-freshness, asks whether it is sufficient, and can discover new YouTube sources
-only after that answer. Acquisition remains a second explicit decision: at
-most ten candidates are presented and only one to five exact approved IDs can
-be acquired. See the
-[implementation status, diagram, and test guide](docs/IMPLEMENTATION-STATUS.md).
+Every research cycle starts with local evidence. If it is insufficient,
+YT Insights presents at most ten YouTube candidates and waits for a separate
+approval of one to five exact IDs before acquisition. It then rebuilds the
+derived indexes and asks the sufficiency question again. Catalogue search,
+FTS5 search, and deterministic exports do not require an LLM.
 
-The complete local product is shipped on `main` at `b62adaa`. Hosted GitHub
-Actions [run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
-passed the web, Python 3.11, Python 3.12, packaging, and offline-runtime gates.
-The [delivery recap](docs/DELIVERY-RECAP.md) lists every implemented surface,
-its boundary, and the remaining external validation.
+![yt-insights workflow: preview and acquire VTT sources, build the local catalogue and FTS5 index, assess coverage and freshness, ask whether evidence is sufficient, acquire only approved IDs, then use the corpus through the local web app, CLI, read-only MCP, Claude Code, or Codex.](docs/assets/yt-insights-workflow.jpg)
 
-![yt-insights workflow: preview and acquire YouTube VTT sources, then branch into SQLite/FTS5 timestamped search without an LLM, optional analysis, source-backed exports, and read-only MCP access from Claude Code or Codex.](docs/assets/yt-insights-workflow.jpg)
-
-The image is retained as the stable acquisition overview. The current
-cumulative-research architecture is also available as a reproducible
-[Mermaid source](docs/assets/cumulative-research-workflow.mmd).
+The diagram reflects the shipped local workflow. Its reviewable branching
+version is available as [Mermaid source](docs/assets/cumulative-research-workflow.mmd).
+See the [delivery recap](docs/DELIVERY-RECAP.md) for every implemented surface
+and the [implementation status](docs/IMPLEMENTATION-STATUS.md) for SHA-bound
+test evidence and remaining external validation.
 
 ---
 

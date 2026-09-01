@@ -48,7 +48,8 @@ flowchart TD
 
 Source reproductible :
 [`docs/assets/cumulative-research-workflow.mmd`](assets/cumulative-research-workflow.mmd).
-Le JPG du README reste inchangé car sa source de génération n'est pas suivie.
+Le JPG du README illustre le même cycle livré. Le Mermaid reste la source
+textuelle révisable; le rendu raster n'est pas généré par le build du dépôt.
 
 ## Ce qui fonctionne
 
