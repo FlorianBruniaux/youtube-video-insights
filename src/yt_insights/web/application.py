@@ -6,6 +6,7 @@ import logging
 import re
 import sqlite3
 import threading
+import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
@@ -70,6 +71,7 @@ _SESSION_ACTION_ROUTE = re.compile(
 _JOB_ROUTE = re.compile(r"/api/v1/jobs/([^/]+)")
 _EXPORT_DOSSIER_ROUTE = re.compile(r"/api/v1/exports/([0-9a-f]{64})/dossier")
 _MAX_REPLAY_RECORDS = 100
+_REPLAY_WAIT_SECONDS = 0.25
 _MAX_TIMELINE_ITEMS = 100
 _DECISION_STATES = frozenset({ResearchState.AWAITING_SUFFICIENCY})
 _DISCOVERY_STATES = frozenset({ResearchState.DISCOVERING})
@@ -132,10 +134,10 @@ class SourceAcquisition(Protocol):
 ExportRequestFactory = Callable[[str, bool], DossierExportRequest]
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class _ReplayRecord:
     payload: object
-    response: WebResponse
+    response: WebResponse | None
     job_id: str | None
 
 
@@ -147,7 +149,7 @@ class _ReplayRegistry:
             raise ValueError("replay capacity must be a positive integer")
         self._maximum = maximum
         self._jobs = jobs
-        self._lock = threading.Lock()
+        self._condition = threading.Condition()
         self._records: OrderedDict[tuple[str, str], _ReplayRecord] = OrderedDict()
 
     def run(
@@ -157,19 +159,70 @@ class _ReplayRegistry:
         key: str,
         payload: object,
         operation: Callable[[], WebResponse],
+        terminal_failure: WebResponse | None = None,
     ) -> WebResponse:
         identity = (route, key)
-        with self._lock:
-            prior = self._records.get(identity)
-            if prior is not None:
+        deadline = time.monotonic() + _REPLAY_WAIT_SECONDS
+        record: _ReplayRecord
+        while True:
+            with self._condition:
+                prior = self._records.get(identity)
+                if prior is None:
+                    self._reserve_slot()
+                    record = _ReplayRecord(payload, None, None)
+                    self._records[identity] = record
+                    break
                 if prior.payload != payload:
                     raise IdempotencyConflict()
-                return prior.response
-            self._reserve_slot()
+                if prior.response is not None:
+                    return prior.response
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return _error(409, "request_in_progress")
+                self._condition.wait(timeout=remaining)
+
+        try:
             response = operation()
             job_id = _response_job_id(response)
-            self._records[identity] = _ReplayRecord(payload, response, job_id)
-            return response
+        except Exception as exc:
+            if terminal_failure is None:
+                self._discard(identity, record)
+                raise
+            _LOGGER.error("replay operation failed: %s", type(exc).__name__)
+            self._complete(identity, record, terminal_failure, None)
+            return terminal_failure
+        except BaseException:
+            if terminal_failure is None:
+                self._discard(identity, record)
+            else:
+                self._complete(identity, record, terminal_failure, None)
+            raise
+        self._complete(identity, record, response, job_id)
+        return response
+
+    def _complete(
+        self,
+        identity: tuple[str, str],
+        record: _ReplayRecord,
+        response: WebResponse,
+        job_id: str | None,
+    ) -> None:
+        with self._condition:
+            if self._records.get(identity) is not record:
+                raise RuntimeError("replay reservation changed")
+            record.response = response
+            record.job_id = job_id
+            self._condition.notify_all()
+
+    def _discard(
+        self,
+        identity: tuple[str, str],
+        record: _ReplayRecord,
+    ) -> None:
+        with self._condition:
+            if self._records.get(identity) is record:
+                del self._records[identity]
+            self._condition.notify_all()
 
     def _reserve_slot(self) -> None:
         if len(self._records) < self._maximum:
@@ -181,6 +234,8 @@ class _ReplayRegistry:
         raise ReplayRegistryFull()
 
     def _terminal(self, record: _ReplayRecord) -> bool:
+        if record.response is None:
+            return False
         if record.job_id is None:
             return True
         try:
@@ -389,6 +444,7 @@ class WebApplication:
                     parsed_start.freshness_profile.value,
                 ),
                 operation=lambda: self._start_session(parsed_start),
+                terminal_failure=_error(500, "internal_error"),
             )
         match = _SESSION_ACTION_ROUTE.fullmatch(request.path)
         if match is None:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -1305,6 +1306,159 @@ def test_session_creation_replays_same_key_and_rejects_changed_payload(
     assert len(services.workflow.start_calls) == 1
     assert changed.status == 409
     assert changed.json_body["error"] == {"code": "idempotency_conflict"}
+
+
+def test_session_creation_replays_failure_after_a_durable_side_effect(
+    services: SimpleNamespace,
+) -> None:
+    """A post-commit exception must never permit a duplicate session retry."""
+    services.workflow.error = RuntimeError("failed after durable session create")
+    original = _post(
+        "/api/v1/research/sessions",
+        '{"topic":"local","queries":["local"],"languages":["fr"],'
+        '"freshness_profile":"standard","idempotency_key":"start-1"}',
+    )
+
+    first = services.app.handle(original)
+    replayed = services.app.handle(original)
+    changed = services.app.handle(
+        _post(
+            "/api/v1/research/sessions",
+            '{"topic":"changed","queries":["changed"],"languages":["fr"],'
+            '"freshness_profile":"standard","idempotency_key":"start-1"}',
+        )
+    )
+
+    assert first == replayed
+    assert first.status == 500
+    assert first.json_body == {
+        "schema_version": 1,
+        "error": {"code": "internal_error"},
+    }
+    assert services.workflow.start_calls == [
+        ("local", ("local",), ("fr",), FreshnessProfile.STANDARD)
+    ]
+    assert changed.status == 409
+    assert changed.json_body["error"] == {"code": "idempotency_conflict"}
+
+
+def test_session_failure_replay_prevents_a_second_real_store_insert(
+    services: SimpleNamespace,
+    tmp_path: Path,
+) -> None:
+    store = ResearchStore(tmp_path / "research.sqlite3")
+
+    class DurableFailingWorkflow:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def start(
+            self,
+            *,
+            topic: str,
+            queries: tuple[str, ...],
+            languages: tuple[str, ...],
+            freshness_profile: FreshnessProfile,
+        ) -> object:
+            self.calls += 1
+            store.create_session(
+                session_id=f"durable-session-{self.calls}",
+                topic=topic,
+                queries=tuple(QuerySpec(query) for query in queries),
+                languages=languages,
+                freshness_profile=freshness_profile,
+                discovery_fingerprint="a" * 64,
+            )
+            raise RuntimeError("failed after durable insert")
+
+    workflow = DurableFailingWorkflow()
+    services.app = WebApplication(
+        search=services.search,
+        catalog=services.catalog,
+        workflow=workflow,  # type: ignore[arg-type]
+        research_store=store,
+        exports=services.exports,
+        jobs=services.jobs,
+        source_acquisition=services.sources,
+        package_version="0.2.0",
+    )
+    request = _post(
+        "/api/v1/research/sessions",
+        '{"topic":"local","queries":["local"],"languages":["fr"],'
+        '"freshness_profile":"standard","idempotency_key":"start-1"}',
+    )
+
+    first = services.app.handle(request)
+    replayed = services.app.handle(request)
+
+    assert first == replayed
+    assert workflow.calls == 1
+    assert len(store.list_sessions(limit=10, offset=0)) == 1
+
+
+def test_concurrent_session_failure_executes_the_side_effect_once(
+    services: SimpleNamespace,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    def fail_after_reservation() -> None:
+        entered.set()
+        release.wait(timeout=2.0)
+
+    services.workflow.before_result = fail_after_reservation
+    services.workflow.error = RuntimeError("failed after durable session create")
+    request = _post(
+        "/api/v1/research/sessions",
+        '{"topic":"local","queries":["local"],"languages":["fr"],'
+        '"freshness_profile":"standard","idempotency_key":"start-1"}',
+    )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        first = pool.submit(services.app.handle, request)
+        assert entered.wait(timeout=1.0)
+        concurrent = [pool.submit(services.app.handle, request) for _ in range(7)]
+        release.set()
+        responses = (first.result(), *(future.result() for future in concurrent))
+
+    assert all(response == responses[0] for response in responses)
+    assert responses[0].status == 500
+    assert len(services.workflow.start_calls) == 1
+
+
+def test_pending_session_replay_wait_is_bounded_and_never_reexecutes(
+    services: SimpleNamespace,
+) -> None:
+    entered = threading.Event()
+    release = threading.Event()
+
+    def block_start() -> None:
+        entered.set()
+        release.wait(timeout=2.0)
+
+    services.workflow.before_result = block_start
+    request = _post(
+        "/api/v1/research/sessions",
+        '{"topic":"local","queries":["local"],"languages":["fr"],'
+        '"freshness_profile":"standard","idempotency_key":"start-1"}',
+    )
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(services.app.handle, request)
+        assert entered.wait(timeout=1.0)
+        pending = pool.submit(services.app.handle, request)
+        try:
+            pending_response = pending.result(timeout=1.0)
+        finally:
+            release.set()
+        first_response = first.result(timeout=1.0)
+
+    replayed = services.app.handle(request)
+
+    assert pending_response.status == 409
+    assert pending_response.json_body["error"] == {"code": "request_in_progress"}
+    assert replayed == first_response
+    assert len(services.workflow.start_calls) == 1
 
 
 def test_replay_registry_is_thread_safe_for_same_session_creation(
