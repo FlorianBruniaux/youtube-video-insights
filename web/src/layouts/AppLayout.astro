@@ -1,0 +1,85 @@
+---
+import AppNav from "../components/AppNav.astro";
+import "../styles/tokens.css";
+import "../styles/global.css";
+
+interface Props {
+  title?: string;
+  description?: string;
+}
+
+const {
+  title = "YT Insights",
+  description = "Turn YouTube sources into a local, searchable research corpus.",
+} = Astro.props;
+
+const documentTitle = title === "YT Insights" ? title : `${title} | YT Insights`;
+---
+
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <meta name="description" content={description} />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="theme-color" content="#f5f7fb" />
+    <title>{documentTitle}</title>
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to content</a>
+
+    <header class="site-header">
+      <div class="shell">
+        <AppNav currentPath={Astro.url.pathname} />
+      </div>
+    </header>
+
+    <main id="main-content" class="site-main shell" tabindex="-1">
+      <slot />
+    </main>
+
+    <footer class="site-footer">
+      <div class="shell footer-inner">
+        <p>Local-first research. Your corpus stays on this machine.</p>
+        <p class="footer-status"><span aria-hidden="true"></span> Loopback only</p>
+      </div>
+    </footer>
+
+    <script>
+      import { applyStoredTheme, THEME_STORAGE_KEY } from "../lib/theme";
+
+      const root = document.documentElement;
+      const toggle = document.querySelector<HTMLButtonElement>("[data-theme-toggle]");
+      const label = toggle?.querySelector<HTMLElement>("[data-theme-label]");
+
+      function updateToggle(theme: "light" | "dark"): void {
+        if (!toggle || !label) return;
+
+        const dark = theme === "dark";
+        toggle.setAttribute("aria-pressed", String(dark));
+        toggle.setAttribute("aria-label", dark ? "Use light theme" : "Use dark theme");
+        label.textContent = dark ? "Light" : "Dark";
+      }
+
+      let theme: "light" | "dark" = "light";
+      try {
+        theme = applyStoredTheme(window.localStorage, root);
+      } catch {
+        root.dataset.theme = theme;
+      }
+      updateToggle(theme);
+
+      toggle?.addEventListener("click", () => {
+        theme = root.dataset.theme === "dark" ? "light" : "dark";
+        root.dataset.theme = theme;
+        try {
+          window.localStorage.setItem(THEME_STORAGE_KEY, theme);
+        } catch {
+          // The selected theme still applies for this page when storage is unavailable.
+        }
+        updateToggle(theme);
+      });
+    </script>
+  </body>
+</html>

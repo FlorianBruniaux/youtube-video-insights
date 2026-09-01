@@ -1,0 +1,55 @@
+---
+interface Props {
+  currentPath: string;
+}
+
+const { currentPath } = Astro.props;
+
+const links = [
+  { href: "/", label: "Overview", exact: true },
+  { href: "/research/new/", label: "Research", section: "/research/" },
+  { href: "/search/", label: "Corpus", section: "/search" },
+  { href: "/sources/", label: "Sources", section: "/sources" },
+  { href: "/exports/", label: "Exports", section: "/exports" },
+] as const;
+
+function isActive(link: (typeof links)[number]): boolean {
+  if ("exact" in link) {
+    return currentPath === link.href;
+  }
+
+  return currentPath.startsWith(link.section);
+}
+---
+
+<nav class="app-nav" aria-label="Primary navigation">
+  <a class="brand" href="/" aria-label="YT Insights overview">
+    <span class="brand-mark" aria-hidden="true">YT</span>
+    <span>Insights</span>
+  </a>
+
+  <div class="nav-links">
+    {
+      links.map((link) => (
+        <a
+          class:list={["nav-link", { "nav-link-active": isActive(link) }]}
+          href={link.href}
+          aria-current={isActive(link) ? "page" : undefined}
+        >
+          {link.label}
+        </a>
+      ))
+    }
+  </div>
+
+  <button
+    class="theme-toggle"
+    type="button"
+    data-theme-toggle
+    aria-pressed="false"
+    aria-label="Use dark theme"
+  >
+    <span class="theme-toggle-icon" aria-hidden="true">◐</span>
+    <span data-theme-label>Dark</span>
+  </button>
+</nav>
