@@ -483,8 +483,9 @@ uv run yt-insights index --dry-run
 .venv/bin/python scripts/smoke_wheel.py --offline
 ```
 
-Le vérificateur construit Astro dans un répertoire temporaire hors checkout et
-compare cet inventaire aux assets Python déjà présents. Pour modifier le
+Le vérificateur copie les entrées frontend déclarées dans un checkout temporaire,
+y construit Astro, puis compare cet inventaire aux assets Python déjà présents.
+Les sources générées ou injectées restent ainsi hors du dépôt. Pour modifier le
 frontend, lancez `pnpm --dir web build` explicitement, inspectez les assets
 générés, puis relancez le vérificateur avant le reste des gates.
 

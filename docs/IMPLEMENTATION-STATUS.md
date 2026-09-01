@@ -8,7 +8,7 @@
 
 **GitHub CI hébergée :** `PASS` sur `000e9b4`
 
-Le lot web courant a passé localement `1 088` tests Python et `10` subtests,
+Le lot web courant a passé localement `1 089` tests Python et `10` subtests,
 `155` tests frontend, `4` parcours Playwright, Ruff sur `src tests scripts`,
 Mypy sur les 53 fichiers source, Astro Check sur 51 fichiers et
 `git diff --check`. Le [run GitHub Actions 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
@@ -114,7 +114,7 @@ les candidats à acquérir.
 | Claude Code frais | `UNKNOWN` | Chargement statique seulement |
 | Codex frais | `PASS` | Processus éphémère read-only: skill projet chargé, deux décisions et limites 10/5 restituées |
 | Activation globale | `false` | Pas de promotion du quatrième skill ou du runtime |
-| Qualité locale du lot web courant | `PASS` | 1 088 tests Python + 10 subtests, 155 tests frontend, 4 parcours Playwright, Ruff complet, Mypy sur 53 fichiers et diff-check |
+| Qualité locale du lot web courant | `PASS` | 1 089 tests Python + 10 subtests, 155 tests frontend, 4 parcours Playwright, Ruff complet, Mypy sur 53 fichiers et diff-check |
 | GitHub CI hébergée | `PASS` sur `000e9b4` | [Run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777), Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 Les gates externes encore `UNKNOWN` bloquent les affirmations correspondantes

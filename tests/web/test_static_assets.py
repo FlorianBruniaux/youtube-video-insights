@@ -247,7 +247,11 @@ def test_web_build_verifier_builds_outside_checkout_and_leaves_success_clean(
     before = module.snapshot_tree(repository, relative_to=repository)
     output_roots: list[Path] = []
 
-    def build(output_root: Path) -> subprocess.CompletedProcess[list[str]]:
+    def build(
+        staging_root: Path,
+        output_root: Path,
+    ) -> subprocess.CompletedProcess[list[str]]:
+        assert staging_root != repository
         output_roots.append(output_root)
         assert not output_root.is_relative_to(repository)
         (output_root / "index.html").write_text("index-v1", encoding="utf-8")
@@ -272,7 +276,11 @@ def test_web_build_verifier_reports_complete_diff_without_mutating_checkout(
     before = module.snapshot_tree(repository, relative_to=repository)
     output_roots: list[Path] = []
 
-    def build(output_root: Path) -> subprocess.CompletedProcess[list[str]]:
+    def build(
+        staging_root: Path,
+        output_root: Path,
+    ) -> subprocess.CompletedProcess[list[str]]:
+        assert staging_root != repository
         output_roots.append(output_root)
         (output_root / "index.html").write_text("index-v2", encoding="utf-8")
         (output_root / "extra.html").write_text("extra", encoding="utf-8")
@@ -301,7 +309,11 @@ def test_web_build_verifier_cleans_temporary_output_after_build_failure(
     before = module.snapshot_tree(repository, relative_to=repository)
     output_roots: list[Path] = []
 
-    def build(output_root: Path) -> subprocess.CompletedProcess[list[str]]:
+    def build(
+        staging_root: Path,
+        output_root: Path,
+    ) -> subprocess.CompletedProcess[list[str]]:
+        assert staging_root != repository
         output_roots.append(output_root)
         (output_root / "partial.html").write_text("partial", encoding="utf-8")
         return subprocess.CompletedProcess([], 7, "", "failure")
@@ -314,6 +326,38 @@ def test_web_build_verifier_cleans_temporary_output_after_build_failure(
     )
     assert module.snapshot_tree(repository, relative_to=repository) == before
     assert not output_roots[0].exists()
+
+
+def test_web_build_verifier_isolates_runner_source_mutations(
+    tmp_path: Path,
+) -> None:
+    module = _load_build_verifier()
+    repository = _fixture_repository(tmp_path)
+    source = repository / "web" / "src" / "index.ts"
+    source.parent.mkdir()
+    source.write_text("export const original = true;", encoding="utf-8")
+    before = module.snapshot_tree(repository, relative_to=repository)
+    staging_roots: list[Path] = []
+
+    def build(
+        staging_root: Path,
+        output_root: Path,
+    ) -> subprocess.CompletedProcess[list[str]]:
+        staging_roots.append(staging_root)
+        injected = staging_root / "web" / "src" / "injected.ts"
+        injected.write_text("export const injected = true;", encoding="utf-8")
+        (output_root / "index.html").write_text("index-v1", encoding="utf-8")
+        (output_root / "_astro").mkdir()
+        (output_root / "_astro" / "app.12345678.js").write_text(
+            "app-v1", encoding="utf-8"
+        )
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    assert module.verify_build(repository, run_build=build) == 0
+    assert not (repository / "web" / "src" / "injected.ts").exists()
+    assert module.snapshot_tree(repository, relative_to=repository) == before
+    assert len(staging_roots) == 1
+    assert not staging_roots[0].exists()
 
 
 def _load_build_verifier():

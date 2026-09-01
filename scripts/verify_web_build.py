@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,7 +14,16 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STATIC_ROOT = REPOSITORY_ROOT / "src" / "yt_insights" / "web" / "static"
-BuildRunner = Callable[[Path], subprocess.CompletedProcess[object]]
+FRONTEND_INPUTS = (
+    "src",
+    "public",
+    "astro.config.mjs",
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+    "tsconfig.json",
+)
+BuildRunner = Callable[[Path, Path], subprocess.CompletedProcess[object]]
 
 
 def snapshot_tree(root: Path, *, relative_to: Path) -> dict[str, str]:
@@ -47,23 +57,41 @@ def inventory_diff(
     }
 
 
+def stage_frontend(repository_root: Path, staging_root: Path) -> None:
+    """Copy build inputs while keeping generated files and local config out."""
+    source_root = repository_root / "web"
+    staged_web = staging_root / "web"
+    staged_web.mkdir(parents=True)
+    for relative in FRONTEND_INPUTS:
+        source = source_root / relative
+        if not source.exists():
+            continue
+        destination = staged_web / relative
+        if source.is_dir():
+            shutil.copytree(source, destination, symlinks=True)
+        else:
+            shutil.copy2(source, destination)
+    dependencies = source_root / "node_modules"
+    if dependencies.is_dir():
+        (staged_web / "node_modules").symlink_to(
+            dependencies.resolve(),
+            target_is_directory=True,
+        )
+
+
 def _run_astro_build(
-    repository_root: Path, output_root: Path
+    staging_root: Path, output_root: Path
 ) -> subprocess.CompletedProcess[object]:
     environment = os.environ.copy()
     environment["ASTRO_TELEMETRY_DISABLED"] = "1"
     return subprocess.run(
         [
-            "pnpm",
-            "--dir",
-            "web",
-            "exec",
-            "astro",
+            str(staging_root / "web" / "node_modules" / ".bin" / "astro"),
             "build",
             "--outDir",
             str(output_root),
         ],
-        cwd=repository_root,
+        cwd=staging_root / "web",
         env=environment,
         text=True,
         capture_output=True,
@@ -79,11 +107,14 @@ def verify_build(
     """Build outside the checkout and compare the complete static inventory."""
     static_root = repository_root / "src" / "yt_insights" / "web" / "static"
     committed = snapshot_tree(static_root, relative_to=static_root)
-    runner = run_build or (lambda output: _run_astro_build(repository_root, output))
+    runner = run_build or _run_astro_build
     with tempfile.TemporaryDirectory(prefix="yt-insights-web-build-") as directory:
-        output_root = Path(directory) / "static"
+        temporary_root = Path(directory)
+        staging_root = temporary_root / "checkout"
+        output_root = temporary_root / "static"
+        stage_frontend(repository_root, staging_root)
         output_root.mkdir()
-        result = runner(output_root)
+        result = runner(staging_root, output_root)
         if result.returncode != 0:
             print(
                 "web build failed; run `pnpm --dir web exec astro build` for diagnostics",

@@ -54,7 +54,7 @@ des quatre couches et du corpus source.
 | Claude Code frais | `UNKNOWN` | Asset statique validé, pas de session fraîche probante |
 | Codex frais | `PASS` | Codex CLI 0.150.1 éphémère, config utilisateur et rules ignorées, sandbox read-only; skill local chargé et deux confirmations restituées |
 | Activation globale | `false` | Aucune installation globale du quatrième skill ou du runtime |
-| Qualité locale | `PASS` | 1 088 tests Python + 10 subtests, 155 tests frontend, 4 parcours Playwright, Ruff complet, Mypy sur 53 fichiers source, Astro Check sur 51 fichiers et diff-check |
+| Qualité locale | `PASS` | 1 089 tests Python + 10 subtests, 155 tests frontend, 4 parcours Playwright, Ruff complet, Mypy sur 53 fichiers source, Astro Check sur 51 fichiers et diff-check |
 | GitHub CI hébergée | `PASS` sur `000e9b4` | [Run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777) : Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 Un `UNKNOWN` ne bloque pas une acquisition locale de 1 à 5 IDs explicitement
@@ -71,7 +71,7 @@ globale.
 | 4 | Préparer un candidat global inerte | Préimages, diff expurgé, digest, rollback et approbation exacte |
 | 5 | Tester des sessions de recherche réelles | Dossiers utiles, limites de couverture et frictions consignées |
 
-La validation locale du lot web a passé `1 088` tests Python et `10` subtests,
+La validation locale du lot web a passé `1 089` tests Python et `10` subtests,
 `155` tests frontend, `4` parcours Playwright, Ruff sur `src tests scripts`,
 Mypy sur les 53 fichiers de `src`, Astro Check sur 51 fichiers et
 `git diff --check`. Ce résultat ne signifie pas que `mypy --strict` passe. Le

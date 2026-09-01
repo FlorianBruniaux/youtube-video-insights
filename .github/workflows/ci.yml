@@ -50,7 +50,13 @@ jobs:
         run: python3 scripts/verify_web_build.py
 
       - name: Assert verifier left the checkout unchanged
-        run: git diff --exit-code
+        run: |
+          set -eu
+          checkout_status="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$checkout_status" ]; then
+            printf '%s\n' "$checkout_status"
+            exit 1
+          fi
 
       - name: Test frontend units
         run: pnpm --dir web test
@@ -62,7 +68,13 @@ jobs:
         run: pnpm --dir web test:e2e
 
       - name: Assert frontend gates left the checkout unchanged
-        run: git diff --exit-code
+        run: |
+          set -eu
+          checkout_status="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$checkout_status" ]; then
+            printf '%s\n' "$checkout_status"
+            exit 1
+          fi
 
   quality:
     name: Quality (Python ${{ matrix.python-version }})

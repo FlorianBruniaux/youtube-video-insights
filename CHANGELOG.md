@@ -19,7 +19,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Deterministic browser delivery gates: strict fixture-backed Playwright flows,
   static CSP-oriented scans, semantic HTML assertions, Python-to-TypeScript
   fixture verification, reproducible generated-asset hashes, and wheel content
-  checks. Node.js 24.16.0 and pnpm 11.23.0 are contributor-only build tools.
+  checks. The verifier builds from a temporary copy of the frontend inputs, and
+  CI rejects tracked or untracked checkout mutations. Node.js 24.16.0 and pnpm
+  11.23.0 are contributor-only build tools.
 - Durable `yt-insights research` workflow with catalogue-first assessment,
   deterministic freshness profiles, mandatory sufficiency questions, revisions,
   idempotent decisions, resume, bounded retry, and a separate
@@ -39,7 +41,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `git diff --check`. The initial local web delivery at `8ee6183` passed
   `1,073` Python tests plus `10` subtests, `155` frontend tests, `3` Playwright
   flows, and Mypy on 53 source files. This review pass raises the current local
-  gates to `1,088` Python tests and `4` Playwright flows, with `155` frontend
+  gates to `1,089` Python tests and `4` Playwright flows, with `155` frontend
   tests and the same 53 Mypy-checked source files. Mypy was not run with
   `--strict` in these snapshots. Hosted GitHub Actions
   [run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)

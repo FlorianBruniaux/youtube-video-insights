@@ -879,7 +879,7 @@ The cumulative-research snapshot before the web interface passed `844` tests
 plus `10` subtests, full Ruff, Mypy on 44 source files, and `git diff --check`.
 The initial local web delivery at `8ee6183` passed `1,073` Python tests plus
 `10` subtests, `155` frontend tests, `3` Playwright flows, and Mypy on 53 source
-files. The current review pass raises those local gates to `1,088` Python tests
+files. The current review pass raises those local gates to `1,089` Python tests
 and `4` Playwright flows, with the same `155` frontend tests and 53 source files
 checked by Mypy. None of these results is a `mypy --strict` claim. Hosted GitHub Actions
 [run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
@@ -1017,9 +1017,11 @@ uv lock --check
 git diff --check
 ```
 
-`verify_web_build.py` builds into a temporary directory outside the checkout.
-When changing the frontend, run `pnpm --dir web build` explicitly to refresh
-the packaged assets, inspect them, then run the verifier before the other gates.
+`verify_web_build.py` copies the declared frontend inputs into a temporary
+checkout and builds there. This keeps generated or injected source files out of
+the repository. CI also rejects tracked and untracked checkout mutations. When
+changing the frontend, run `pnpm --dir web build` explicitly to refresh the
+packaged assets, inspect them, then run the verifier before the other gates.
 
 ---
 
