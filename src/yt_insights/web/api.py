@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
+from urllib.parse import parse_qs, urlsplit
 
 from yt_insights.acquisition import (
     AcquisitionPlan,
@@ -39,6 +40,7 @@ _MIN_SQLITE_INTEGER = -(2**63)
 _MAX_SQLITE_INTEGER = 2**63 - 1
 _MAX_STRUCTURED_BYTES = 24 * 1024
 _MAX_SAFE_PLAN_BYTES = 20 * 1024
+_MAX_VIDEO_URL_LENGTH = 2_048
 _MAX_SELECTED_VIDEOS = 1_000
 _MAX_PLAN_IDENTITY_BYTES = 524_288
 _MAX_RETAINED_IDENTITY_BYTES = 4_194_304
@@ -46,6 +48,9 @@ _MAX_PREPARED_PLANS = 100
 _SESSION_ID = re.compile(r"[A-Za-z0-9_-]{1,128}")
 _JOB_ID = re.compile(r"[A-Za-z0-9_-]{1,200}")
 _VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
+_YOUTUBE_VIDEO_HOSTS = frozenset(
+    {"youtube.com", "www.youtube.com", "m.youtube.com"}
+)
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _LANGUAGE = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 _PUBLIC_ACQUISITION_ERRORS = frozenset(
@@ -466,15 +471,79 @@ class SourceAcquisitionFacade:
 
 
 def _selected_urls_match_video_ids(plan: AcquisitionPlan) -> bool:
-    """Require the exact canonical watch URL for every disclosed video ID."""
+    """Require one unambiguous supported URL for every exact disclosed ID."""
     return all(
-        url == f"https://www.youtube.com/watch?v={video.video_id}"
+        isinstance(video.video_id, str)
+        and _VIDEO_ID.fullmatch(video.video_id) is not None
+        and _single_video_identity(url) == video.video_id
         for video, url in zip(
             plan.selected_videos,
             plan.selected_urls,
             strict=True,
         )
     )
+
+
+def _single_video_identity(url: object) -> str | None:
+    """Extract an exact video ID only from unambiguous supported URL forms."""
+    if (
+        not isinstance(url, str)
+        or url != url.strip()
+        or len(url) > _MAX_VIDEO_URL_LENGTH
+        or any(unicodedata.category(character) == "Cc" for character in url)
+    ):
+        return None
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return None
+    if (
+        parsed.scheme not in {"http", "https"}
+        or parsed.username is not None
+        or parsed.password is not None
+        or port is not None
+        or parsed.fragment
+    ):
+        return None
+    host = (parsed.hostname or "").lower()
+    try:
+        query = parse_qs(
+            parsed.query,
+            keep_blank_values=True,
+            max_num_fields=20,
+        )
+    except ValueError:
+        return None
+    if any(
+        key.lower() in {"v", "list"} and key not in {"v", "list"}
+        for key in query
+    ):
+        return None
+    video_values = tuple(
+        value
+        for key, values in query.items()
+        if key == "v"
+        for value in values
+    )
+    if "list" in query:
+        return None
+
+    video_id: str | None = None
+    path = parsed.path.rstrip("/") or "/"
+    if host in _YOUTUBE_VIDEO_HOSTS and path == "/watch":
+        if len(video_values) == 1:
+            video_id = video_values[0]
+    elif host == "youtu.be" and re.fullmatch(r"/[A-Za-z0-9_-]{11}", path):
+        if not video_values:
+            video_id = path[1:]
+    elif host in _YOUTUBE_VIDEO_HOSTS:
+        path_match = re.fullmatch(r"/(?:shorts|live)/([A-Za-z0-9_-]{11})", path)
+        if path_match is not None and not video_values:
+            video_id = path_match.group(1)
+    if video_id is None or _VIDEO_ID.fullmatch(video_id) is None:
+        return None
+    return video_id
 
 
 def _query_object(

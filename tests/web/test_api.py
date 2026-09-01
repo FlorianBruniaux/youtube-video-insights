@@ -585,6 +585,135 @@ def test_source_facade_rejects_a_url_for_a_different_video_id(
     assert executed == []
 
 
+def test_source_facade_rejects_an_injected_video_id_even_when_url_text_matches(
+    tmp_path: Path,
+) -> None:
+    """An invalid ID must not smuggle a second v parameter into acquisition."""
+    paths = DataPaths.from_root(tmp_path / "private-data")
+    base = _source_plan(paths)
+    injected_id = "abc123DEF45&v=zyx987WVUT0"
+    injected_video = replace(base.selected_videos[0], video_id=injected_id)
+    unsafe = replace(
+        base,
+        selected_videos=(injected_video,),
+        selected_urls=(f"https://www.youtube.com/watch?v={injected_id}",),
+    )
+    facade = SourceAcquisitionFacade(
+        paths,
+        classify=lambda source: SourceKind.CHANNEL,
+        fetch=lambda source: VideoListResult(),
+        build=lambda **kwargs: unsafe,
+    )
+
+    payload = facade.preview(
+        parse_source_preview(
+            _json_body({"source": base.source, "language": "fr", "analyze": False})
+        )
+    )
+
+    assert payload == {"schema_version": 1, "error": {"code": "plan_too_large"}}
+
+
+def test_source_facade_rejects_duplicate_video_query_parameters(
+    tmp_path: Path,
+) -> None:
+    paths = DataPaths.from_root(tmp_path / "private-data")
+    base = _source_plan(paths)
+    unsafe = replace(
+        base,
+        selected_urls=(
+            "https://www.youtube.com/watch?v=abc123DEF45&v=abc123DEF45",
+        ),
+    )
+    facade = SourceAcquisitionFacade(
+        paths,
+        classify=lambda source: SourceKind.CHANNEL,
+        fetch=lambda source: VideoListResult(),
+        build=lambda **kwargs: unsafe,
+    )
+
+    payload = facade.preview(
+        parse_source_preview(
+            _json_body({"source": base.source, "language": "fr", "analyze": False})
+        )
+    )
+
+    assert payload == {"schema_version": 1, "error": {"code": "plan_too_large"}}
+
+
+@pytest.mark.parametrize(
+    "selected_url",
+    [
+        "https://www.youtube.com/watch?v=abc123DEF45",
+        "https://youtube.com/watch?v=abc123DEF45&t=30s",
+        "https://m.youtube.com/watch?v=abc123DEF45&feature=share",
+        "https://youtu.be/abc123DEF45?si=share-token",
+        "https://www.youtube.com/shorts/abc123DEF45?feature=share",
+        "https://www.youtube.com/live/abc123DEF45?feature=share",
+    ],
+)
+def test_source_facade_accepts_supported_single_video_url_shapes(
+    tmp_path: Path,
+    selected_url: str,
+) -> None:
+    """Equivalent single-video URLs must authorize exactly the disclosed ID."""
+    paths = DataPaths.from_root(tmp_path / "private-data")
+    base = _source_plan(paths)
+    plan = replace(base, selected_urls=(selected_url,))
+    executed: list[AcquisitionPlan] = []
+    facade = SourceAcquisitionFacade(
+        paths,
+        classify=lambda source: SourceKind.CHANNEL,
+        fetch=lambda source: VideoListResult(),
+        build=lambda **kwargs: plan,
+        execute=lambda value: executed.append(value) or AcquisitionReport(0, 0, 0, ()),
+    )
+
+    payload = facade.preview(
+        parse_source_preview(
+            _json_body({"source": base.source, "language": "fr", "analyze": False})
+        )
+    )
+    operation = facade.prepare_acquisition(str(payload["fingerprint"]))
+
+    operation()
+
+    assert executed == [plan]
+
+
+@pytest.mark.parametrize(
+    "selected_url",
+    [
+        "https://www.youtube.com/watch?v=abc123DEF45#v=zyx987WVUT0",
+        "https://www.youtube.com/watch?v=abc123DEF45&list=PL123",
+        "https://www.youtube.com/watch?v=abc123DEF45&V=zyx987WVUT0",
+        "https://youtu.be/abc123DEF45?v=zyx987WVUT0",
+        "https://www.youtube.com/shorts/abc123DEF45?v=zyx987WVUT0",
+    ],
+)
+def test_source_facade_rejects_ambiguous_single_video_url_shapes(
+    tmp_path: Path,
+    selected_url: str,
+) -> None:
+    paths = DataPaths.from_root(tmp_path / "private-data")
+    base = _source_plan(paths)
+    unsafe = replace(base, selected_urls=(selected_url,))
+    facade = SourceAcquisitionFacade(
+        paths,
+        classify=lambda source: SourceKind.CHANNEL,
+        fetch=lambda source: VideoListResult(),
+        build=lambda **kwargs: unsafe,
+    )
+
+    payload = facade.preview(
+        parse_source_preview(
+            _json_body({"source": base.source, "language": "fr", "analyze": False})
+        )
+    )
+
+    assert payload == {"schema_version": 1, "error": {"code": "plan_too_large"}}
+
+
 def test_source_facade_rejects_an_oversized_canonical_plan_before_caching(
     tmp_path: Path,
 ) -> None:
