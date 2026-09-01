@@ -34,12 +34,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and per-item `video_id`, status, error code, and source SHA-256. Partial-batch
   retry resumes only `failed_retryable` items and does not reacquire recorded
   terminal outcomes.
-- Final local quality validation: `844` tests plus `10` subtests, full Ruff,
-  Mypy on all 44 source files, and `git diff --check` passed. Mypy was not run
-  with `--strict`. Hosted GitHub Actions
+- Cumulative-research baseline validation before the web delivery: `844` tests
+  plus `10` subtests, full Ruff, Mypy on 44 source files, and
+  `git diff --check`. The initial local web delivery at `8ee6183` passed
+  `1,073` Python tests plus `10` subtests, `155` frontend tests, `3` Playwright
+  flows, and Mypy on 53 source files. This review pass raises the current local
+  gates to `1,088` Python tests and `4` Playwright flows, with `155` frontend
+  tests and the same 53 Mypy-checked source files. Mypy was not run with
+  `--strict` in these snapshots. Hosted GitHub Actions
   [run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
   passed on `000e9b4`, including Python 3.11, Python 3.12, and
-  packaging/runtime. This hosted evidence applies only to that SHA.
+  packaging/runtime. This hosted evidence applies only to that SHA and not to
+  the local web delivery.
 - Deterministic research dossiers with `dossier.md` and `manifest.json`, safe
   absolute destinations, source hashes, timestamped evidence, coverage limits,
   and no generated-dossier ingestion into source indexes.

@@ -875,12 +875,16 @@ YouTube research and the fresh Claude Code workflow canary remain `UNKNOWN`.
 The project-local Codex canary is `PASS`; this is not a global-installation
 claim.
 
-The assembled local validation passed `844` tests plus `10` subtests, full
-Ruff, Mypy on the 44 source files, and `git diff --check`. This is not a
-`mypy --strict` claim. Hosted GitHub Actions
+The cumulative-research snapshot before the web interface passed `844` tests
+plus `10` subtests, full Ruff, Mypy on 44 source files, and `git diff --check`.
+The initial local web delivery at `8ee6183` passed `1,073` Python tests plus
+`10` subtests, `155` frontend tests, `3` Playwright flows, and Mypy on 53 source
+files. The current review pass raises those local gates to `1,088` Python tests
+and `4` Playwright flows, with the same `155` frontend tests and 53 source files
+checked by Mypy. None of these results is a `mypy --strict` claim. Hosted GitHub Actions
 [run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
 passed on `000e9b4`: Python 3.11, Python 3.12, and packaging/runtime all passed.
-That evidence is bound to `000e9b4` and does not validate later commits. Human
+That hosted evidence is bound to `000e9b4` and does not validate later commits. Human
 relevance, live YouTube, and the fresh Claude Code canary remain `UNKNOWN`.
 The project-local Codex canary is `PASS`, and global activation remains
 `false`.
@@ -1002,10 +1006,9 @@ following checks before submitting a change:
 
 ```bash
 pnpm --dir web install --frozen-lockfile
+python scripts/verify_web_build.py
 pnpm --dir web test
 pnpm --dir web check
-pnpm --dir web build
-python scripts/verify_web_build.py
 pnpm --dir web test:e2e
 uv run --extra mcp --extra dev pytest -q
 uv run --extra dev ruff check src tests scripts
@@ -1013,6 +1016,10 @@ uv run --extra dev mypy src
 uv lock --check
 git diff --check
 ```
+
+`verify_web_build.py` builds into a temporary directory outside the checkout.
+When changing the frontend, run `pnpm --dir web build` explicitly to refresh
+the packaged assets, inspect them, then run the verifier before the other gates.
 
 ---
 

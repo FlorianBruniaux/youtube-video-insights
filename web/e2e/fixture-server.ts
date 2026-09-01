@@ -13,9 +13,15 @@ export interface RecordedMutation {
   readonly token: string | null;
 }
 
+export interface RecordedRead {
+  readonly path: string;
+  readonly query: Readonly<Record<string, readonly string[]>>;
+}
+
 export interface FixtureServer {
   readonly origin: string;
   readonly mutations: RecordedMutation[];
+  readonly reads: RecordedRead[];
   resetResearch(mode?: ResearchMode): void;
   close(): Promise<void>;
 }
@@ -28,12 +34,16 @@ const HASH_C = "c".repeat(64);
 
 export async function startFixtureServer(): Promise<FixtureServer> {
   const mutations: RecordedMutation[] = [];
+  const reads: RecordedRead[] = [];
   let researchMode: ResearchMode = "sufficiency";
 
   const server = createServer(async (request, response) => {
     try {
       const url = new URL(request.url ?? "/", "http://127.0.0.1");
       if (url.pathname.startsWith("/api/v1/")) {
+        if (request.method === "GET") {
+          reads.push({ path: url.pathname, query: queryRecord(url.searchParams) });
+        }
         await serveApi(request, response, url, mutations, () => researchMode, (mode) => {
           researchMode = mode;
         });
@@ -57,9 +67,11 @@ export async function startFixtureServer(): Promise<FixtureServer> {
   return {
     origin: `http://127.0.0.1:${address.port}`,
     mutations,
+    reads,
     resetResearch(mode = "sufficiency") {
       researchMode = mode;
       mutations.splice(0);
+      reads.splice(0);
     },
     close: () => new Promise<void>((resolveClose, reject) => {
       server.close((error) => error ? reject(error) : resolveClose());
@@ -96,6 +108,13 @@ async function serveApi(
       return;
     }
     if (path === "/api/v1/search") {
+      if (!isExactSearch(url.searchParams)) {
+        json(response, 400, {
+          schema_version: 1,
+          error: { code: "invalid_request" },
+        });
+        return;
+      }
       json(response, 200, searchResponse());
       return;
     }
@@ -182,6 +201,21 @@ async function serveApi(
     return;
   }
   json(response, 404, { schema_version: 1, error: { code: "not_found" } });
+}
+
+function isExactSearch(parameters: URLSearchParams): boolean {
+  return parameters.toString() ===
+    "q=local+inference&channel=local-ai&language=en&limit=20";
+}
+
+function queryRecord(
+  parameters: URLSearchParams,
+): Readonly<Record<string, readonly string[]>> {
+  const result: Record<string, string[]> = {};
+  for (const key of [...new Set(parameters.keys())].sort()) {
+    result[key] = parameters.getAll(key);
+  }
+  return result;
 }
 
 async function serveStatic(response: ServerResponse, requestedPath: string): Promise<void> {

@@ -7,20 +7,13 @@ import hashlib
 import os
 import subprocess
 import sys
+import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 STATIC_ROOT = REPOSITORY_ROOT / "src" / "yt_insights" / "web" / "static"
-WEB_ROOT = REPOSITORY_ROOT / "web"
-SOURCE_INPUTS = (
-    WEB_ROOT / "src",
-    WEB_ROOT / "public",
-    WEB_ROOT / "astro.config.mjs",
-    WEB_ROOT / "package.json",
-    WEB_ROOT / "pnpm-lock.yaml",
-    WEB_ROOT / "pnpm-workspace.yaml",
-    WEB_ROOT / "tsconfig.json",
-)
+BuildRunner = Callable[[Path], subprocess.CompletedProcess[object]]
 
 
 def snapshot_tree(root: Path, *, relative_to: Path) -> dict[str, str]:
@@ -37,55 +30,80 @@ def snapshot_tree(root: Path, *, relative_to: Path) -> dict[str, str]:
     }
 
 
-def snapshot_inputs() -> dict[str, str]:
-    inventory: dict[str, str] = {}
-    for root in SOURCE_INPUTS:
-        inventory.update(snapshot_tree(root, relative_to=REPOSITORY_ROOT))
-    return inventory
+def inventory_diff(
+    committed: dict[str, str], built: dict[str, str]
+) -> dict[str, tuple[str, ...]]:
+    """Classify every relative output difference without exposing host paths."""
+    return {
+        "added": tuple(sorted(built.keys() - committed.keys())),
+        "deleted": tuple(sorted(committed.keys() - built.keys())),
+        "modified": tuple(
+            sorted(
+                path
+                for path in committed.keys() & built.keys()
+                if committed[path] != built[path]
+            )
+        ),
+    }
 
 
-def changed_paths(before: dict[str, str], after: dict[str, str]) -> tuple[str, ...]:
-    return tuple(
-        sorted(
-            path
-            for path in before.keys() | after.keys()
-            if before.get(path) != after.get(path)
-        )
-    )
-
-
-def main() -> int:
-    before_static = snapshot_tree(STATIC_ROOT, relative_to=REPOSITORY_ROOT)
-    before_inputs = snapshot_inputs()
+def _run_astro_build(
+    repository_root: Path, output_root: Path
+) -> subprocess.CompletedProcess[object]:
     environment = os.environ.copy()
     environment["ASTRO_TELEMETRY_DISABLED"] = "1"
-    result = subprocess.run(
-        ["pnpm", "--dir", "web", "build"],
-        cwd=REPOSITORY_ROOT,
+    return subprocess.run(
+        [
+            "pnpm",
+            "--dir",
+            "web",
+            "exec",
+            "astro",
+            "build",
+            "--outDir",
+            str(output_root),
+        ],
+        cwd=repository_root,
         env=environment,
         text=True,
         capture_output=True,
         check=False,
     )
-    if result.returncode != 0:
-        print("web build failed; run `pnpm --dir web build` for diagnostics", file=sys.stderr)
-        return 2
-    after_static = snapshot_tree(STATIC_ROOT, relative_to=REPOSITORY_ROOT)
-    after_inputs = snapshot_inputs()
-    source_changes = changed_paths(before_inputs, after_inputs)
-    build_changes = changed_paths(before_static, after_static)
-    if source_changes:
-        print("web build mutated source inputs:", file=sys.stderr)
-        for path in source_changes:
-            print(path, file=sys.stderr)
-    if build_changes:
-        print("committed web build is not reproducible:", file=sys.stderr)
-        for path in build_changes:
-            print(path, file=sys.stderr)
-    if source_changes or build_changes:
-        return 1
-    print(f"web build verified: {len(after_static)} files")
-    return 0
+
+
+def verify_build(
+    repository_root: Path = REPOSITORY_ROOT,
+    *,
+    run_build: BuildRunner | None = None,
+) -> int:
+    """Build outside the checkout and compare the complete static inventory."""
+    static_root = repository_root / "src" / "yt_insights" / "web" / "static"
+    committed = snapshot_tree(static_root, relative_to=static_root)
+    runner = run_build or (lambda output: _run_astro_build(repository_root, output))
+    with tempfile.TemporaryDirectory(prefix="yt-insights-web-build-") as directory:
+        output_root = Path(directory) / "static"
+        output_root.mkdir()
+        result = runner(output_root)
+        if result.returncode != 0:
+            print(
+                "web build failed; run `pnpm --dir web exec astro build` for diagnostics",
+                file=sys.stderr,
+            )
+            return 2
+        built = snapshot_tree(output_root, relative_to=output_root)
+        differences = inventory_diff(committed, built)
+        if any(differences.values()):
+            print("committed web build is not reproducible:", file=sys.stderr)
+            for category in ("added", "deleted", "modified"):
+                for path in differences[category]:
+                    print(f"{category}: {path}", file=sys.stderr)
+            return 1
+        print(f"web build verified: {len(built)} files")
+        return 0
+
+
+def main() -> int:
+    return verify_build()
 
 
 if __name__ == "__main__":

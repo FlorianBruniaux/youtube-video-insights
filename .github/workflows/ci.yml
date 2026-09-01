@@ -46,20 +46,23 @@ jobs:
       - name: Install Playwright Chromium
         run: pnpm --dir web exec playwright install --with-deps chromium
 
+      - name: Verify committed frontend assets reproducibly
+        run: python3 scripts/verify_web_build.py
+
+      - name: Assert verifier left the checkout unchanged
+        run: git diff --exit-code
+
       - name: Test frontend units
         run: pnpm --dir web test
 
       - name: Check Astro and TypeScript
         run: pnpm --dir web check
 
-      - name: Build committed frontend assets
-        run: pnpm --dir web build
-
-      - name: Verify reproducible frontend assets
-        run: python3 scripts/verify_web_build.py
-
       - name: Test local browser flow
         run: pnpm --dir web test:e2e
+
+      - name: Assert frontend gates left the checkout unchanged
+        run: git diff --exit-code
 
   quality:
     name: Quality (Python ${{ matrix.python-version }})

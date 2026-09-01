@@ -472,10 +472,9 @@ LLM :
 
 ```bash
 pnpm --dir web install --frozen-lockfile
+python scripts/verify_web_build.py
 pnpm --dir web test
 pnpm --dir web check
-pnpm --dir web build
-python scripts/verify_web_build.py
 pnpm --dir web test:e2e
 uv run --extra mcp --extra dev pytest -q
 uv lock --check
@@ -483,6 +482,11 @@ git diff --check
 uv run yt-insights index --dry-run
 .venv/bin/python scripts/smoke_wheel.py --offline
 ```
+
+Le vérificateur construit Astro dans un répertoire temporaire hors checkout et
+compare cet inventaire aux assets Python déjà présents. Pour modifier le
+frontend, lancez `pnpm --dir web build` explicitement, inspectez les assets
+générés, puis relancez le vérificateur avant le reste des gates.
 
 Le guide [État d'implémentation](docs/IMPLEMENTATION-STATUS.md) ajoute les
 scénarios de tranche 50 VTT, corpus complet, benchmark et MCP.
