@@ -1,0 +1,40 @@
+---
+import AcquisitionHistory from "../../components/AcquisitionHistory.astro";
+import CandidateList from "../../components/CandidateList.astro";
+import DecisionPanel from "../../components/DecisionPanel.astro";
+import EvidencePanel from "../../components/EvidencePanel.astro";
+import EventTimeline from "../../components/EventTimeline.astro";
+import JobProgress from "../../components/JobProgress.astro";
+import AppLayout from "../../layouts/AppLayout.astro";
+---
+
+<AppLayout title="Research workspace" description="Review evidence and control one cumulative research session.">
+  <div data-research-workspace>
+    <p class="page-status research-status" data-research-status role="status" aria-live="polite"></p>
+    <header class="page-heading page-heading-compact research-heading" data-research-heading>
+      <p class="eyebrow">Cumulative research</p>
+      <h1>Loading research…</h1>
+    </header>
+
+    <div class="research-layout">
+      <div class="research-main-column">
+        <EvidencePanel />
+        <CandidateList />
+        <AcquisitionHistory />
+        <EventTimeline />
+      </div>
+      <div class="research-side-column">
+        <DecisionPanel />
+        <JobProgress />
+      </div>
+    </div>
+  </div>
+
+  <script>
+    import { attachResearchWorkspace } from "../../lib/pages/research-workspace";
+
+    const root = document.querySelector<HTMLElement>("[data-research-workspace]");
+    if (root) attachResearchWorkspace(root);
+  </script>
+</AppLayout>
+

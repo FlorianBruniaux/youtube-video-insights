@@ -1,0 +1,53 @@
+---
+import AppLayout from "../../layouts/AppLayout.astro";
+---
+
+<AppLayout title="Start research" description="Create a cumulative research session from the local corpus.">
+  <div data-research-new-page>
+    <section class="page-heading page-heading-compact" aria-labelledby="page-title">
+      <p class="eyebrow">Cumulative research</p>
+      <h1 id="page-title">Start with what the corpus already knows.</h1>
+      <p>Assess local evidence first. You decide whether YouTube discovery is needed after reviewing coverage and freshness.</p>
+    </section>
+
+    <form class="panel research-new-form" data-research-new-form>
+      <div class="field field-wide">
+        <label for="research-topic">Research topic</label>
+        <input id="research-topic" name="topic" maxlength="500" autocomplete="off" required />
+      </div>
+      <div class="field field-wide">
+        <label for="research-queries">Search queries, one per line</label>
+        <textarea id="research-queries" name="queries" rows="6" maxlength="4007" required></textarea>
+        <p class="field-help">Use 1 to 8 distinct queries.</p>
+      </div>
+      <div class="field">
+        <label for="research-languages">Languages</label>
+        <input id="research-languages" name="languages" value="en" maxlength="659" placeholder="en, fr" />
+      </div>
+      <div class="field">
+        <label for="freshness-profile">Freshness profile</label>
+        <select id="freshness-profile" name="freshness_profile">
+          <option value="fast">Fast · 14 days</option>
+          <option value="standard" selected>Standard · 30 days</option>
+          <option value="stable">Stable · 90 days</option>
+          <option value="historical">Historical · no maximum age</option>
+        </select>
+      </div>
+      <div class="research-new-actions">
+        <button class="button" data-research-new-submit type="submit">Assess local evidence</button>
+        <button class="button button-secondary" data-research-new-retry type="button" hidden>
+          Retry the same request
+        </button>
+      </div>
+      <p class="page-status" data-research-new-status role="status" aria-live="polite"></p>
+    </form>
+  </div>
+
+  <script>
+    import { attachResearchNewPage } from "../../lib/pages/research-new";
+
+    const root = document.querySelector<HTMLElement>("[data-research-new-page]");
+    if (root) attachResearchNewPage(root);
+  </script>
+</AppLayout>
+

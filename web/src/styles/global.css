@@ -265,6 +265,215 @@ a {
   margin-top: clamp(2.5rem, 6vw, 5rem);
 }
 
+.research-new-form,
+.research-layout,
+.export-list {
+  margin-top: clamp(2.5rem, 6vw, 5rem);
+}
+
+.research-new-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--space-5);
+}
+
+.research-new-form .field-wide,
+.research-new-actions,
+.research-new-form .page-status {
+  grid-column: 1 / -1;
+}
+
+.field textarea {
+  width: 100%;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  resize: vertical;
+}
+
+.field-help {
+  margin: 0;
+  color: var(--color-ink-muted);
+  font-size: 0.82rem;
+}
+
+.research-new-actions,
+.decision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.research-status {
+  min-height: 1.5rem;
+  margin-top: 0;
+}
+
+.research-heading > p:last-child {
+  font-size: 1rem;
+}
+
+.research-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.65fr) minmax(18rem, 0.75fr);
+  align-items: start;
+  gap: var(--space-5);
+}
+
+.research-main-column,
+.research-side-column {
+  display: grid;
+  min-width: 0;
+  gap: var(--space-5);
+}
+
+.research-side-column {
+  position: sticky;
+  top: 6rem;
+}
+
+.evidence-panel h2,
+.decision-panel h2,
+.candidate-panel h2,
+.acquisition-history h2,
+.job-progress h2,
+.export-card h2,
+.coverage-grid h3,
+.evidence-card h3,
+.candidate-card p {
+  margin: 0;
+}
+
+.coverage-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+}
+
+.coverage-grid article {
+  padding: var(--space-3);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+}
+
+.coverage-grid h3 {
+  color: var(--color-ink-muted);
+  font-size: 0.78rem;
+}
+
+.coverage-grid p {
+  margin: var(--space-1) 0 0;
+  font-family: var(--font-mono);
+  font-weight: 800;
+}
+
+.freshness-warning,
+.freshness-current {
+  padding: var(--space-3);
+  border-left: 0.25rem solid var(--color-focus);
+  background: color-mix(in srgb, var(--color-focus) 7%, var(--color-surface));
+}
+
+.freshness-current {
+  border-left-color: var(--color-accent);
+  background: color-mix(in srgb, var(--color-accent) 7%, var(--color-surface));
+}
+
+.evidence-list,
+.candidate-grid,
+.export-grid {
+  display: grid;
+  gap: var(--space-4);
+  margin-top: var(--space-4);
+}
+
+.evidence-card,
+.candidate-card,
+.export-card {
+  padding: var(--space-4);
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-muted);
+}
+
+.evidence-card p,
+.candidate-card p,
+.export-card p {
+  margin-top: var(--space-2);
+}
+
+.evidence-card > a,
+.candidate-card > a,
+.export-card > a {
+  display: inline-flex;
+  margin-top: var(--space-3);
+}
+
+.evidence-meta {
+  color: var(--color-ink-muted);
+  font-size: 0.84rem;
+}
+
+.decision-panel > p,
+.decision-panel > label,
+.decision-panel > button,
+.decision-actions {
+  margin-top: var(--space-4);
+}
+
+.decision-panel > label {
+  display: grid;
+  gap: var(--space-2);
+  font-size: 0.86rem;
+  font-weight: 750;
+}
+
+.decision-panel input {
+  min-height: 2.75rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-canvas);
+  color: var(--color-ink);
+}
+
+.candidate-card label {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  font-weight: 800;
+}
+
+.candidate-card input {
+  width: 1.2rem;
+  height: 1.2rem;
+  margin-top: 0.12rem;
+}
+
+.event-timeline summary {
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.event-timeline ol,
+.acquisition-history ol,
+.acquisition-history ul {
+  margin-bottom: 0;
+  padding-left: 1.25rem;
+}
+
+.job-progress .button {
+  margin-top: var(--space-3);
+}
+
+.export-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .metric-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -641,8 +850,17 @@ a {
   }
 
   .search-form,
-  .source-layout {
+  .source-layout,
+  .research-layout {
     grid-template-columns: 1fr;
+  }
+
+  .research-side-column {
+    position: static;
+  }
+
+  .coverage-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .search-form {
@@ -657,7 +875,8 @@ a {
 
 @media (max-width: 45rem) {
   .dashboard-panels,
-  .metric-grid {
+  .metric-grid,
+  .export-grid {
     grid-template-columns: 1fr;
   }
 
@@ -706,6 +925,15 @@ a {
 
   .search-form {
     grid-template-columns: 1fr;
+  }
+
+  .research-new-form,
+  .coverage-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .research-new-form > * {
+    grid-column: 1;
   }
 
   .search-form > * {
