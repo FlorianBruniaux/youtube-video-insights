@@ -2,7 +2,8 @@
 
 Local-first YouTube corpus, timestamped FTS5 search, resumable cumulative
 research, deterministic evidence dossiers, optional LLM analysis, and a
-four-tool read-only MCP server.
+four-tool read-only MCP server. A packaged Astro interface exposes the local
+dashboard, search, sources, research workflow, jobs, and exports on loopback.
 
 Repository: https://github.com/FlorianBruniaux/youtube-video-insights
 Package version: 0.2.0
@@ -67,6 +68,8 @@ diagnostics. Partial-batch retry resumes only items recorded as
 - `yt-insights index --status`: validate the configured index.
 - `yt-insights search QUERY --limit 1..20 --json`: search timestamped passages.
 - `yt-insights catalog import-corpus ROOT`: rebuild the inventory catalogue.
+- `yt-insights serve [--no-open]`: run the packaged local interface on
+  `127.0.0.1` without a Node.js runtime.
 - `yt-insights setup assistants --assets-only --dry-run|--apply|--verify`: manage
   repository skills and native agents without MCP access.
 
@@ -96,6 +99,8 @@ diagnostics. Partial-batch retry resumes only items recorded as
 - `src/yt_insights/exporter.py`: source transcript exports.
 - `src/yt_insights/mcp_server.py`: four-tool read-only MCP facade.
 - `src/yt_insights/assistant_setup.py`: transactional assistant asset and MCP setup.
+- `src/yt_insights/web/`: bounded read models, versioned local API, guarded
+  loopback server, mutation jobs, and packaged Astro assets.
 - `src/yt_insights/backends/`: optional Ollama, MLX, cc-bridge, Anthropic, and
   OpenAI-compatible analysis backends.
 
@@ -141,7 +146,7 @@ The repository and wheel contain the fourth skill. It is not globally active.
 The fresh project-local Codex canary is `PASS`. The fresh Claude Code canary
 remains `UNKNOWN` because the installed CLI is not authenticated.
 
-## Gates observed on 2026-08-31
+## Gates observed on 2026-09-01
 
 - relevance pilot: `UNKNOWN`; representative packet returned 0 results, so 0
   of the required 20 human judgments exist.
@@ -153,17 +158,22 @@ remains `UNKNOWN` because the installed CLI is not authenticated.
 - fresh project-local Codex workflow: `PASS`; global installation is not
   claimed.
 - global activation: `false`.
-- local quality: `PASS`; 844 tests plus 10 subtests, full Ruff, Mypy on 44
-  source files, and `git diff --check`.
-- GitHub CI hosted execution: `PASS` on `000e9b4`; run 33414788777 passed the
-  Python 3.11, Python 3.12, and packaging/runtime jobs:
-  https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777
+- local quality: `PASS`; 1,089 Python tests plus 10 subtests, 155 frontend
+  tests, 4 Playwright flows, full Ruff, Astro Check on 51 files, Mypy on 53
+  source files, reproducible assets, and `git diff --check`.
+- GitHub CI hosted execution: `PASS` on `b62adaa`; run 33494963306 passed the
+  web, Python 3.11, Python 3.12, and packaging/runtime jobs:
+  https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306
 
 Mypy was run as `mypy src`; do not claim `mypy --strict` passes.
 
 ## Verification
 
 ```text
+python scripts/verify_web_build.py
+pnpm --dir web test
+pnpm --dir web check
+pnpm --dir web test:e2e
 uv run --extra mcp --extra dev pytest -q
 uv run --extra dev ruff check src tests scripts
 uv run --extra dev mypy src
@@ -172,22 +182,22 @@ uv lock --check
 git diff --check
 ```
 
-These Ruff and Mypy commands pass on the assembled local SHA. Hosted run
-33414788777 validates `000e9b4` only; later commits require their own run. None
-of these checks prove live YouTube or fresh-client behavior.
+These commands pass locally on `b62adaa`. Hosted run 33494963306 validates the
+same SHA. None of these checks prove live YouTube or fresh-client behavior.
 
 Static and hermetic checks do not prove live YouTube, Claude Code, or Codex
 behavior.
 
 ## Deferred
 
-Not implemented: web UI, browser extension, hosted API, writable MCP, vector or
-hybrid retrieval, graph database, automatic acquisition, and ranking
+Not implemented: hosted web UI, browser extension, hosted API, writable MCP,
+vector or hybrid retrieval, graph database, automatic acquisition, and ranking
 self-learning. See `ROADMAP.md` for measured triggers.
 
 ## Primary references
 
 - `README.md`
+- `docs/DELIVERY-RECAP.md`
 - `INSTALL.md`
 - `ROADMAP.md`
 - `docs/IMPLEMENTATION-STATUS.md`

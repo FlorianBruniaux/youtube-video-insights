@@ -1,6 +1,6 @@
 # Plateforme Claude Code et Codex
 
-**Mise à jour :** 2026-08-31
+**Mise à jour :** 2026-09-01
 
 **Périmètre :** intégration locale et portable de YT Insights
 
@@ -24,6 +24,7 @@ confirmations humaines testables.
 | MCP | Lire corpus, vidéos et passages | Toute mutation, shell ou SQL brut |
 | Skills portables | Guider l'utilisateur et appeler la CLI ou le MCP | Réimplémenter la logique produit |
 | Chercheur natif | Recherche longue et sourcée sur le corpus existant | Acquisition ou dossier writable |
+| Web local | Piloter les mêmes lectures, décisions et jobs via `/api/v1` | Exposition distante ou contournement des confirmations |
 | Hooks | Aucun routeur YouTube implicite supplémentaire | Acquisition automatique |
 
 ## Skills communs
@@ -132,16 +133,16 @@ cumulatif n'ajoute aucun hook global et aucun agent writable.
 | Claude Code frais | `UNKNOWN` | Pas de claim d'activation |
 | Codex frais | `PASS` | Skill projet et limites d'approbation validés; aucun claim global |
 | Activation globale | `false` | Quatrième skill et runtime non promus |
-| Qualité locale | `PASS` | 844 tests + 10 subtests, Ruff complet, Mypy sur 44 fichiers, diff-check |
-| GitHub CI hébergée | `PASS` sur `000e9b4` | [Run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777), Python 3.11, Python 3.12 et packaging/runtime `PASS` |
+| Qualité locale | `PASS` | 1 089 tests Python + 10 subtests, 155 tests frontend, 4 parcours Playwright, Ruff, Astro Check et Mypy sur 53 fichiers |
+| GitHub CI hébergée | `PASS` sur `b62adaa` | [Run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306), web, Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 La validation Mypy porte sur `mypy src`; aucun passage de `mypy --strict`
-n'est revendiqué. Le run hébergé valide uniquement `000e9b4`. Les gates locales
-et hébergées ne prouvent ni YouTube live ni le chargement par des clients frais.
+n'est revendiqué. Le run hébergé valide `b62adaa`. Les gates locales et
+hébergées ne prouvent ni YouTube live ni le chargement par des clients frais.
 
 ## Ce qui reste hors périmètre
 
-- interface web;
+- interface web hébergée;
 - extension navigateur;
 - API hébergée;
 - MCP writable;

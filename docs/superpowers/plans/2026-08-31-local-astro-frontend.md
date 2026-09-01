@@ -10,6 +10,10 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-31-local-astro-web-ui-design.md`
 
+**Delivery status:** completed and hosted-CI validated on `b62adaa`. The
+checkboxes below preserve the original TDD execution recipe; current evidence
+lives in [`docs/DELIVERY-RECAP.md`](../../DELIVERY-RECAP.md).
+
 ## Global Constraints
 
 - All interface copy and prompts are English.

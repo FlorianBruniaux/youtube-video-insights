@@ -27,6 +27,12 @@ most ten candidates are presented and only one to five exact approved IDs can
 be acquired. See the
 [implementation status, diagram, and test guide](docs/IMPLEMENTATION-STATUS.md).
 
+The complete local product is shipped on `main` at `b62adaa`. Hosted GitHub
+Actions [run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
+passed the web, Python 3.11, Python 3.12, packaging, and offline-runtime gates.
+The [delivery recap](docs/DELIVERY-RECAP.md) lists every implemented surface,
+its boundary, and the remaining external validation.
+
 ![yt-insights workflow: preview and acquire YouTube VTT sources, then branch into SQLite/FTS5 timestamped search without an LLM, optional analysis, source-backed exports, and read-only MCP access from Claude Code or Codex.](docs/assets/yt-insights-workflow.jpg)
 
 The image is retained as the stable acquisition overview. The current
@@ -887,22 +893,19 @@ YouTube research and the fresh Claude Code workflow canary remain `UNKNOWN`.
 The project-local Codex canary is `PASS`; this is not a global-installation
 claim.
 
-The cumulative-research snapshot before the web interface passed `844` tests
-plus `10` subtests, full Ruff, Mypy on 44 source files, and `git diff --check`.
-The initial local web delivery at `8ee6183` passed `1,073` Python tests plus
-`10` subtests, `155` frontend tests, `3` Playwright flows, and Mypy on 53 source
-files. The current review pass raises those local gates to `1,089` Python tests
-and `4` Playwright flows, with the same `155` frontend tests and 53 source files
-checked by Mypy. None of these results is a `mypy --strict` claim. Hosted GitHub Actions
-[run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
-passed on `000e9b4`: Python 3.11, Python 3.12, and packaging/runtime all passed.
-That hosted evidence is bound to `000e9b4` and does not validate later commits. Human
+The final local delivery at `b62adaa` passed `1,089` Python tests plus `10`
+subtests, `155` frontend tests, `4` Playwright flows, Ruff, Astro Check on 51
+files, generated-asset verification, packaging, and Mypy on 53 source files.
+Hosted GitHub Actions
+[run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
+passed on the same SHA for the web interface, Python 3.11, Python 3.12, and
+packaging/runtime. Mypy was run as `mypy src`, not with `--strict`. Human
 relevance, live YouTube, and the fresh Claude Code canary remain `UNKNOWN`.
-The project-local Codex canary is `PASS`, and global activation remains
-`false`.
+The project-local Codex canary is `PASS`; global activation remains `false`.
 
 | Document | Purpose |
 |---|---|
+| [Delivery recap](docs/DELIVERY-RECAP.md) | Implemented product surfaces, architecture, safety boundaries, validation, and remaining work |
 | [Current Claude Code and Codex guide](docs/claude-code.md) | Supported skills, four MCP tools, local commands and verified installation boundary |
 | [Ready-to-copy assistant prompts](examples/agent-prompts.md) | Acquisition previews, cited research, article dossiers and deterministic exports |
 | [Agent platform architecture](plans/specs/AGENT-PLATFORM.md) | Target behavior, data boundaries, skills, agents and safety rules |

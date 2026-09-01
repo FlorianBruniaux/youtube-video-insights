@@ -129,11 +129,11 @@ Observed external gates at this checkpoint:
 - fresh project-local Codex session: `PASS`, skill and approval boundaries loaded;
 - global activation: `false`.
 
-Local validation passed `844` tests plus `10` subtests, full Ruff, Mypy on the
-44 source files, and `git diff --check`. This is not a `mypy --strict` claim.
+Final local validation at `b62adaa` passed `1,089` Python tests plus `10`
+subtests, `155` frontend tests, `4` Playwright flows, full Ruff, Astro Check on
+51 files, and Mypy on 53 source files. This is not a `mypy --strict` claim.
 Hosted GitHub Actions
-[run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
-passed on `000e9b4`, including Python 3.11, Python 3.12, and packaging/runtime.
-This hosted result validates that SHA only, not later commits. The detailed
-fresh-client evidence is in
+[run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
+passed on the same SHA, including web, Python 3.11, Python 3.12, and
+packaging/runtime. The detailed fresh-client evidence is in
 [the canary receipt](../plans/evidence/2026-08-31-fresh-client-canaries.md).

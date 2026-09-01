@@ -55,7 +55,7 @@ des quatre couches et du corpus source.
 | Codex frais | `PASS` | Codex CLI 0.150.1 éphémère, config utilisateur et rules ignorées, sandbox read-only; skill local chargé et deux confirmations restituées |
 | Activation globale | `false` | Aucune installation globale du quatrième skill ou du runtime |
 | Qualité locale | `PASS` | 1 089 tests Python + 10 subtests, 155 tests frontend, 4 parcours Playwright, Ruff complet, Mypy sur 53 fichiers source, Astro Check sur 51 fichiers et diff-check |
-| GitHub CI hébergée | `PASS` sur `000e9b4` | [Run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777) : Python 3.11, Python 3.12 et packaging/runtime `PASS` |
+| GitHub CI hébergée | `PASS` sur `b62adaa` | [Run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306) : web, Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 Un `UNKNOWN` ne bloque pas une acquisition locale de 1 à 5 IDs explicitement
 approuvés. Il bloque toute affirmation de qualité validée ou d'activation
@@ -75,8 +75,8 @@ La validation locale du lot web a passé `1 089` tests Python et `10` subtests,
 `155` tests frontend, `4` parcours Playwright, Ruff sur `src tests scripts`,
 Mypy sur les 53 fichiers de `src`, Astro Check sur 51 fichiers et
 `git diff --check`. Ce résultat ne signifie pas que `mypy --strict` passe. Le
-workflow GitHub CI a passé sur l'ancien SHA `000e9b4` via le run `33414788777`.
-Cette preuve hébergée ne valide pas le lot web courant.
+workflow GitHub CI a passé sur le même lot au SHA `b62adaa` via le run
+`33494963306`.
 
 ## Évolutions conditionnelles
 
@@ -96,6 +96,7 @@ silencieuse.
 
 ## Documents de référence
 
+- [Récapitulatif de livraison](docs/DELIVERY-RECAP.md)
 - [État d'implémentation](docs/IMPLEMENTATION-STATUS.md)
 - [Spécification du workflow cumulatif](docs/superpowers/specs/2026-08-31-cumulative-research-workflow-design.md)
 - [Plan d'implémentation](docs/superpowers/plans/2026-08-31-cumulative-research-workflow.md)

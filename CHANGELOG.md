@@ -42,12 +42,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `1,073` Python tests plus `10` subtests, `155` frontend tests, `3` Playwright
   flows, and Mypy on 53 source files. This review pass raises the current local
   gates to `1,089` Python tests and `4` Playwright flows, with `155` frontend
-  tests and the same 53 Mypy-checked source files. Mypy was not run with
-  `--strict` in these snapshots. Hosted GitHub Actions
-  [run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
-  passed on `000e9b4`, including Python 3.11, Python 3.12, and
-  packaging/runtime. This hosted evidence applies only to that SHA and not to
-  the local web delivery.
+  tests and the same 53 Mypy-checked source files. Hosted GitHub Actions
+  [run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
+  passed on final delivery SHA `b62adaa`, including the web interface, Python
+  3.11, Python 3.12, packaging, and offline runtime. Mypy was run as
+  `mypy src`, not with `--strict`.
+- A consolidated delivery recap covering product surfaces, data flow, security
+  boundaries, validation evidence, and conditional work.
 - Deterministic research dossiers with `dossier.md` and `manifest.json`, safe
   absolute destinations, source hashes, timestamped evidence, coverage limits,
   and no generated-dossier ingestion into source indexes.
@@ -128,6 +129,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Reproducible Astro verification now stages declared frontend inputs in a
+  temporary checkout. A build plugin cannot add or modify source files in the
+  repository, and CI rejects both tracked and untracked checkout mutations.
+- Browser delivery gates now prove cancellation refusal before acceptance,
+  keyboard activation, reduced-motion behavior, exact mutation tokens,
+  revisions, IDs, and idempotency keys.
+- Removed trailing blank lines from eight new frontend files so the hosted
+  changed-line whitespace gate evaluates the complete delivered range.
 - Historical Claude YouTube commands are explicit-only and can no longer
   compete with the portable skills through model-triggered invocation.
 - Catalog reads create no lock, WAL, or SHM beside the live database. Catalog
@@ -151,6 +160,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Documented
 
+- Aligned README, installation guide, roadmap, implementation status,
+  `llms.txt`, agent documentation, and plan indexes with the shipped local web
+  interface and hosted CI run on `b62adaa`.
 - Replaced the README workflow image with the implemented branching architecture:
   VTT remains the source of truth, FTS5 search and exports do not depend on an
   LLM, and Claude Code or Codex access the corpus through the read-only MCP.

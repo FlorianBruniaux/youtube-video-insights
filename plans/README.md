@@ -1,6 +1,6 @@
 # Index des plans
 
-**Mise à jour :** 2026-08-31
+**Mise à jour :** 2026-09-01
 
 **Workflow cumulatif projet :** implémenté, validation locale `PASS`
 
@@ -10,12 +10,13 @@
 
 | Ordre | Document | Usage |
 |---:|---|---|
-| 1 | [Roadmap](../ROADMAP.md) | Fonctionnalités livrées, gates et ordre restant |
-| 2 | [État d'implémentation](../docs/IMPLEMENTATION-STATUS.md) | Diagramme, tests et limites observées |
-| 3 | [Spécification cumulative](../docs/superpowers/specs/2026-08-31-cumulative-research-workflow-design.md) | Contrat produit et déclencheurs différés |
-| 4 | [Plan cumulatif](../docs/superpowers/plans/2026-08-31-cumulative-research-workflow.md) | Séquence d'implémentation et propriétaires |
-| 5 | [Architecture Claude Code et Codex](specs/AGENT-PLATFORM.md) | CLI, MCP, quatre skills et installation sûre |
-| 6 | [Sessions parallèles](PARALLEL-SESSIONS.md) | État des lots et handoff |
+| 1 | [Récapitulatif de livraison](../docs/DELIVERY-RECAP.md) | Produit livré, architecture, sécurité et preuves finales |
+| 2 | [Roadmap](../ROADMAP.md) | Fonctionnalités livrées, gates et ordre restant |
+| 3 | [État d'implémentation](../docs/IMPLEMENTATION-STATUS.md) | Diagramme, tests et limites observées |
+| 4 | [Spécification cumulative](../docs/superpowers/specs/2026-08-31-cumulative-research-workflow-design.md) | Contrat produit et déclencheurs différés |
+| 5 | [Plan cumulatif](../docs/superpowers/plans/2026-08-31-cumulative-research-workflow.md) | Séquence d'implémentation et propriétaires |
+| 6 | [Architecture Claude Code et Codex](specs/AGENT-PLATFORM.md) | CLI, MCP, quatre skills et installation sûre |
+| 7 | [Sessions parallèles](PARALLEL-SESSIONS.md) | État des lots et handoff |
 
 ## État cumulatif
 
@@ -28,6 +29,8 @@
 | 8 | Dossier déterministe et export projet | Implémenté |
 | 9 | Quatrième skill, prompts anglais et assets-only | Implémenté dans le dépôt, pas globalement |
 | 10 | E2E, qualité et documentation | Terminé et intégré |
+| Web API | Read models, jobs, API versionnée et serveur loopback | Implémenté et packagé |
+| Web Astro | Dashboard, recherche, sources, research et exports | Implémenté et validé dans le navigateur |
 
 ## Gates mesurées
 
@@ -40,8 +43,8 @@
 | Claude Code frais | `UNKNOWN` | Non exécuté |
 | Codex frais | `PASS` | Skill projet et limites d'approbation validés dans un processus éphémère read-only |
 | Activation globale | `false` | Aucune promotion du quatrième skill |
-| Qualité locale | `PASS` | 844 tests + 10 subtests, Ruff complet, `mypy src` sur 44 fichiers et `git diff --check` |
-| GitHub CI hébergée | `PASS` sur `000e9b4` | [Run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777), Python 3.11, Python 3.12 et packaging/runtime `PASS` |
+| Qualité locale | `PASS` | 1 089 tests Python + 10 subtests, 155 tests frontend, 4 parcours Playwright, Ruff, Astro Check, Mypy sur 53 fichiers et diff-check |
+| GitHub CI hébergée | `PASS` sur `b62adaa` | [Run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306), web, Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 [Artefacts JSON et Markdown](evidence/2026-08-31-cumulative-research-gates.md)
 et [canaris clients frais](evidence/2026-08-31-fresh-client-canaries.md)
@@ -69,9 +72,8 @@ remplacent pas la roadmap actuelle.
 
 ## Travail non lancé
 
-Web UI, extension, API hébergée, MCP writable, vectoriel, graphe et acquisition
-automatique restent conditionnels. Aucun de ces éléments n'est implémenté ou
-autorisé par les plans actuels.
+Interface web hébergée, extension, API distante, MCP writable, vectoriel,
+graphe et acquisition automatique restent conditionnels. L'interface locale
+Astro est livrée et ne constitue pas une surface réseau partageable.
 
-Le run GitHub CI `33414788777` a passé sur `000e9b4`. Cette preuve ne couvre pas
-les commits ultérieurs; les autres preuves mentionnées ici restent locales.
+Le run GitHub CI `33494963306` a passé sur `b62adaa` et couvre le lot web final.

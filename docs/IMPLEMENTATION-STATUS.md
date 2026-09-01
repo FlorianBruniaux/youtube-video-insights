@@ -6,15 +6,14 @@
 
 **Activation globale :** `false`
 
-**GitHub CI hébergée :** `PASS` sur `000e9b4`
+**GitHub CI hébergée :** `PASS` sur `b62adaa`
 
 Le lot web courant a passé localement `1 089` tests Python et `10` subtests,
 `155` tests frontend, `4` parcours Playwright, Ruff sur `src tests scripts`,
 Mypy sur les 53 fichiers source, Astro Check sur 51 fichiers et
-`git diff --check`. Le [run GitHub Actions 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777)
-a passé sur l'ancien SHA `000e9b4`, avec les jobs Python 3.11, Python 3.12 et
-packaging/runtime au vert. Cette preuve hébergée ne valide pas le lot web
-courant. Mypy n'a pas été exécuté avec `--strict`.
+`git diff --check`. Le [run GitHub Actions 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
+a passé sur le même SHA `b62adaa`, avec les jobs web, Python 3.11, Python 3.12
+et packaging/runtime au vert. Mypy n'a pas été exécuté avec `--strict`.
 
 ## Vue d'ensemble
 
@@ -115,7 +114,7 @@ les candidats à acquérir.
 | Codex frais | `PASS` | Processus éphémère read-only: skill projet chargé, deux décisions et limites 10/5 restituées |
 | Activation globale | `false` | Pas de promotion du quatrième skill ou du runtime |
 | Qualité locale du lot web courant | `PASS` | 1 089 tests Python + 10 subtests, 155 tests frontend, 4 parcours Playwright, Ruff complet, Mypy sur 53 fichiers et diff-check |
-| GitHub CI hébergée | `PASS` sur `000e9b4` | [Run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777), Python 3.11, Python 3.12 et packaging/runtime `PASS` |
+| GitHub CI hébergée | `PASS` sur `b62adaa` | [Run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306), web, Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 Les gates externes encore `UNKNOWN` bloquent les affirmations correspondantes
 et l'activation globale. Elles ne bloquent pas une acquisition locale
@@ -178,6 +177,7 @@ produit actuel. Leurs déclencheurs sont définis dans la
 
 ## Documents associés
 
+- [Récapitulatif de livraison](DELIVERY-RECAP.md)
 - [Installation](../INSTALL.md)
 - [Roadmap](../ROADMAP.md)
 - [Guide Claude Code et Codex](claude-code.md)

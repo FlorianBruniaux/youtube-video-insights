@@ -1,6 +1,6 @@
 # Sessions parallèles : suivi d'exécution
 
-**Mise à jour :** 2026-08-31
+**Mise à jour :** 2026-09-01
 
 **Branche d'intégration :** workflow cumulatif local
 
@@ -37,6 +37,10 @@ Task 9 Claude Code and Codex assets
          ↓
 Task 10 E2E, quality and docs
 ```
+
+Ce graphe décrit le lot cumulatif initial. Le lot web local ultérieur, API
+Python, serveur loopback, Astro, E2E et packaging, est terminé sur `b62adaa`.
+Le [récapitulatif de livraison](../docs/DELIVERY-RECAP.md) porte l'état courant.
 
 ## État des lots
 
@@ -87,8 +91,8 @@ Task 10 E2E, quality and docs
 | Claude Code frais | `UNKNOWN` |
 | Codex frais | `PASS`, skill projet et limites d'approbation chargés dans un processus éphémère read-only |
 | Activation globale | `false` |
-| Qualité locale | `PASS`, 844 tests + 10 subtests, Ruff, Mypy 44 fichiers, diff-check |
-| GitHub CI hébergée | `PASS` sur `000e9b4`, [run 33414788777](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33414788777), trois jobs `PASS` |
+| Qualité locale | `PASS`, 1 089 tests Python + 10 subtests, 155 tests frontend, 4 parcours Playwright, Ruff, Astro Check, Mypy 53 fichiers et diff-check |
+| GitHub CI hébergée | `PASS` sur `b62adaa`, [run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306), quatre jobs `PASS` |
 
 La pertinence `UNKNOWN` n'empêche pas une acquisition locale explicitement
 approuvée. Elle interdit un claim de qualité validée et toute activation
@@ -101,10 +105,10 @@ Ordre strict :
 1. réaliser les 20 jugements humains de pertinence;
 2. lancer le canari YouTube live et terminer le canari frais Claude Code;
 3. seulement ensuite préparer un candidat global inerte et son digest;
-4. conserver web, extension, writable MCP, vectoriel et graphe hors du chemin
-   critique tant que leurs déclencheurs ne sont pas observés.
+4. conserver hébergement web, extension, writable MCP, vectoriel et graphe hors
+   du chemin critique tant que leurs déclencheurs ne sont pas observés.
 
-Le run hébergé `33414788777` valide uniquement `000e9b4`; chaque SHA ultérieur
+Le run hébergé `33494963306` valide le lot final `b62adaa`; chaque SHA ultérieur
 requiert sa propre exécution CI.
 
 ## Handoff obligatoire

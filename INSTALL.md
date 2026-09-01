@@ -4,6 +4,10 @@ yt-insights s’installe depuis son dépôt Git. Le projet n’est pas publié s
 PyPI. Le fichier `uv.lock` versionné fixe l’environnement de l’application et
 des outils de développement.
 
+Le [récapitulatif de livraison](docs/DELIVERY-RECAP.md) décrit les surfaces
+disponibles, les limites et les preuves du SHA `b62adaa` avant toute
+installation globale.
+
 ## Prérequis
 
 - macOS ou Linux
@@ -326,8 +330,8 @@ uv run yt-insights setup assistants --client both --assets-only --verify
 
 Ces commandes restent des écritures utilisateur explicites avec `--apply`.
 Elles ne constituent pas une activation globale approuvée. Le quatrième skill
-reste non installé globalement; les canaris Claude Code et Codex frais restent
-`UNKNOWN` à ce checkpoint.
+reste non installé globalement. Le canari Codex projet est `PASS`; le canari
+Claude Code frais reste `UNKNOWN` à ce checkpoint.
 
 La configuration manuelle ci-dessous reste disponible pour les clients qui ne
 peuvent pas exécuter la commande de setup.
@@ -491,6 +495,10 @@ générés, puis relancez le vérificateur avant le reste des gates.
 
 Le guide [État d'implémentation](docs/IMPLEMENTATION-STATUS.md) ajoute les
 scénarios de tranche 50 VTT, corpus complet, benchmark et MCP.
+
+Le [run GitHub Actions 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
+a exécuté les gates web, Python 3.11, Python 3.12 et packaging/runtime sur le
+SHA final `b62adaa`.
 
 Le smoke wheel crée deux environnements temporaires hors checkout. L’installation
 minimale exécute `doctor`, `acquire --dry-run`, `export`, `index` et `search`.
