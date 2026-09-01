@@ -139,6 +139,9 @@ describe("corpus search page", () => {
     expect(root.querySelector("[data-search-state]")?.textContent).toContain(
       "Enter a search query",
     );
+    expect(document.activeElement).toBe(
+      root.querySelector<HTMLInputElement>("[name=q]"),
+    );
     resolveFirst?.(searchFixture);
     await Promise.resolve();
     expect(root.querySelector("[data-search-results]")?.textContent).not.toContain(

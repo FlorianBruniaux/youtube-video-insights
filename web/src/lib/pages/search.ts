@@ -26,6 +26,8 @@ export function attachSearchPage(
       setText(state, "Enter a search query to search the local corpus.");
       replaceChildren(summary, []);
       replaceChildren(results, []);
+      const query = form.elements.namedItem("q");
+      if (query instanceof HTMLInputElement) query.focus();
       return;
     }
 

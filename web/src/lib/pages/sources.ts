@@ -37,23 +37,37 @@ const POLL_DELAYS: readonly number[] = [
   ...Array<number>(30).fill(2_000),
 ];
 
-export const SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v1";
+export const SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v2";
+const LEGACY_SOURCE_ATTEMPT_STORAGE_KEY = "yt-insights:source-attempt:v1";
 
-type SourceAttempt =
+type PollingSourceAttempt =
   | {
-      readonly version: 1;
+      readonly version: 2;
+      readonly stage: "polling";
       readonly job_id: string;
       readonly kind: "source_preview";
       readonly fingerprint: null;
       readonly idempotency_key: null;
     }
   | {
-      readonly version: 1;
+      readonly version: 2;
+      readonly stage: "polling";
       readonly job_id: string;
       readonly kind: "source_acquisition";
       readonly fingerprint: string;
       readonly idempotency_key: string;
     };
+
+type AdmittingAcquisitionAttempt = {
+  readonly version: 2;
+  readonly stage: "admitting";
+  readonly job_id: null;
+  readonly kind: "source_acquisition";
+  readonly fingerprint: string;
+  readonly idempotency_key: string;
+};
+
+type SourceAttempt = PollingSourceAttempt | AdmittingAcquisitionAttempt;
 
 export function attachSourcesPage(
   root: HTMLElement,
@@ -79,6 +93,10 @@ export function attachSourcesPage(
   const continueChecking = requireElement<HTMLButtonElement>(
     root,
     "[data-source-continue]",
+  );
+  const retryAdmission = requireElement<HTMLButtonElement>(
+    root,
+    "[data-source-retry-admission]",
   );
   let offset = 0;
   let inventoryController: AbortController | null = null;
@@ -133,7 +151,11 @@ export function attachSourcesPage(
     event.preventDefault();
     if (checkingAttempt) return;
     if (activeAttempt !== null) {
-      void checkAttempt(activeAttempt);
+      if (activeAttempt.stage === "polling") {
+        void checkAttempt(activeAttempt);
+      } else {
+        showAdmissionRetry(activeAttempt);
+      }
       return;
     }
     approvedPlan = null;
@@ -171,8 +193,9 @@ export function attachSourcesPage(
         controller.signal,
       );
       if (!("job_id" in accepted)) throw new Error("unexpected response");
-      const attempt: SourceAttempt = {
-        version: 1,
+      const attempt: PollingSourceAttempt = {
+        version: 2,
+        stage: "polling",
         job_id: accepted.job_id,
         kind: "source_preview",
         fingerprint: null,
@@ -193,51 +216,96 @@ export function attachSourcesPage(
   const onAcquire = (): void => {
     if (approvedPlan === null || activeAttempt !== null || checkingAttempt) return;
     const plan = approvedPlan;
+    const attempt: AdmittingAcquisitionAttempt = {
+      version: 2,
+      stage: "admitting",
+      job_id: null,
+      kind: "source_acquisition",
+      fingerprint: plan.fingerprint,
+      idempotency_key: acquisitionIdempotencyKey(plan.fingerprint),
+    };
+    activeAttempt = attempt;
+    if (!writeStoredAttempt(attempt)) {
+      activeAttempt = null;
+      acquire.disabled = false;
+      previewSubmit.disabled = false;
+      continueChecking.hidden = true;
+      retryAdmission.hidden = true;
+      setText(
+        jobTarget,
+        "The acquisition identity could not be saved. Allow session storage and confirm again.",
+      );
+      return;
+    }
+    approvedPlan = null;
     acquire.disabled = true;
+    previewSubmit.disabled = true;
+    continueChecking.hidden = true;
+    retryAdmission.hidden = true;
+    setText(jobTarget, "Submitting the approved acquisition…");
+    void admitAcquisition(attempt);
+  };
+  const admitAcquisition = async (
+    attempt: AdmittingAcquisitionAttempt,
+  ): Promise<void> => {
+    if (
+      checkingAttempt ||
+      activeAttempt?.stage !== "admitting" ||
+      activeAttempt.idempotency_key !== attempt.idempotency_key
+    ) {
+      return;
+    }
     mutationController?.abort();
     const controller = new AbortController();
     mutationController = controller;
     checkingAttempt = true;
     previewSubmit.disabled = true;
+    acquire.disabled = true;
     continueChecking.hidden = true;
-    setText(jobTarget, "Acquiring the approved videos…");
-    void runAcquire(plan, controller);
-  };
-  const runAcquire = async (
-    plan: SourcePreviewResult,
-    controller: AbortController,
-  ): Promise<void> => {
-    const key = idempotencyKey();
+    retryAdmission.hidden = true;
+    retryAdmission.disabled = true;
     try {
       const accepted = await write(
         "/api/v1/sources/acquire",
-        { fingerprint: plan.fingerprint, idempotency_key: key },
+        {
+          fingerprint: attempt.fingerprint,
+          idempotency_key: attempt.idempotency_key,
+        },
         controller.signal,
       );
       if (!("job_id" in accepted)) throw new Error("unexpected response");
-      const attempt: SourceAttempt = {
-        version: 1,
+      const pollingAttempt: PollingSourceAttempt = {
+        version: 2,
+        stage: "polling",
         job_id: accepted.job_id,
         kind: "source_acquisition",
-        fingerprint: plan.fingerprint,
-        idempotency_key: key,
+        fingerprint: attempt.fingerprint,
+        idempotency_key: attempt.idempotency_key,
       };
-      activeAttempt = attempt;
-      approvedPlan = null;
-      writeStoredAttempt(attempt);
+      activeAttempt = pollingAttempt;
+      writeStoredAttempt(pollingAttempt);
       checkingAttempt = false;
-      await checkAttempt(attempt, controller);
+      retryAdmission.disabled = false;
+      await checkAttempt(pollingAttempt, controller);
     } catch (error: unknown) {
       if (isAbort(error)) return;
       checkingAttempt = false;
-      previewSubmit.disabled = false;
-      acquire.disabled = approvedPlan === null;
-      setText(jobTarget, mutationError(error));
+      retryAdmission.disabled = false;
+      const code = publicCode(error);
+      if (code === "plan_changed" || code === "stale_revision") {
+        resetForNewPreview();
+        setText(
+          jobTarget,
+          "The source plan changed. Preview the source again before acquiring.",
+        );
+        return;
+      }
+      showAdmissionRetry(attempt);
     }
   };
 
   const checkAttempt = async (
-    attempt: SourceAttempt,
+    attempt: PollingSourceAttempt,
     existingController?: AbortController,
   ): Promise<void> => {
     if (checkingAttempt || activeAttempt?.job_id !== attempt.job_id) return;
@@ -249,6 +317,8 @@ export function attachSourcesPage(
     acquire.disabled = true;
     continueChecking.hidden = true;
     continueChecking.disabled = true;
+    retryAdmission.hidden = true;
+    retryAdmission.disabled = true;
     exposeAttempt(jobIdTarget, attempt);
     setText(jobTarget, `Checking accepted ${attempt.kind === "source_preview" ? "preview" : "acquisition"} job…`);
     try {
@@ -265,6 +335,8 @@ export function attachSourcesPage(
       previewSubmit.disabled = false;
       continueChecking.hidden = true;
       continueChecking.disabled = false;
+      retryAdmission.hidden = true;
+      retryAdmission.disabled = false;
       const result = requireJobSuccess(completed, attempt.kind);
       if (isJobResultError(result)) {
         setText(jobTarget, jobResultMessage(result.error.code));
@@ -295,15 +367,63 @@ export function attachSourcesPage(
     } catch (error: unknown) {
       if (isAbort(error)) return;
       checkingAttempt = false;
+      if (publicCode(error) === "not_found") {
+        resetForNewPreview();
+        setText(
+          jobTarget,
+          "This accepted job is no longer available. Start a new preview explicitly.",
+        );
+        return;
+      }
       previewSubmit.disabled = false;
       continueChecking.hidden = activeAttempt === null;
       continueChecking.disabled = false;
+      retryAdmission.hidden = true;
+      retryAdmission.disabled = false;
       setText(jobTarget, mutationError(error));
     }
   };
 
   const onContinue = (): void => {
-    if (activeAttempt !== null && !checkingAttempt) void checkAttempt(activeAttempt);
+    if (activeAttempt?.stage === "polling" && !checkingAttempt) {
+      void checkAttempt(activeAttempt);
+    }
+  };
+
+  const onRetryAdmission = (): void => {
+    if (activeAttempt?.stage === "admitting" && !checkingAttempt) {
+      void admitAcquisition(activeAttempt);
+    }
+  };
+
+  const showAdmissionRetry = (attempt: AdmittingAcquisitionAttempt): void => {
+    activeAttempt = attempt;
+    previewSubmit.disabled = true;
+    acquire.disabled = true;
+    continueChecking.hidden = true;
+    retryAdmission.hidden = false;
+    retryAdmission.disabled = false;
+    jobIdTarget.textContent = "";
+    setText(
+      jobTarget,
+      "The acquisition response was not received. Retry admission with the same saved identity.",
+    );
+  };
+
+  const resetForNewPreview = (): void => {
+    activeAttempt = null;
+    approvedPlan = null;
+    clearStoredAttempt();
+    previewSubmit.disabled = false;
+    acquire.disabled = true;
+    acquire.hidden = true;
+    planTarget.hidden = true;
+    replaceChildren(planTarget, []);
+    continueChecking.hidden = true;
+    continueChecking.disabled = false;
+    retryAdmission.hidden = true;
+    retryAdmission.disabled = false;
+    jobIdTarget.textContent = "";
   };
 
   previous.addEventListener("click", onPrevious);
@@ -311,10 +431,15 @@ export function attachSourcesPage(
   form.addEventListener("submit", onPreview);
   acquire.addEventListener("click", onAcquire);
   continueChecking.addEventListener("click", onContinue);
+  retryAdmission.addEventListener("click", onRetryAdmission);
   void loadPage();
   if (activeAttempt !== null) {
-    exposeAttempt(jobIdTarget, activeAttempt);
-    void checkAttempt(activeAttempt);
+    if (activeAttempt.stage === "polling") {
+      exposeAttempt(jobIdTarget, activeAttempt);
+      void checkAttempt(activeAttempt);
+    } else {
+      showAdmissionRetry(activeAttempt);
+    }
   }
 
   return () => {
@@ -325,6 +450,7 @@ export function attachSourcesPage(
     form.removeEventListener("submit", onPreview);
     acquire.removeEventListener("click", onAcquire);
     continueChecking.removeEventListener("click", onContinue);
+    retryAdmission.removeEventListener("click", onRetryAdmission);
   };
 }
 
@@ -522,9 +648,8 @@ function isYouTubeSource(value: string): boolean {
   }
 }
 
-function idempotencyKey(): string {
-  const random = globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
-  return `web-source-${random}`;
+function acquisitionIdempotencyKey(fingerprint: string): string {
+  return `web-source-acquire-${fingerprint}`;
 }
 
 function formatPublishedAt(value: string | null): string {
@@ -532,32 +657,129 @@ function formatPublishedAt(value: string | null): string {
 }
 
 function exposeAttempt(target: HTMLElement, attempt: SourceAttempt): void {
-  target.textContent = attempt.job_id;
+  target.textContent = attempt.job_id ?? "";
 }
 
 function readStoredAttempt(): SourceAttempt | null {
-  let raw: string | null;
+  const current = readStorageValue(SOURCE_ATTEMPT_STORAGE_KEY);
+  if (current !== null) return parseCurrentAttempt(current);
+  const legacy = readStorageValue(LEGACY_SOURCE_ATTEMPT_STORAGE_KEY);
+  if (legacy === null) return null;
+  const migrated = parseLegacyAttempt(legacy);
+  discardInvalidStoredAttempt(LEGACY_SOURCE_ATTEMPT_STORAGE_KEY);
+  if (migrated !== null) writeStoredAttempt(migrated);
+  return migrated;
+}
+
+function readStorageValue(key: string): string | null {
   try {
-    raw = window.sessionStorage.getItem(SOURCE_ATTEMPT_STORAGE_KEY);
+    return window.sessionStorage.getItem(key);
   } catch {
     return null;
   }
-  if (raw === null) return null;
+}
+
+function parseCurrentAttempt(raw: string): SourceAttempt | null {
   if (raw.length > MAX_STORED_ATTEMPT_BYTES) {
-    discardInvalidStoredAttempt();
+    discardInvalidStoredAttempt(SOURCE_ATTEMPT_STORAGE_KEY);
     return null;
   }
   let value: unknown;
   try {
     value = JSON.parse(raw) as unknown;
   } catch {
-    discardInvalidStoredAttempt();
+    discardInvalidStoredAttempt(SOURCE_ATTEMPT_STORAGE_KEY);
     return null;
   }
   if (!isRecord(value)) {
-    discardInvalidStoredAttempt();
+    discardInvalidStoredAttempt(SOURCE_ATTEMPT_STORAGE_KEY);
     return null;
   }
+  const keys = Object.keys(value).sort();
+  const expected = [
+    "fingerprint",
+    "idempotency_key",
+    "job_id",
+    "kind",
+    "stage",
+    "version",
+  ];
+  if (
+    keys.length !== expected.length ||
+    keys.some((key, index) => key !== expected[index]) ||
+    value.version !== 2
+  ) {
+    discardInvalidStoredAttempt(SOURCE_ATTEMPT_STORAGE_KEY);
+    return null;
+  }
+  if (
+    value.stage === "polling" &&
+    value.kind === "source_preview" &&
+    typeof value.job_id === "string" &&
+    JOB_ID.test(value.job_id) &&
+    value.fingerprint === null &&
+    value.idempotency_key === null
+  ) {
+    return {
+      version: 2,
+      stage: "polling",
+      job_id: value.job_id,
+      kind: "source_preview",
+      fingerprint: null,
+      idempotency_key: null,
+    };
+  }
+  if (
+    value.kind === "source_acquisition" &&
+    typeof value.fingerprint === "string" &&
+    SHA256.test(value.fingerprint) &&
+    typeof value.idempotency_key === "string" &&
+    isSafeIdempotencyKey(value.idempotency_key)
+  ) {
+    if (
+      value.stage === "admitting" &&
+      value.job_id === null &&
+      value.idempotency_key === acquisitionIdempotencyKey(value.fingerprint)
+    ) {
+      return {
+        version: 2,
+        stage: "admitting",
+        job_id: null,
+        kind: "source_acquisition",
+        fingerprint: value.fingerprint,
+        idempotency_key: value.idempotency_key,
+      };
+    }
+    if (
+      value.stage !== "polling" ||
+      typeof value.job_id !== "string" ||
+      !JOB_ID.test(value.job_id)
+    ) {
+      discardInvalidStoredAttempt(SOURCE_ATTEMPT_STORAGE_KEY);
+      return null;
+    }
+    return {
+      version: 2,
+      stage: "polling",
+      job_id: value.job_id,
+      kind: "source_acquisition",
+      fingerprint: value.fingerprint,
+      idempotency_key: value.idempotency_key,
+    };
+  }
+  discardInvalidStoredAttempt(SOURCE_ATTEMPT_STORAGE_KEY);
+  return null;
+}
+
+function parseLegacyAttempt(raw: string): PollingSourceAttempt | null {
+  if (raw.length > MAX_STORED_ATTEMPT_BYTES) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(raw) as unknown;
+  } catch {
+    return null;
+  }
+  if (!isRecord(value)) return null;
   const keys = Object.keys(value).sort();
   const expected = [
     "fingerprint",
@@ -573,7 +795,6 @@ function readStoredAttempt(): SourceAttempt | null {
     typeof value.job_id !== "string" ||
     !JOB_ID.test(value.job_id)
   ) {
-    discardInvalidStoredAttempt();
     return null;
   }
   if (
@@ -582,7 +803,8 @@ function readStoredAttempt(): SourceAttempt | null {
     value.idempotency_key === null
   ) {
     return {
-      version: 1,
+      version: 2,
+      stage: "polling",
       job_id: value.job_id,
       kind: "source_preview",
       fingerprint: null,
@@ -597,39 +819,41 @@ function readStoredAttempt(): SourceAttempt | null {
     isSafeIdempotencyKey(value.idempotency_key)
   ) {
     return {
-      version: 1,
+      version: 2,
+      stage: "polling",
       job_id: value.job_id,
       kind: "source_acquisition",
       fingerprint: value.fingerprint,
       idempotency_key: value.idempotency_key,
     };
   }
-  discardInvalidStoredAttempt();
   return null;
 }
 
-function writeStoredAttempt(attempt: SourceAttempt): void {
+function writeStoredAttempt(attempt: SourceAttempt): boolean {
   try {
     window.sessionStorage.setItem(
       SOURCE_ATTEMPT_STORAGE_KEY,
       JSON.stringify(attempt),
     );
+    return true;
   } catch {
-    // The in-memory attempt remains authoritative for this page lifecycle.
+    return false;
   }
 }
 
 function clearStoredAttempt(): void {
   try {
     window.sessionStorage.removeItem(SOURCE_ATTEMPT_STORAGE_KEY);
+    window.sessionStorage.removeItem(LEGACY_SOURCE_ATTEMPT_STORAGE_KEY);
   } catch {
     // Terminal state remains authoritative even when browser storage is unavailable.
   }
 }
 
-function discardInvalidStoredAttempt(): void {
+function discardInvalidStoredAttempt(key: string): void {
   try {
-    window.sessionStorage.removeItem(SOURCE_ATTEMPT_STORAGE_KEY);
+    window.sessionStorage.removeItem(key);
   } catch {
     // Invalid browser state is ignored when storage cannot be changed.
   }

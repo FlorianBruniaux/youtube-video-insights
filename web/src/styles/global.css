@@ -455,7 +455,8 @@ a {
   font-family: var(--font-mono);
 }
 
-[data-source-continue] {
+[data-source-continue],
+[data-source-retry-admission] {
   margin-top: var(--space-3);
 }
 
