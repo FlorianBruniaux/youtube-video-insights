@@ -1,6 +1,7 @@
 import type { ApiGetResponse, Job, JobKind, JobResponse } from "./types";
 
 export const RESEARCH_JOB_STORAGE_KEY = "yt-insights:research-job:v1";
+export const RESEARCH_ADMISSION_STORAGE_KEY = "yt-insights:research-admission:v1";
 const JOB_ID = /^[A-Za-z0-9_-]{1,200}$/;
 const SESSION_ID = /^[A-Za-z0-9_-]{1,128}$/;
 const RESEARCH_JOB_KINDS = new Set<JobKind>([
@@ -9,6 +10,7 @@ const RESEARCH_JOB_KINDS = new Set<JobKind>([
   "research_retry",
 ]);
 const MAX_POLLS = 60;
+const LANGUAGE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 export interface ResearchJobAttempt {
   readonly version: 1;
@@ -18,6 +20,18 @@ export interface ResearchJobAttempt {
     | "research_discovery"
     | "research_acquisition"
     | "research_retry";
+}
+
+export interface ResearchAdmissionAttempt {
+  readonly version: 1;
+  readonly session_id: string;
+  readonly kind:
+    | "research_discovery"
+    | "research_acquisition"
+    | "research_retry";
+  readonly expected_revision: number;
+  readonly idempotency_key: string;
+  readonly language: string | null;
 }
 
 type ReadApi = (path: string, signal?: AbortSignal) => Promise<ApiGetResponse>;
@@ -129,6 +143,121 @@ export function clearResearchJobAttempt(): void {
   } catch {
     // The in-memory controller still stops polling this attempt.
   }
+}
+
+export function createResearchAdmission(
+  sessionId: string,
+  kind: ResearchAdmissionAttempt["kind"],
+  expectedRevision: number,
+  language: string | null = null,
+): ResearchAdmissionAttempt {
+  if (
+    !SESSION_ID.test(sessionId) ||
+    !RESEARCH_JOB_KINDS.has(kind) ||
+    !Number.isSafeInteger(expectedRevision) ||
+    expectedRevision < 0 ||
+    (kind === "research_acquisition") !== (language !== null) ||
+    (language !== null && (!LANGUAGE.test(language) || [...language].length > 500))
+  ) {
+    throw new TypeError("Invalid research admission identity");
+  }
+  const languageSuffix = language === null ? "" : `:${hashText(language)}`;
+  const key = `web:${kind}:${sessionId}:${expectedRevision}${languageSuffix}`;
+  if (key.length > 200) throw new TypeError("Research admission identity is too long");
+  return {
+    version: 1,
+    session_id: sessionId,
+    kind,
+    expected_revision: expectedRevision,
+    idempotency_key: key,
+    language,
+  };
+}
+
+export function researchAdmissionBody(
+  attempt: ResearchAdmissionAttempt,
+): Record<string, string | number> {
+  if (!isResearchAdmissionAttempt(attempt)) throw new TypeError("Invalid research admission");
+  return {
+    expected_revision: attempt.expected_revision,
+    idempotency_key: attempt.idempotency_key,
+    ...(attempt.language === null ? {} : { language: attempt.language }),
+  };
+}
+
+export function readResearchAdmission(): ResearchAdmissionAttempt | null {
+  let raw: string | null;
+  try {
+    raw = window.sessionStorage.getItem(RESEARCH_ADMISSION_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+  if (raw === null || raw.length > 1_500) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (isResearchAdmissionAttempt(parsed)) return parsed;
+  } catch {
+    // The corrupt value is discarded below.
+  }
+  clearResearchAdmission();
+  return null;
+}
+
+export function writeResearchAdmission(attempt: ResearchAdmissionAttempt): boolean {
+  if (!isResearchAdmissionAttempt(attempt)) return false;
+  try {
+    window.sessionStorage.setItem(
+      RESEARCH_ADMISSION_STORAGE_KEY,
+      JSON.stringify(attempt),
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function clearResearchAdmission(): void {
+  try {
+    window.sessionStorage.removeItem(RESEARCH_ADMISSION_STORAGE_KEY);
+  } catch {
+    // The controller still clears its in-memory admission.
+  }
+}
+
+function isResearchAdmissionAttempt(value: unknown): value is ResearchAdmissionAttempt {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const object = value as Record<string, unknown>;
+  if (
+    Object.keys(object).length !== 6 ||
+    object.version !== 1 ||
+    typeof object.session_id !== "string" ||
+    !SESSION_ID.test(object.session_id) ||
+    typeof object.kind !== "string" ||
+    !RESEARCH_JOB_KINDS.has(object.kind as JobKind) ||
+    typeof object.expected_revision !== "number" ||
+    !Number.isSafeInteger(object.expected_revision) ||
+    object.expected_revision < 0 ||
+    typeof object.idempotency_key !== "string" ||
+    object.idempotency_key.length > 200 ||
+    !/^[\x20-\x7e]+$/.test(object.idempotency_key) ||
+    (object.language !== null && typeof object.language !== "string")
+  ) return false;
+  const expected = createResearchAdmission(
+    object.session_id,
+    object.kind as ResearchAdmissionAttempt["kind"],
+    object.expected_revision,
+    object.language as string | null,
+  );
+  return expected.idempotency_key === object.idempotency_key;
+}
+
+function hashText(value: string): string {
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(value)) {
+    hash ^= BigInt(byte);
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n);
+  }
+  return hash.toString(16).padStart(16, "0");
 }
 
 function publicCode(error: unknown): string | null {

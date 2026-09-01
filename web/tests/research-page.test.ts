@@ -141,13 +141,16 @@ function renderWorkspaceDom(): HTMLElement {
       <p data-research-status role="status"></p>
       <header data-research-heading></header>
       <section data-evidence-panel></section>
-      <aside data-decision-panel></aside>
+      <div data-research-controls>
+        <aside data-decision-panel></aside>
+        <section data-job-progress hidden>
+          <p data-job-message></p><code data-job-id></code>
+          <button data-job-continue type="button" hidden>Continue checking</button>
+          <button data-job-retry-admission type="button" hidden>Retry admission</button>
+        </section>
+      </div>
       <section data-candidate-list></section>
       <section data-acquisition-history></section>
-      <section data-job-progress hidden>
-        <p data-job-message></p><code data-job-id></code>
-        <button data-job-continue type="button" hidden>Continue checking</button>
-      </section>
       <details data-event-timeline><summary>Timeline</summary><div data-event-list></div></details>
     </main>`;
   return document.querySelector<HTMLElement>("[data-research-workspace]")!;
@@ -171,6 +174,7 @@ afterEach(() => {
   window.sessionStorage.clear();
   window.history.replaceState({}, "", "/");
   Object.defineProperty(document, "hidden", { configurable: true, value: false });
+  Reflect.deleteProperty(window, "confirm");
   document.body.replaceChildren();
 });
 
@@ -292,9 +296,55 @@ describe("research creation", () => {
       (write.mock.calls[1]?.[1] as { idempotency_key: string }).idempotency_key,
     );
   });
+
+  it("accepts 500-code-point language tags and rejects 501 before POST", async () => {
+    const validRoot = renderNewDom();
+    validRoot.querySelector<HTMLInputElement>("[name=topic]")!.value = "Language bounds";
+    validRoot.querySelector<HTMLTextAreaElement>("[name=queries]")!.value = "local models";
+    validRoot.querySelector<HTMLInputElement>("[name=languages]")!.value = "a".repeat(500);
+    const validWrite = vi.fn().mockResolvedValue(
+      session("awaiting_sufficiency_confirmation", "confirm_sufficiency_or_refresh"),
+    );
+    attachResearchNewPage(validRoot, { write: validWrite, navigate: vi.fn() });
+
+    submit(validRoot.querySelector("form")!);
+    await vi.waitFor(() => expect(validWrite).toHaveBeenCalledOnce());
+
+    document.body.replaceChildren();
+    const invalidRoot = renderNewDom();
+    invalidRoot.querySelector<HTMLInputElement>("[name=topic]")!.value = "Language bounds";
+    invalidRoot.querySelector<HTMLTextAreaElement>("[name=queries]")!.value = "local models";
+    invalidRoot.querySelector<HTMLInputElement>("[name=languages]")!.value = "a".repeat(501);
+    const invalidWrite = vi.fn();
+    attachResearchNewPage(invalidRoot, { write: invalidWrite });
+
+    submit(invalidRoot.querySelector("form")!);
+    expect(invalidWrite).not.toHaveBeenCalled();
+    expect(invalidRoot.querySelector("[data-research-new-status]")?.textContent).toContain(
+      "500 code points",
+    );
+  });
 });
 
 describe("cumulative research workspace", () => {
+  it("keeps the mobile DOM sequence evidence, controls, candidates, history, timeline", () => {
+    const root = renderWorkspaceDom();
+    const directOrder = [
+      "[data-evidence-panel]",
+      "[data-research-controls]",
+      "[data-candidate-list]",
+      "[data-acquisition-history]",
+      "[data-event-timeline]",
+    ].map((selector) => [...root.children].indexOf(root.querySelector(selector)!));
+
+    expect(directOrder).toEqual([...directOrder].sort((left, right) => left - right));
+    const controls = root.querySelector<HTMLElement>("[data-research-controls]")!;
+    expect([...controls.children]).toEqual([
+      controls.querySelector("[data-decision-panel]"),
+      controls.querySelector("[data-job-progress]"),
+    ]);
+  });
+
   it("renders evidence as text and exactly two primary sufficiency choices", async () => {
     window.history.replaceState({}, "", `/research/${sessionId}/`);
     const root = renderWorkspaceDom();
@@ -345,6 +395,39 @@ describe("cumulative research workspace", () => {
     );
   });
 
+  it("offers an explicit confirmed cancellation and reloads stale cancellation state", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    const root = renderWorkspaceDom();
+    const current = session("awaiting_candidate_approval", "approve_candidates_or_cancel", 2);
+    const read = vi.fn().mockResolvedValue(current);
+    const write = vi.fn().mockRejectedValue({ code: "stale_revision", status: 409 });
+    const confirm = vi.fn().mockReturnValue(true);
+    Object.defineProperty(window, "confirm", { configurable: true, value: confirm });
+    attachResearchWorkspace(root, {
+      read,
+      write,
+      wait: vi.fn(),
+      createId: () => "123e4567-e89b-42d3-a456-426614174000",
+    });
+    await vi.waitFor(() => expect(root.querySelector("[data-cancel-research]")).not.toBeNull());
+
+    root.querySelector<HTMLButtonElement>("[data-cancel-research]")!.click();
+
+    await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+    expect(confirm).toHaveBeenCalledOnce();
+    expect(write).toHaveBeenCalledWith(
+      `/api/v1/research/sessions/${sessionId}/cancellations`,
+      {
+        expected_revision: 2,
+        idempotency_key: "123e4567-e89b-42d3-a456-426614174000",
+      },
+      expect.any(AbortSignal),
+    );
+    expect(root.querySelector("[data-research-status]")?.textContent).toBe(
+      "The session changed. Review the current evidence before deciding again.",
+    );
+  });
+
   it("reloads a stale snapshot and requires the decision again", async () => {
     window.history.replaceState({}, "", `/research/${sessionId}/`);
     const root = renderWorkspaceDom();
@@ -381,8 +464,93 @@ describe("cumulative research workspace", () => {
 
     await vi.waitFor(() => expect(root.querySelector("[data-retry-research]")).not.toBeNull());
     expect(write).toHaveBeenCalledTimes(1);
+    expect(write.mock.calls[0]?.[1]).toEqual({
+      expected_revision: 2,
+      idempotency_key: `web:research_discovery:${sessionId}:2`,
+    });
     expect(root.querySelector("[data-job-message]")?.textContent).toContain("failed");
     expect(window.sessionStorage.getItem("yt-insights:research-job:v1")).toBeNull();
+  });
+
+  it("persists a job admission before POST and retries an ambiguous response only explicitly", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    const root = renderWorkspaceDom();
+    const read = vi
+      .fn()
+      .mockResolvedValueOnce(session("discovering", null, 2))
+      .mockResolvedValueOnce(job("research_discovery", "failed", null))
+      .mockResolvedValueOnce(session("failed_retryable", null, 3));
+    const write = vi
+      .fn((_path: string, body: unknown) => {
+        expect(window.sessionStorage.getItem("yt-insights:research-admission:v1")).toContain(
+          (body as { idempotency_key: string }).idempotency_key,
+        );
+        return write.mock.calls.length === 1
+          ? Promise.reject({ code: "unexpected_response" })
+          : Promise.resolve({ schema_version: 1 as const, job_id: "job_discovery_1" });
+      });
+    attachResearchWorkspace(root, { read, write, wait: vi.fn() });
+    await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
+
+    root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
+    await vi.waitFor(() =>
+      expect(root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")?.hidden).toBe(false),
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+
+    root.querySelector<HTMLButtonElement>("[data-job-retry-admission]")!.click();
+    await vi.waitFor(() => expect(write).toHaveBeenCalledTimes(2));
+    expect(write.mock.calls[1]?.[1]).toEqual(write.mock.calls[0]?.[1]);
+    await vi.waitFor(() => expect(root.querySelector("[data-retry-research]")).not.toBeNull());
+    expect(window.sessionStorage.getItem("yt-insights:research-admission:v1")).toBeNull();
+  });
+
+  it("retains the accepted admission when the job identity cannot be persisted", async () => {
+    window.history.replaceState({}, "", `/research/${sessionId}/`);
+    const originalSetItem = window.sessionStorage.setItem.bind(window.sessionStorage);
+    const setItemSpy = vi.spyOn(window.sessionStorage, "setItem").mockImplementation(function (
+      key: string,
+      value: string,
+    ): void {
+      if (key === "yt-insights:research-job:v1") throw new DOMException("Storage full");
+      originalSetItem(key, value);
+    });
+    const root = renderWorkspaceDom();
+    const write = vi.fn().mockResolvedValue({ schema_version: 1, job_id: "job_discovery_1" });
+    const dispose = attachResearchWorkspace(root, {
+      read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
+      write,
+      wait: vi.fn().mockResolvedValue(undefined),
+    });
+    await vi.waitFor(() => expect(root.querySelector("[data-start-discovery]")).not.toBeNull());
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+
+    root.querySelector<HTMLButtonElement>("[data-start-discovery]")!.click();
+
+    await vi.waitFor(() => expect(write).toHaveBeenCalledOnce());
+    const storedJob = window.sessionStorage.getItem("yt-insights:research-job:v1");
+    const storedAdmission = window.sessionStorage.getItem("yt-insights:research-admission:v1");
+    setItemSpy.mockRestore();
+    expect(storedJob).toBeNull();
+    expect(storedAdmission).toContain(
+      `web:research_discovery:${sessionId}:2`,
+    );
+    dispose();
+
+    Object.defineProperty(document, "hidden", { configurable: true, value: false });
+    document.body.replaceChildren();
+    const reloadedRoot = renderWorkspaceDom();
+    const replayWrite = vi.fn();
+    attachResearchWorkspace(reloadedRoot, {
+      read: vi.fn().mockResolvedValue(session("discovering", null, 2)),
+      write: replayWrite,
+      wait: vi.fn(),
+    });
+
+    await vi.waitFor(() =>
+      expect(reloadedRoot.querySelector<HTMLButtonElement>("[data-job-retry-admission]")?.hidden).toBe(false),
+    );
+    expect(replayWrite).not.toHaveBeenCalled();
   });
 
   it("treats an evicted persisted job as terminal and reloads the durable session", async () => {

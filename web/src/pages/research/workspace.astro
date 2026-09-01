@@ -17,16 +17,14 @@ import AppLayout from "../../layouts/AppLayout.astro";
     </header>
 
     <div class="research-layout">
-      <div class="research-main-column">
-        <EvidencePanel />
-        <CandidateList />
-        <AcquisitionHistory />
-        <EventTimeline />
-      </div>
-      <div class="research-side-column">
+      <EvidencePanel />
+      <div class="research-controls" data-research-controls>
         <DecisionPanel />
         <JobProgress />
       </div>
+      <CandidateList />
+      <AcquisitionHistory />
+      <EventTimeline />
     </div>
   </div>
 
@@ -37,4 +35,3 @@ import AppLayout from "../../layouts/AppLayout.astro";
     if (root) attachResearchWorkspace(root);
   </script>
 </AppLayout>
-

@@ -122,8 +122,11 @@ function parseStartForm(form: HTMLFormElement, idempotencyKey: string): StartPay
       .map((value) => value.trim().toLowerCase())
       .filter(Boolean),
   );
-  if (languages.length > 20 || languages.some((value) => !LANGUAGE.test(value))) {
-    throw new Error("Use up to 20 comma-separated language tags, such as en or fr.");
+  if (
+    languages.length > 20 ||
+    languages.some((value) => !LANGUAGE.test(value) || codePoints(value) > 500)
+  ) {
+    throw new Error("Use up to 20 comma-separated language tags of at most 500 code points each.");
   }
   const profile = String(data.get("freshness_profile") ?? "");
   if (!PROFILES.has(profile as FreshnessProfile)) throw new Error("Choose a valid freshness profile.");
@@ -191,7 +194,10 @@ function isStartPayload(value: unknown): value is StartPayload {
     !Array.isArray(payload.languages) ||
     payload.languages.length > 20 ||
     !payload.languages.every(
-      (item) => typeof item === "string" && LANGUAGE.test(item),
+      (item) =>
+        typeof item === "string" &&
+        LANGUAGE.test(item) &&
+        codePoints(item) <= 500,
     ) ||
     new Set(payload.languages).size !== payload.languages.length ||
     !PROFILES.has(payload.freshness_profile as FreshnessProfile) ||

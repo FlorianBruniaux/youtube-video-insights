@@ -103,8 +103,15 @@ class AcquisitionRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class RevisionRequest:
+class DiscoveryRequest:
     expected_revision: int
+    idempotency_key: str
+
+
+@dataclass(frozen=True, slots=True)
+class CancellationRequest:
+    expected_revision: int
+    idempotency_key: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -245,9 +252,20 @@ def parse_acquisition(body: bytes) -> AcquisitionRequest:
     )
 
 
-def parse_revision(body: bytes) -> RevisionRequest:
-    payload = _json_object(body, {"expected_revision"})
-    return RevisionRequest(_revision(payload.get("expected_revision")))
+def parse_discovery(body: bytes) -> DiscoveryRequest:
+    payload = _json_object(body, {"expected_revision", "idempotency_key"})
+    return DiscoveryRequest(
+        _revision(payload.get("expected_revision")),
+        _idempotency_key(payload.get("idempotency_key")),
+    )
+
+
+def parse_cancellation(body: bytes) -> CancellationRequest:
+    payload = _json_object(body, {"expected_revision", "idempotency_key"})
+    return CancellationRequest(
+        _revision(payload.get("expected_revision")),
+        _idempotency_key(payload.get("idempotency_key")),
+    )
 
 
 def parse_retry(body: bytes) -> RetryRequest:

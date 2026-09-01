@@ -265,6 +265,7 @@ class FakeWorkflow:
         self.decision_calls: list[tuple[str, int, str, str]] = []
         self.discovery_calls: list[tuple[str, int]] = []
         self.approval_calls: list[tuple[str, int, tuple[str, ...], str]] = []
+        self.cancellation_calls: list[tuple[str, int, str]] = []
         self.acquisition_calls: list[tuple[str, int, str, str]] = []
         self.retry_calls: list[tuple[str, int, str]] = []
         self.export_calls: list[tuple[object, str]] = []
@@ -331,6 +332,14 @@ class FakeWorkflow:
     ) -> FakeResponse:
         self.acquisition_calls.append(
             (session_id, expected_revision, idempotency_key, language)
+        )
+        return self._result()
+
+    def cancel(
+        self, session_id: str, *, expected_revision: int, idempotency_key: str
+    ) -> FakeResponse:
+        self.cancellation_calls.append(
+            (session_id, expected_revision, idempotency_key)
         )
         return self._result()
 
@@ -617,7 +626,7 @@ def test_research_mutations_delegate_to_workflow_and_queue_long_jobs(
     discovery = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/discovery",
-            '{"expected_revision":5}',
+            '{"expected_revision":5,"idempotency_key":"discovery-1"}',
         )
     )
     discovery_result = services.jobs.submissions[-1][1]()
@@ -668,6 +677,126 @@ def test_research_mutations_delegate_to_workflow_and_queue_long_jobs(
     assert services.workflow.retry_calls == [(SESSION_ID, 7, "retry-1")]
 
 
+def test_candidate_cancellation_is_explicit_replayable_and_state_guarded(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(
+        state=ResearchState.AWAITING_CANDIDATES, revision=5
+    )
+    request = _post(
+        f"/api/v1/research/sessions/{SESSION_ID}/cancellations",
+        '{"expected_revision":5,"idempotency_key":"cancel-1"}',
+    )
+
+    first = services.app.handle(request)
+    replayed = services.app.handle(request)
+    changed = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/cancellations",
+            '{"expected_revision":4,"idempotency_key":"cancel-1"}',
+        )
+    )
+
+    assert first.status == replayed.status == 200
+    assert first == replayed
+    assert changed.status == 409
+    assert changed.json_body["error"] == {"code": "idempotency_conflict"}
+    assert services.workflow.cancellation_calls == [
+        (SESSION_ID, 5, "cancel-1"),
+    ]
+
+    services.store.session = _session(state=ResearchState.ACQUIRING, revision=6)
+    services.workflow.error = ValueError("private incompatible state")
+    incompatible = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/cancellations",
+            '{"expected_revision":6,"idempotency_key":"cancel-3"}',
+        )
+    )
+    assert incompatible.status == 409
+    assert incompatible.json_body["error"] == {"code": "workflow_conflict"}
+
+
+@pytest.mark.parametrize(
+    ("action", "payload", "changed_payload"),
+    (
+        (
+            "discovery",
+            '{"expected_revision":5,"idempotency_key":"discovery-5"}',
+            '{"expected_revision":4,"idempotency_key":"discovery-5"}',
+        ),
+        (
+            "acquisition",
+            '{"expected_revision":5,"idempotency_key":"acquisition-5","language":"fr"}',
+            '{"expected_revision":5,"idempotency_key":"acquisition-5","language":"en"}',
+        ),
+        (
+            "retry",
+            '{"expected_revision":5,"idempotency_key":"retry-5"}',
+            '{"expected_revision":4,"idempotency_key":"retry-5"}',
+        ),
+    ),
+)
+def test_research_job_admission_replays_same_202_and_rejects_payload_change(
+    services: SimpleNamespace,
+    action: str,
+    payload: str,
+    changed_payload: str,
+) -> None:
+    state = {
+        "discovery": ResearchState.DISCOVERING,
+        "acquisition": ResearchState.ACQUIRING,
+        "retry": ResearchState.FAILED_RETRYABLE,
+    }[action]
+    services.store.session = _session(
+        state=state,
+        revision=5,
+        retry_target=(
+            ResearchState.ASSESSING
+            if state is ResearchState.FAILED_RETRYABLE
+            else None
+        ),
+    )
+    request = _post(
+        f"/api/v1/research/sessions/{SESSION_ID}/{action}", payload
+    )
+
+    first = services.app.handle(request)
+    replayed = services.app.handle(request)
+    changed = services.app.handle(
+        _post(
+            f"/api/v1/research/sessions/{SESSION_ID}/{action}",
+            changed_payload,
+        )
+    )
+
+    assert first.status == replayed.status == 202
+    assert first == replayed
+    assert len(services.jobs.submissions) == 1
+    assert changed.status == 409
+    assert changed.json_body["error"] == {"code": "idempotency_conflict"}
+
+
+def test_failed_research_job_admission_releases_the_process_replay_key(
+    services: SimpleNamespace,
+) -> None:
+    services.store.session = _session(state=ResearchState.DISCOVERING, revision=5)
+    services.jobs.error = JobQueueFull()
+    request = _post(
+        f"/api/v1/research/sessions/{SESSION_ID}/discovery",
+        '{"expected_revision":5,"idempotency_key":"discovery-retry"}',
+    )
+
+    rejected = services.app.handle(request)
+    services.jobs.error = None
+    accepted = services.app.handle(request)
+
+    assert rejected.status == 429
+    assert rejected.json_body["error"] == {"code": "job_queue_full"}
+    assert accepted.status == 202
+    assert len(services.jobs.submissions) == 1
+
+
 def test_initial_stale_revision_returns_409_without_queue_submission(
     services: SimpleNamespace,
 ) -> None:
@@ -676,7 +805,7 @@ def test_initial_stale_revision_returns_409_without_queue_submission(
     response = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/discovery",
-            '{"expected_revision":5}',
+            '{"expected_revision":5,"idempotency_key":"discovery-5"}',
         )
     )
 
@@ -696,7 +825,7 @@ def test_revision_race_after_admission_is_a_bounded_terminal_job_result(
     response = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/discovery",
-            '{"expected_revision":5}',
+            '{"expected_revision":5,"idempotency_key":"discovery-5"}',
         )
     )
     services.store.session = _session(
@@ -717,7 +846,7 @@ def test_domain_revision_conflict_inside_job_is_a_bounded_terminal_result(
     response = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/discovery",
-            '{"expected_revision":5}',
+            '{"expected_revision":5,"idempotency_key":"discovery-5"}',
         )
     )
     services.workflow.error = ResearchRevisionConflict("private race detail")
@@ -735,7 +864,7 @@ def test_unexpected_workflow_value_error_inside_job_is_operation_failed(
     response = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/discovery",
-            '{"expected_revision":5}',
+            '{"expected_revision":5,"idempotency_key":"discovery-5"}',
         )
     )
     services.workflow.error = ValueError("failed at /Users/private/workflow.sqlite3")
@@ -753,7 +882,7 @@ def test_revision_race_inside_queued_work_is_stale_revision(
     response = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/discovery",
-            '{"expected_revision":5}',
+            '{"expected_revision":5,"idempotency_key":"discovery-5"}',
         )
     )
     services.workflow.before_result = lambda: setattr(
@@ -776,7 +905,7 @@ def test_state_race_inside_queued_work_is_workflow_conflict(
     response = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/discovery",
-            '{"expected_revision":5}',
+            '{"expected_revision":5,"idempotency_key":"discovery-5"}',
         )
     )
     services.workflow.before_result = lambda: setattr(
@@ -1063,7 +1192,7 @@ def test_missing_or_incompatible_queued_session_fails_before_submission(
     missing = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/discovery",
-            '{"expected_revision":5}',
+            '{"expected_revision":5,"idempotency_key":"discovery-5"}',
         )
     )
     services.store.missing = False
@@ -1073,7 +1202,7 @@ def test_missing_or_incompatible_queued_session_fails_before_submission(
     incompatible = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/discovery",
-            '{"expected_revision":5}',
+            '{"expected_revision":5,"idempotency_key":"discovery-5"}',
         )
     )
 
@@ -1813,7 +1942,7 @@ def test_known_capacity_and_index_failures_have_fixed_public_codes(
     queued = services.app.handle(
         _post(
             f"/api/v1/research/sessions/{SESSION_ID}/discovery",
-            '{"expected_revision":5}',
+            '{"expected_revision":5,"idempotency_key":"discovery-5"}',
         )
     )
     services.search.error = SearchIndexNotFound("/private/search.sqlite3")

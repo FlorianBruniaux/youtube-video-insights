@@ -38,11 +38,12 @@ from .api import (
     job_payload,
     parse_acquisition,
     parse_approval,
+    parse_cancellation,
     parse_decision,
+    parse_discovery,
     parse_export,
     parse_pagination,
     parse_retry,
-    parse_revision,
     parse_search,
     parse_source_acquisition,
     parse_source_preview,
@@ -66,7 +67,7 @@ from .readers import CatalogWebReader, ExportReader
 _LOGGER = logging.getLogger(__name__)
 _SESSION_ROUTE = re.compile(r"/api/v1/research/sessions/([^/]+)")
 _SESSION_ACTION_ROUTE = re.compile(
-    r"/api/v1/research/sessions/([^/]+)/(decisions|discovery|approvals|acquisition|retry|exports)"
+    r"/api/v1/research/sessions/([^/]+)/(decisions|discovery|approvals|cancellations|acquisition|retry|exports)"
 )
 _JOB_ROUTE = re.compile(r"/api/v1/jobs/([^/]+)")
 _EXPORT_DOSSIER_ROUTE = re.compile(r"/api/v1/exports/([0-9a-f]{64})/dossier")
@@ -76,6 +77,9 @@ _MAX_TIMELINE_ITEMS = 100
 _DECISION_STATES = frozenset({ResearchState.AWAITING_SUFFICIENCY})
 _DISCOVERY_STATES = frozenset({ResearchState.DISCOVERING})
 _APPROVAL_STATES = frozenset({ResearchState.AWAITING_CANDIDATES})
+_CANCELLATION_STATES = frozenset(
+    {ResearchState.AWAITING_CANDIDATES, ResearchState.CANCELLED}
+)
 _ACQUISITION_STATES = frozenset({ResearchState.ACQUIRING})
 _RETRY_STATES = frozenset(
     {
@@ -447,14 +451,20 @@ class WebApplication:
             )
             return WebResponse.json(200, response.to_dict())
         if action == "discovery":
-            parsed_revision = parse_revision(request.body)
-            return self._queue_research(
-                "research_discovery",
-                session_id,
-                parsed_revision.expected_revision,
-                _DISCOVERY_STATES,
-                lambda: self._workflow.discover(
-                    session_id, expected_revision=parsed_revision.expected_revision
+            parsed_discovery = parse_discovery(request.body)
+            return self._replays.run(
+                route=request.path,
+                key=parsed_discovery.idempotency_key,
+                payload=(parsed_discovery.expected_revision,),
+                operation=lambda: self._queue_research(
+                    "research_discovery",
+                    session_id,
+                    parsed_discovery.expected_revision,
+                    _DISCOVERY_STATES,
+                    lambda: self._workflow.discover(
+                        session_id,
+                        expected_revision=parsed_discovery.expected_revision,
+                    ),
                 ),
             )
         if action == "approvals":
@@ -471,42 +481,67 @@ class WebApplication:
                 ),
             )
             return WebResponse.json(200, response.to_dict())
+        if action == "cancellations":
+            parsed_cancellation = parse_cancellation(request.body)
+            return self._replays.run(
+                route=request.path,
+                key=parsed_cancellation.idempotency_key,
+                payload=(parsed_cancellation.expected_revision,),
+                operation=lambda: self._cancel_research(
+                    session_id,
+                    expected_revision=parsed_cancellation.expected_revision,
+                    idempotency_key=parsed_cancellation.idempotency_key,
+                ),
+            )
         if action == "acquisition":
             parsed_acquisition = parse_acquisition(request.body)
-            return self._queue_research(
-                "research_acquisition",
-                session_id,
-                parsed_acquisition.expected_revision,
-                _ACQUISITION_STATES,
-                lambda: self._workflow.acquire(
-                    session_id,
-                    expected_revision=parsed_acquisition.expected_revision,
-                    idempotency_key=parsed_acquisition.idempotency_key,
-                    language=parsed_acquisition.language,
+            return self._replays.run(
+                route=request.path,
+                key=parsed_acquisition.idempotency_key,
+                payload=(
+                    parsed_acquisition.expected_revision,
+                    parsed_acquisition.language,
                 ),
-                replay=lambda: self._is_acquisition_replay(
+                operation=lambda: self._queue_research(
+                    "research_acquisition",
                     session_id,
-                    expected_revision=parsed_acquisition.expected_revision,
-                    idempotency_key=parsed_acquisition.idempotency_key,
-                    language=parsed_acquisition.language,
+                    parsed_acquisition.expected_revision,
+                    _ACQUISITION_STATES,
+                    lambda: self._workflow.acquire(
+                        session_id,
+                        expected_revision=parsed_acquisition.expected_revision,
+                        idempotency_key=parsed_acquisition.idempotency_key,
+                        language=parsed_acquisition.language,
+                    ),
+                    replay=lambda: self._is_acquisition_replay(
+                        session_id,
+                        expected_revision=parsed_acquisition.expected_revision,
+                        idempotency_key=parsed_acquisition.idempotency_key,
+                        language=parsed_acquisition.language,
+                    ),
                 ),
             )
         if action == "retry":
             parsed_retry = parse_retry(request.body)
-            return self._queue_research(
-                "research_retry",
-                session_id,
-                parsed_retry.expected_revision,
-                _RETRY_STATES,
-                lambda: self._workflow.retry(
+            return self._replays.run(
+                route=request.path,
+                key=parsed_retry.idempotency_key,
+                payload=(parsed_retry.expected_revision,),
+                operation=lambda: self._queue_research(
+                    "research_retry",
                     session_id,
-                    expected_revision=parsed_retry.expected_revision,
-                    idempotency_key=parsed_retry.idempotency_key,
-                ),
-                replay=lambda: self._is_retry_replay(
-                    session_id,
-                    expected_revision=parsed_retry.expected_revision,
-                    idempotency_key=parsed_retry.idempotency_key,
+                    parsed_retry.expected_revision,
+                    _RETRY_STATES,
+                    lambda: self._workflow.retry(
+                        session_id,
+                        expected_revision=parsed_retry.expected_revision,
+                        idempotency_key=parsed_retry.idempotency_key,
+                    ),
+                    replay=lambda: self._is_retry_replay(
+                        session_id,
+                        expected_revision=parsed_retry.expected_revision,
+                        idempotency_key=parsed_retry.idempotency_key,
+                    ),
                 ),
             )
         parsed_export = parse_export(request.body)
@@ -529,6 +564,25 @@ class WebApplication:
                 "export": _export_payload(result),
             },
         )
+
+    def _cancel_research(
+        self,
+        session_id: str,
+        *,
+        expected_revision: int,
+        idempotency_key: str,
+    ) -> WebResponse:
+        response = self._synchronous_research_operation(
+            session_id,
+            expected_revision=expected_revision,
+            compatible_states=_CANCELLATION_STATES,
+            operation=lambda: self._workflow.cancel(
+                session_id,
+                expected_revision=expected_revision,
+                idempotency_key=idempotency_key,
+            ),
+        )
+        return WebResponse.json(200, response.to_dict())
 
     def _queue_research(
         self,

@@ -128,6 +128,29 @@ describe("safe API requests", () => {
     expect(fetchSpy).toHaveBeenCalledTimes(3);
   });
 
+  it("accepts the strict cancellation route and parses its research snapshot", async () => {
+    const { history: _history, ...fixture } = researchFixture();
+    const fetchSpy = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({ schema_version: 1, mutation_token: "c".repeat(43) }),
+      )
+      .mockResolvedValueOnce(jsonResponse(fixture));
+    vi.stubGlobal("fetch", fetchSpy);
+    const { apiPost } = await import("../src/lib/api");
+    const body = {
+      expected_revision: 2,
+      idempotency_key: "cancel-session-2",
+    };
+
+    await expect(
+      apiPost("/api/v1/research/sessions/session_1/cancellations", body),
+    ).resolves.toEqual(fixture);
+    expect(fetchSpy.mock.calls[1]?.[0]).toBe(
+      "/api/v1/research/sessions/session_1/cancellations",
+    );
+  });
+
   it("preserves AbortError instead of hiding cancellation behind a public error", async () => {
     const abort = new DOMException("cancelled by test", "AbortError");
     vi.stubGlobal("fetch", vi.fn<typeof fetch>().mockRejectedValue(abort));

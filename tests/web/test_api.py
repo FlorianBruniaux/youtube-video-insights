@@ -22,7 +22,9 @@ from yt_insights.web.api import (
     SourceAcquisitionFacade,
     parse_acquisition,
     parse_approval,
+    parse_cancellation,
     parse_decision,
+    parse_discovery,
     parse_export,
     parse_pagination,
     parse_search,
@@ -240,6 +242,37 @@ def test_parse_decision_rejects_non_ascii_idempotency_key() -> None:
                     "expected_revision": 4,
                     "decision": "refresh",
                     "idempotency_key": "décision-1",
+                }
+            )
+        )
+
+
+def test_discovery_and_cancellation_require_exact_replay_fields() -> None:
+    discovery = parse_discovery(
+        _json_body(
+            {"expected_revision": 5, "idempotency_key": "discovery-5"}
+        )
+    )
+    cancellation = parse_cancellation(
+        _json_body(
+            {"expected_revision": 6, "idempotency_key": "cancel-6"}
+        )
+    )
+
+    assert discovery.expected_revision == 5
+    assert discovery.idempotency_key == "discovery-5"
+    assert cancellation.expected_revision == 6
+    assert cancellation.idempotency_key == "cancel-6"
+
+    with pytest.raises(RequestValidationError):
+        parse_discovery(_json_body({"expected_revision": 5}))
+    with pytest.raises(RequestValidationError):
+        parse_cancellation(
+            _json_body(
+                {
+                    "expected_revision": 6,
+                    "idempotency_key": "cancel-6",
+                    "reason": "private",
                 }
             )
         )

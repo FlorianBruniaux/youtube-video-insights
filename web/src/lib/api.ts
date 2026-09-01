@@ -424,7 +424,7 @@ function parsePostResponse(
   }
   if (
     route === "/api/v1/research/sessions" ||
-    /\/(decisions|approvals)$/.test(route)
+    /\/(decisions|approvals|cancellations)$/.test(route)
   ) {
     if (status !== 200) throw unexpected(status);
     return parseResearch(payload, status, false);
@@ -1480,7 +1480,7 @@ function requireApiPath(path: string, method: "GET" | "POST"): string {
     route === "/api/v1/sources/preview" ||
     route === "/api/v1/sources/acquire" ||
     route === "/api/v1/research/sessions" ||
-    /^\/api\/v1\/research\/sessions\/[A-Za-z0-9_-]{1,128}\/(decisions|discovery|approvals|acquisition|retry|exports)$/.test(
+    /^\/api\/v1\/research\/sessions\/[A-Za-z0-9_-]{1,128}\/(decisions|discovery|approvals|cancellations|acquisition|retry|exports)$/.test(
       route,
     );
   if ((method === "GET" && !getRoute) || (method === "POST" && !postRoute)) {

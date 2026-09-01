@@ -318,20 +318,38 @@ a {
 .research-layout {
   display: grid;
   grid-template-columns: minmax(0, 1.65fr) minmax(18rem, 0.75fr);
+  grid-template-areas:
+    "evidence controls"
+    "candidates controls"
+    "history controls"
+    "timeline controls";
   align-items: start;
   gap: var(--space-5);
 }
 
-.research-main-column,
-.research-side-column {
+.research-controls {
   display: grid;
   min-width: 0;
   gap: var(--space-5);
-}
-
-.research-side-column {
+  grid-area: controls;
   position: sticky;
   top: 6rem;
+}
+
+.evidence-panel {
+  grid-area: evidence;
+}
+
+.candidate-panel {
+  grid-area: candidates;
+}
+
+.acquisition-history {
+  grid-area: history;
+}
+
+.event-timeline {
+  grid-area: timeline;
 }
 
 .evidence-panel h2,
@@ -468,6 +486,11 @@ a {
 
 .job-progress .button {
   margin-top: var(--space-3);
+}
+
+.button-danger-secondary {
+  border-color: var(--color-focus);
+  color: var(--color-focus);
 }
 
 .export-grid {
@@ -853,9 +876,15 @@ a {
   .source-layout,
   .research-layout {
     grid-template-columns: 1fr;
+    grid-template-areas:
+      "evidence"
+      "controls"
+      "candidates"
+      "history"
+      "timeline";
   }
 
-  .research-side-column {
+  .research-controls {
     position: static;
   }
 
