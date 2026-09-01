@@ -1,0 +1,83 @@
+web/src/lib/research-job.ts
+  s_0a442347250965::t_2cc9150fc0e297 2,347
+  s_0a442347250965::t_2b654081eead62 8,17,27-43,46-55,59-60,63-70
+  s_0a442347250965::t_6291a212aabf3e 258,318,322,324-342,344-346,348-357,369-385
+  s_0a442347250965::t_2023abff48ce6f 135,141-159
+  s_0a442347250965::t_da8c08c862d36a 203-205,210-213,218,222,224-225,229-257
+  s_0a442347250965::t_0702d7fe3d5659 71
+  s_0a442347250965::t_e47063affa7fa6 259
+  s_0a442347250965::t_0fecb23686e794 386
+web/src/lib/pages/research-workspace.ts
+  s_0a442347250965::t_33c591835745cc 153-156,161-162,172,174-178,180-213,216-218,222,224,235-240,244,247-258,260-263,275-280
+  s_0a442347250965::t_15d9b4059d84ef 319-320,329-349
+  s_0a442347250965::t_443c762b2002cb 10,12,17-18,39,45,56-57
+  s_0a442347250965::t_a5f8da40729616 291-306
+  s_0a442347250965::t_fd9071d203634b 214-215
+  s_0a442347250965::t_54e9880562e51b 449-456
+  s_0a442347250965::t_5eb495c6c9ecd8 895-899
+  s_0a442347250965::t_105abf8942ac46 769-832,893-894,900-908
+  s_9cf259c16931e6::t_8c268029a8960d 909
+web/tests/source-attempt-coordinator.test.ts
+  s_0a442347250965::t_b94ecb9c1cd9a8 68
+  s_0a442347250965::t_050fce4cfe3323 6,49-67
+  s_0a442347250965::t_474208d650d9b8 69-70
+tests/web/test_application.py
+  s_0a442347250965::t_539c0bcdc0bd8f 720-758
+web/tests/research-page.test.ts
+  s_0a442347250965::t_ad5f17f4e0acf4 6-10,179,204-226,717-726,728-729,731-738,742,745-752,758-761,763-768,770-775
+  s_0a442347250965::t_67cc9b8cdc5646 600
+  s_0a442347250965::t_08d59a886435ae 727,730,739-741,743-744,804,809
+  s_0a442347250965::t_84eb93ac9f3d18 778,845-880
+  s_0a442347250965::t_f4d0c8e32ab66e 11,181,188-202,568-599,601-716,769
+  s_0a442347250965::t_dec158d639b621 753-757,762,776-777
+  s_0a442347250965::t_8f0a1395d82548 482-487,524,547-552,796
+  s_0a442347250965::t_f13afe83cfc6db 509-514
+  s_d812a5cba40e21::t_2d331a4ab79e5a 779
+web/src/lib/source-attempt-coordinator.ts
+  s_0a442347250965::t_01de7d582ecfc0 4,58-66,70,73-74,76,81,86,89,112,114,119,122,128,135-142,161,165,172,180,185,216-220,223,231-237
+  s_0a442347250965::t_6cdb3d4589d1fc 238
+src/yt_insights/web/application.py
+  s_0a442347250965::t_f124c784cd9e97 712-713,897
+src/yt_insights/web/static/_astro/source-attempt-coordinator.BTWaxjsF.js
+  s_0a442347250965::t_7a3b5fca534f36 1
+src/yt_insights/web/static/_astro/sources.astro_astro_type_script_index_0_lang.B83z0hly.js
+  s_0a442347250965::t_362beb9a32fa3d 1
+src/yt_insights/web/static/_astro/workspace.astro_astro_type_script_index_0_lang.BVkgCKF4.js
+  s_0a442347250965::t_93a29ed4180dd0 1
+src/yt_insights/web/static/research/workspace/index.html
+  s_0a442347250965::t_def07472f372db 1
+src/yt_insights/web/static/sources/index.html
+  s_0a442347250965::t_826afe54f8618a 1
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "fd0227bac3f654934b2156014d85eec7007f6400",
+  "prompts": {},
+  "sessions": {
+    "s_0a442347250965": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04233-7990-7c82-96d1-1418fd7722e9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_9cf259c16931e6": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a03e6c-f9af-7811-b19d-91365bbf6d38",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    },
+    "s_d812a5cba40e21": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a033c4-cc98-74d2-adf5-63f175b8463b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
