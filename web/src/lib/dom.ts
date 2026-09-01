@@ -6,7 +6,7 @@ export function createText(value: string): Text {
 }
 
 export function setText(target: Node, value: string): void {
-  target.textContent = value;
+  target.textContent = translate(value);
 }
 
 export function replaceChildren(
@@ -27,7 +27,7 @@ export function createYouTubeWatchLink(
   link.href = parsed.href;
   link.target = "_blank";
   link.rel = "noopener noreferrer";
-  link.textContent = label;
+  link.textContent = translate(label);
   return link;
 }
 
@@ -57,3 +57,4 @@ export function parseYouTubeWatchUrl(value: string): URL | null {
   }
   return parsed;
 }
+import { translate } from "./i18n";

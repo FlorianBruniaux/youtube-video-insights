@@ -1,5 +1,6 @@
 import { apiGet } from "../api";
 import { replaceChildren, setText } from "../dom";
+import { translate } from "../i18n";
 import type {
   ApiGetResponse,
   ApiPath,
@@ -64,7 +65,7 @@ function metric(label: string, value: string | number): HTMLElement {
   card.className = "metric-card dashboard-metric";
   const name = document.createElement("p");
   name.className = "metric-label";
-  name.textContent = label;
+  name.textContent = translate(label);
   const count = document.createElement("p");
   count.className = "metric-value";
   count.textContent = String(value);
@@ -86,14 +87,19 @@ function renderSessions(target: HTMLElement, response: ResearchListResponse): vo
     link.textContent = item.topic;
     const metadata = document.createElement("p");
     metadata.className = "dashboard-session-meta";
-    metadata.textContent = `${stateLabel(item.state)} · Updated ${formatUpdatedAt(item.updated_at)}`;
+    metadata.textContent = translate("{state} · Updated {date}", undefined, {
+      state: stateLabel(item.state),
+      date: formatUpdatedAt(item.updated_at),
+    });
     row.append(link, metadata);
     if (item.required_user_action !== null) {
       const warning = document.createElement("p");
       warning.className = "dashboard-session-warning";
-      warning.textContent = item.required_user_action === "confirm_sufficiency_or_refresh"
-        ? "Needs your decision: confirm the corpus is sufficient or refresh it."
-        : "Needs your decision: approve candidates or cancel this research.";
+      warning.textContent = translate(
+        item.required_user_action === "confirm_sufficiency_or_refresh"
+          ? "Needs your decision: confirm the corpus is sufficient or refresh it."
+          : "Needs your decision: approve candidates or cancel this research.",
+      );
       row.append(warning);
     }
     list.append(row);
@@ -103,7 +109,8 @@ function renderSessions(target: HTMLElement, response: ResearchListResponse): vo
 
 function stateLabel(value: string): string {
   const words = value.replaceAll("_", " ");
-  return `${words.charAt(0).toUpperCase()}${words.slice(1)}`;
+  const label = translate(words);
+  return `${label.charAt(0).toUpperCase()}${label.slice(1)}`;
 }
 
 function formatUpdatedAt(value: string): string {

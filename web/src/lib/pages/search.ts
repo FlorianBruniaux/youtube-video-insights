@@ -1,5 +1,6 @@
 import { apiGet } from "../api";
 import { createYouTubeWatchLink, replaceChildren, setText } from "../dom";
+import { translate } from "../i18n";
 import type { ApiGetResponse, ApiPath, SearchHit, SearchResponse } from "../types";
 
 type ReadApi = (path: string, signal?: AbortSignal) => Promise<ApiGetResponse>;
@@ -109,12 +110,16 @@ function renderSearchResponse(
 ): void {
   const heading = document.createElement("h2");
   heading.textContent = response.returned === 0
-    ? "No passages found"
-    : `${response.returned} passage${response.returned === 1 ? "" : "s"} found`;
+    ? translate("No passages found")
+    : translate(
+      response.returned === 1 ? "{count} passage found" : "{count} passages found",
+      undefined,
+      { count: response.returned },
+    );
   const detail = document.createElement("p");
-  detail.textContent = response.truncated
+  detail.textContent = translate(response.truncated
     ? "Showing the first matching passages. Narrow the query for a more precise result."
-    : "Results come from the local transcript index.";
+    : "Results come from the local transcript index.");
   replaceChildren(summary, [heading, detail]);
   replaceChildren(results, response.hits.map(renderPassage));
 }
@@ -142,18 +147,20 @@ function formatTimestamp(seconds: number): string {
   const rounded = Math.floor(seconds);
   const minutes = Math.floor(rounded / 60);
   const remainder = rounded % 60;
-  return `Open at ${minutes}:${String(remainder).padStart(2, "0")}`;
+  return translate("Open at {timestamp}", undefined, {
+    timestamp: `${minutes}:${String(remainder).padStart(2, "0")}`,
+  });
 }
 
 function searchErrorMessage(error: unknown): string {
   const code = publicCode(error);
   if (code === "search_unavailable") {
-    return "Search index is unavailable. Build or refresh the local index, then try again.";
+    return translate("Search index is unavailable. Build or refresh the local index, then try again.");
   }
   if (code === "invalid_request") {
-    return "The search filters are invalid. Check the query and try again.";
+    return translate("The search filters are invalid. Check the query and try again.");
   }
-  return "Cannot reach the local server. Check that YT Insights is running.";
+  return translate("Cannot reach the local server. Check that YT Insights is running.");
 }
 
 function publicCode(error: unknown): string | null {

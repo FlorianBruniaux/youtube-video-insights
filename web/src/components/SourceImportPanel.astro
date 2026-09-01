@@ -1,8 +1,8 @@
 <section class="panel import-panel" aria-labelledby="source-import-title">
   <div class="section-heading">
-    <p class="eyebrow">Grow the corpus</p>
-    <h2 id="source-import-title">Add a YouTube source</h2>
-    <p>Preview a video, playlist, or channel. Nothing is acquired until you review the exact IDs and confirm.</p>
+    <p class="eyebrow" data-i18n="Grow the corpus">Grow the corpus</p>
+    <h2 id="source-import-title" data-i18n="Add a YouTube source">Add a YouTube source</h2>
+    <p data-i18n="Preview a video, playlist, or channel. Nothing is acquired until you review the exact IDs and confirm.">Preview a video, playlist, or channel. Nothing is acquired until you review the exact IDs and confirm.</p>
   </div>
 
   <form class="source-import-form" data-source-preview-form>
@@ -20,28 +20,28 @@
       />
     </div>
     <div class="field">
-      <label for="source-language">Transcript language</label>
+      <label for="source-language" data-i18n="Transcript language">Transcript language</label>
       <input id="source-language" name="language" value="en" maxlength="64" required />
     </div>
     <label class="check-field">
       <input name="analyze" type="checkbox" />
-      Run analysis after acquisition
+      <span data-i18n="Run analysis after acquisition">Run analysis after acquisition</span>
     </label>
-    <button class="button" data-source-preview-submit type="submit">Preview source</button>
+    <button class="button" data-source-preview-submit type="submit" data-i18n="Preview source">Preview source</button>
   </form>
 
   <div class="job-status" data-source-job-region>
     <div data-source-job role="status" aria-live="polite"></div>
-    <p class="job-identity">Job <code data-source-job-id></code></p>
+    <p class="job-identity"><span data-i18n="Job">Job</span> <code data-source-job-id></code></p>
     <button class="button button-secondary" data-source-continue type="button" hidden>
-      Continue checking
+      <span data-i18n="Continue checking">Continue checking</span>
     </button>
     <button class="button button-secondary" data-source-retry-admission type="button" hidden>
-      Retry admission
+      <span data-i18n="Retry admission">Retry admission</span>
     </button>
   </div>
   <section class="source-plan" data-source-plan hidden aria-labelledby="source-plan-title"></section>
   <button class="button acquire-button" data-source-acquire type="button" hidden disabled>
-    Acquire these videos
+    <span data-i18n="Acquire these videos">Acquire these videos</span>
   </button>
 </section>

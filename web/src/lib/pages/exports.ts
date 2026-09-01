@@ -1,5 +1,6 @@
 import { apiGet } from "../api";
 import { replaceChildren } from "../dom";
+import { translate } from "../i18n";
 import type { ApiGetResponse, ApiPath, ExportItem, ExportsResponse } from "../types";
 
 type ReadApi = (path: string, signal?: AbortSignal) => Promise<ApiGetResponse>;
@@ -12,7 +13,7 @@ export function attachExportsPage(
   const status = requireElement<HTMLElement>(root, "[data-exports-status]");
   const list = requireElement<HTMLElement>(root, "[data-export-list]");
   const controller = new AbortController();
-  status.textContent = "Loading the bounded export inventory…";
+  status.textContent = translate("Loading the bounded export inventory…");
   void read("/api/v1/exports?limit=20", controller.signal)
     .then((response) => {
       if (controller.signal.aborted || !("items" in response)) return;
@@ -20,21 +21,27 @@ export function attachExportsPage(
       renderExports(list, exports.items);
       status.textContent = exports.inventory_complete
         ? exports.items.length === 0
-          ? "No exports yet."
-          : `${exports.items.length} export${exports.items.length === 1 ? "" : "s"} available.`
-        : `Showing a partial inventory after examining ${exports.inventory_examined} entries.`;
+          ? translate("No exports yet.")
+          : translate(
+            exports.items.length === 1 ? "{count} export available." : "{count} exports available.",
+            undefined,
+            { count: exports.items.length },
+          )
+        : translate("Showing a partial inventory after examining {count} entries.", undefined, {
+          count: exports.inventory_examined,
+        });
     })
     .catch((error: unknown) => {
       if (error instanceof Error && error.name === "AbortError") return;
       replaceChildren(list, []);
-      status.textContent = "The local export inventory is unavailable.";
+      status.textContent = translate("The local export inventory is unavailable.");
     });
   return () => controller.abort();
 }
 function renderExports(target: HTMLElement, items: readonly ExportItem[]): void {
   if (items.length === 0) {
     const empty = document.createElement("p");
-    empty.textContent = "Create an export from an eligible research workspace.";
+    empty.textContent = translate("Create an export from an eligible research workspace.");
     replaceChildren(target, [empty]);
     return;
   }
@@ -47,8 +54,11 @@ function renderExports(target: HTMLElement, items: readonly ExportItem[]): void 
     title.textContent = item.name;
     const meta = document.createElement("p");
     meta.textContent = item.manifest_valid && item.created_at !== null
-      ? `Created ${formatTimestamp(item.created_at)} · Session ${item.session_id ?? "unknown"}`
-      : "Invalid manifest projection";
+      ? translate("Created {date} · Session {session}", undefined, {
+        date: formatTimestamp(item.created_at),
+        session: item.session_id ?? translate("unknown"),
+      })
+      : translate("Invalid manifest projection");
     card.append(title, meta);
     if (item.manifest_valid && item.open_url !== null && SAFE_OPEN_URL.test(item.open_url)) {
       const link = document.createElement("a");
@@ -57,7 +67,7 @@ function renderExports(target: HTMLElement, items: readonly ExportItem[]): void 
       link.href = item.open_url;
       link.target = "_blank";
       link.rel = "noopener noreferrer";
-      link.textContent = "Open dossier";
+      link.textContent = translate("Open dossier");
       card.append(link);
     }
     grid.append(card);

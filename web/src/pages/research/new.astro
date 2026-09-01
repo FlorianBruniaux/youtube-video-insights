@@ -6,9 +6,9 @@ import AppLayout from "../../layouts/AppLayout.astro";
 <AppLayout title="Start research" description="Create a cumulative research session from the local corpus.">
   <div data-research-new-page>
     <section class="page-heading page-heading-compact" aria-labelledby="page-title">
-      <p class="eyebrow">Cumulative research</p>
-      <h1 id="page-title">Start with what the corpus already knows.</h1>
-      <p>Assess local evidence first. You decide whether YouTube discovery is needed after reviewing coverage and freshness.</p>
+      <p class="eyebrow" data-i18n="Cumulative research">Cumulative research</p>
+      <h1 id="page-title" data-i18n="Start with what the corpus already knows.">Start with what the corpus already knows.</h1>
+      <p data-i18n="Assess local evidence first. You decide whether YouTube discovery is needed after reviewing coverage and freshness.">Assess local evidence first. You decide whether YouTube discovery is needed after reviewing coverage and freshness.</p>
     </section>
 
     <ContextGuide
@@ -24,32 +24,32 @@ import AppLayout from "../../layouts/AppLayout.astro";
 
     <form class="panel research-new-form" data-research-new-form>
       <div class="field field-wide">
-        <label for="research-topic">What are you trying to understand?</label>
+        <label for="research-topic" data-i18n="What are you trying to understand?">What are you trying to understand?</label>
         <input id="research-topic" name="topic" maxlength="500" autocomplete="off" required />
-        <p class="field-help">Example: How product engineering teams use AI in 2026.</p>
+        <p class="field-help" data-i18n="Example: How product engineering teams use AI in 2026.">Example: How product engineering teams use AI in 2026.</p>
       </div>
       <div class="field field-wide">
-        <label for="research-queries">Which angles should the corpus cover?</label>
+        <label for="research-queries" data-i18n="Which angles should the corpus cover?">Which angles should the corpus cover?</label>
         <textarea id="research-queries" name="queries" rows="6" maxlength="4007" required></textarea>
-        <p class="field-help">Use 1 to 8 distinct queries, one per line. Include synonyms when terminology varies.</p>
+        <p class="field-help" data-i18n="Use 1 to 8 distinct queries, one per line. Include synonyms when terminology varies.">Use 1 to 8 distinct queries, one per line. Include synonyms when terminology varies.</p>
       </div>
       <div class="field">
-        <label for="research-languages">Languages</label>
+        <label for="research-languages" data-i18n="Languages">Languages</label>
         <input id="research-languages" name="languages" value="en" maxlength="659" placeholder="en, fr" />
       </div>
       <div class="field">
-        <label for="freshness-profile">Freshness profile</label>
+        <label for="freshness-profile" data-i18n="Freshness profile">Freshness profile</label>
         <select id="freshness-profile" name="freshness_profile">
-          <option value="fast">Fast · 14 days</option>
-          <option value="standard" selected>Standard · 30 days</option>
-          <option value="stable">Stable · 90 days</option>
-          <option value="historical">Historical · no maximum age</option>
+          <option value="fast" data-i18n="Fast · 14 days">Fast · 14 days</option>
+          <option value="standard" selected data-i18n="Standard · 30 days">Standard · 30 days</option>
+          <option value="stable" data-i18n="Stable · 90 days">Stable · 90 days</option>
+          <option value="historical" data-i18n="Historical · no maximum age">Historical · no maximum age</option>
         </select>
       </div>
       <div class="research-new-actions">
-        <button class="button" data-research-new-submit type="submit">Assess local evidence</button>
+        <button class="button" data-research-new-submit type="submit" data-i18n="Assess local evidence">Assess local evidence</button>
         <button class="button button-secondary" data-research-new-retry type="button" hidden>
-          Retry the same request
+          <span data-i18n="Retry the same request">Retry the same request</span>
         </button>
       </div>
       <p class="page-status" data-research-new-status role="status" aria-live="polite"></p>

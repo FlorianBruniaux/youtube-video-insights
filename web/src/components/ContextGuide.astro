@@ -17,26 +17,26 @@ const { title, introduction, steps, tip } = Astro.props;
 <details class="context-guide" open>
   <summary>
     <span>
-      <span class="context-guide-kicker">How this page works</span>
-      <strong>{title}</strong>
+      <span class="context-guide-kicker" data-i18n="How this page works">How this page works</span>
+      <strong data-i18n={title}>{title}</strong>
     </span>
-    <span class="context-guide-toggle" aria-hidden="true">Guide</span>
+    <span class="context-guide-toggle" aria-hidden="true" data-i18n="Guide">Guide</span>
   </summary>
   <div class="context-guide-body">
-    <p>{introduction}</p>
+    <p data-i18n={introduction}>{introduction}</p>
     <ol>
       {
         steps.map((step, index) => (
           <li>
             <span>{String(index + 1).padStart(2, "0")}</span>
             <div>
-              <h2>{step.title}</h2>
-              <p>{step.description}</p>
+              <h2 data-i18n={step.title}>{step.title}</h2>
+              <p data-i18n={step.description}>{step.description}</p>
             </div>
           </li>
         ))
       }
     </ol>
-    {tip && <p class="context-guide-tip"><strong>Useful to know:</strong> {tip}</p>}
+    {tip && <p class="context-guide-tip"><strong data-i18n="Useful to know:">Useful to know:</strong> <span data-i18n={tip}>{tip}</span></p>}
   </div>
 </details>

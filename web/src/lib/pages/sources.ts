@@ -1,5 +1,6 @@
 import { apiGet, apiPost } from "../api";
 import { createYouTubeWatchLink, replaceChildren, setText } from "../dom";
+import { translate } from "../i18n";
 import {
   acquisitionAttemptKey,
   createBrowserAttemptIdentityCoordinator,
@@ -147,8 +148,11 @@ export function attachSourcesPage(
         response.items.length === 0
           ? offset === 0
             ? "No sources"
-            : `No sources after ${offset}`
-          : `Sources ${offset + 1}–${offset + response.items.length}`,
+            : translate("No sources after {offset}", undefined, { offset })
+          : translate("Sources {start}–{end}", undefined, {
+            start: offset + 1,
+            end: offset + response.items.length,
+          }),
       );
       setText(state, response.items.length === 0 ? "No sources on this page." : "");
     } catch (error: unknown) {
@@ -383,7 +387,9 @@ export function attachSourcesPage(
     retryAdmission.hidden = true;
     retryAdmission.disabled = true;
     exposeAttempt(jobIdTarget, attempt);
-    setText(jobTarget, `Checking accepted ${attempt.kind === "source_preview" ? "preview" : "acquisition"} job…`);
+    setText(jobTarget, translate("Checking accepted {kind} job…", undefined, {
+      kind: translate(attempt.kind === "source_preview" ? "preview" : "acquisition"),
+    }));
     try {
       const completed = await pollJob(
         attempt.job_id,
@@ -441,7 +447,10 @@ export function attachSourcesPage(
       }
       setText(
         jobTarget,
-        `${result.transcripts_ready} transcripts ready from ${result.selected} selected videos.`,
+        translate("{transcripts} transcripts ready from {videos} selected videos.", undefined, {
+          transcripts: result.transcripts_ready,
+          videos: result.selected,
+        }),
       );
       void loadPage();
     } catch (error: unknown) {
@@ -500,7 +509,7 @@ export function attachSourcesPage(
     retryAdmission.hidden = false;
     retryAdmission.disabled = false;
     jobIdTarget.textContent = "";
-    retryAdmission.textContent = "Retry admission";
+    retryAdmission.textContent = translate("Retry admission");
     setText(jobTarget, message);
   };
 
@@ -539,7 +548,7 @@ export function attachSourcesPage(
     continueChecking.hidden = true;
     retryAdmission.hidden = false;
     retryAdmission.disabled = false;
-    retryAdmission.textContent = "Retry finalization";
+    retryAdmission.textContent = translate("Retry finalization");
     jobIdTarget.textContent = "";
     setText(jobTarget, coordinationMessage(error));
   };
@@ -557,7 +566,7 @@ export function attachSourcesPage(
     retryAdmission.disabled = false;
     setText(
       jobTarget,
-      `${coordinationMessage(error)} Use Continue checking to finalize this exact job without resubmitting it.`,
+      `${translate(coordinationMessage(error))} ${translate("Use Continue checking to finalize this exact job without resubmitting it.")}`,
     );
   };
 
@@ -574,7 +583,7 @@ export function attachSourcesPage(
     continueChecking.disabled = false;
     retryAdmission.hidden = true;
     retryAdmission.disabled = false;
-    retryAdmission.textContent = "Retry admission";
+    retryAdmission.textContent = translate("Retry admission");
     jobIdTarget.textContent = "";
   };
 
@@ -674,14 +683,14 @@ export async function pollJob(
 function renderInventory(target: HTMLElement, items: readonly SourceItem[]): void {
   if (items.length === 0) {
     const empty = document.createElement("p");
-    empty.textContent = "No sources found on this page.";
+    empty.textContent = translate("No sources found on this page.");
     replaceChildren(target, [empty]);
     return;
   }
   const table = document.createElement("table");
   table.className = "source-table";
   const caption = document.createElement("caption");
-  caption.textContent = "Videos in the local corpus";
+  caption.textContent = translate("Videos in the local corpus");
   const head = document.createElement("thead");
   const header = document.createElement("tr");
   for (const label of [
@@ -694,7 +703,7 @@ function renderInventory(target: HTMLElement, items: readonly SourceItem[]): voi
   ]) {
     const cell = document.createElement("th");
     cell.scope = "col";
-    cell.textContent = label;
+    cell.textContent = translate(label);
     header.append(cell);
   }
   head.append(header);
@@ -704,10 +713,10 @@ function renderInventory(target: HTMLElement, items: readonly SourceItem[]): voi
     row.append(
       tableVideoCell(item),
       textCell(formatPublishedAt(item.published_at)),
-      textCell(item.sources.join(", ") || "Unknown"),
-      textCell(item.languages.join(", ") || "Unknown"),
-      textCell(item.transcript_state),
-      textCell(item.index_state.replaceAll("_", " ")),
+      textCell(item.sources.join(", ") || translate("Unknown")),
+      textCell(item.languages.join(", ") || translate("Unknown")),
+      textCell(translate(item.transcript_state.replaceAll("_", " "))),
+      textCell(translate(item.index_state.replaceAll("_", " "))),
     );
     body.append(row);
   }
@@ -744,10 +753,10 @@ function sourceCard(item: SourceItem): HTMLElement {
   if (link) title.append(link);
   const id = labelledValue("Video ID", item.video_id);
   const published = labelledValue("Published", formatPublishedAt(item.published_at));
-  const sources = labelledValue("Sources", item.sources.join(", ") || "Unknown");
-  const language = labelledValue("Language", item.languages.join(", ") || "Unknown");
-  const transcript = labelledValue("Transcript", item.transcript_state);
-  const index = labelledValue("Index", item.index_state.replaceAll("_", " "));
+  const sources = labelledValue("Sources", item.sources.join(", ") || translate("Unknown"));
+  const language = labelledValue("Language", item.languages.join(", ") || translate("Unknown"));
+  const transcript = labelledValue("Transcript", translate(item.transcript_state.replaceAll("_", " ")));
+  const index = labelledValue("Index", translate(item.index_state.replaceAll("_", " ")));
   replaceChildren(article, [title, id, published, sources, language, transcript, index]);
   return article;
 }
@@ -755,7 +764,7 @@ function sourceCard(item: SourceItem): HTMLElement {
 function labelledValue(label: string, value: string): HTMLElement {
   const row = document.createElement("p");
   const name = document.createElement("strong");
-  name.textContent = `${label}: `;
+  name.textContent = `${translate(label)}: `;
   row.append(name, document.createTextNode(value));
   return row;
 }
@@ -763,11 +772,22 @@ function labelledValue(label: string, value: string): HTMLElement {
 function renderPlan(target: HTMLElement, plan: SourcePreviewResult): void {
   const heading = document.createElement("h3");
   heading.id = "source-plan-title";
-  heading.textContent = `Review ${plan.selected_count} selected video${plan.selected_count === 1 ? "" : "s"}`;
+  heading.textContent = translate(
+    plan.selected_count === 1
+      ? "Review {count} selected video"
+      : "Review {count} selected videos",
+    undefined,
+    { count: plan.selected_count },
+  );
   const summary = document.createElement("p");
-  summary.textContent = `${plan.source_kind} · language ${plan.language} · ${plan.excluded_count} excluded · ${plan.discovery_error_count} discovery errors`;
+  summary.textContent = translate("{kind} · language {language} · {excluded} excluded · {errors} discovery errors", undefined, {
+    kind: translate(plan.source_kind),
+    language: plan.language,
+    excluded: plan.excluded_count,
+    errors: plan.discovery_error_count,
+  });
   const instruction = document.createElement("p");
-  instruction.textContent = "Confirm that every exact ID below belongs in this acquisition.";
+  instruction.textContent = translate("Confirm that every exact ID below belongs in this acquisition.");
   const list = document.createElement("ol");
   list.className = "selected-video-list";
   for (const videoId of plan.video_ids) {
@@ -852,7 +872,7 @@ function isYouTubeSource(value: string): boolean {
 }
 
 function formatPublishedAt(value: string | null): string {
-  return value === null ? "Unknown" : value.slice(0, 10);
+  return value === null ? translate("Unknown") : value.slice(0, 10);
 }
 
 function exposeAttempt(target: HTMLElement, attempt: SourceAttempt): void {

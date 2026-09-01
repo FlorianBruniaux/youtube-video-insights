@@ -1,4 +1,5 @@
 import { apiPost } from "../api";
+import { translate } from "../i18n";
 import type { ApiPath, ApiPostResponse, FreshnessProfile, ResearchResponse } from "../types";
 
 const START_STORAGE_KEY = "yt-insights:research-start:v1";
@@ -47,7 +48,7 @@ export function attachResearchNewPage(
     submit.disabled = true;
     retry.disabled = true;
     retry.hidden = true;
-    status.textContent = "Creating the durable research session…";
+    status.textContent = translate("Creating the durable research session…");
     controller?.abort();
     controller = new AbortController();
     try {
@@ -75,11 +76,11 @@ export function attachResearchNewPage(
     try {
       payload = parseStartForm(form, createId());
     } catch (error: unknown) {
-      status.textContent = error instanceof Error ? error.message : "Review the research fields.";
+      status.textContent = translate(error instanceof Error ? error.message : "Review the research fields.");
       return;
     }
     if (!storeStart({ version: 1, payload })) {
-      status.textContent = "Browser session storage is unavailable. No research was submitted.";
+      status.textContent = translate("Browser session storage is unavailable. No research was submitted.");
       return;
     }
     void send(payload);
@@ -89,7 +90,7 @@ export function attachResearchNewPage(
     const stored = readStoredStart();
     if (stored === null) {
       retry.hidden = true;
-      status.textContent = "The saved request is unavailable. Review the form and submit a new request.";
+      status.textContent = translate("The saved request is unavailable. Review the form and submit a new request.");
       return;
     }
     void send(stored.payload);
@@ -226,9 +227,9 @@ function codePoints(value: string): number {
 
 function startError(error: unknown): string {
   const code = publicCode(error);
-  if (code === "idempotency_conflict") return "This request identity conflicts with another payload. Review the form and submit a new request.";
-  if (code === "invalid_request") return "The server rejected these research fields. Review them before a new submission.";
-  return "The response was not confirmed. Retry explicitly to reuse the same request identity.";
+  if (code === "idempotency_conflict") return translate("This request identity conflicts with another payload. Review the form and submit a new request.");
+  if (code === "invalid_request") return translate("The server rejected these research fields. Review them before a new submission.");
+  return translate("The response was not confirmed. Retry explicitly to reuse the same request identity.");
 }
 
 function publicCode(error: unknown): string | null {

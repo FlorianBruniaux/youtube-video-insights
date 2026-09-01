@@ -6,9 +6,9 @@ import AppLayout from "../layouts/AppLayout.astro";
 <AppLayout title="Exports" description="Open validated local research dossiers without exposing filesystem paths.">
   <div data-exports-page>
     <section class="page-heading page-heading-compact" aria-labelledby="page-title">
-      <p class="eyebrow">Research outputs</p>
-      <h1 id="page-title">Validated dossiers, ready to use.</h1>
-      <p>Open bounded export projections served by the local API. Filesystem paths stay private.</p>
+      <p class="eyebrow" data-i18n="Research outputs">Research outputs</p>
+      <h1 id="page-title" data-i18n="Validated dossiers, ready to use.">Validated dossiers, ready to use.</h1>
+      <p data-i18n="Open bounded export projections served by the local API. Filesystem paths stay private.">Open bounded export projections served by the local API. Filesystem paths stay private.</p>
     </section>
     <ContextGuide
       title="Use a research result outside the app"
@@ -21,7 +21,7 @@ import AppLayout from "../layouts/AppLayout.astro";
       tip="For exploratory questions, an LLM can query the live corpus directly through the read-only MCP instead of using an export."
     />
     <p class="page-status" data-exports-status role="status" aria-live="polite"></p>
-    <section class="export-list" data-export-list aria-label="Research exports"></section>
+    <section class="export-list" data-export-list aria-label="Research exports" data-i18n-aria-label="Research exports"></section>
   </div>
 
   <script>

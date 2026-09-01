@@ -9,9 +9,9 @@
 **GitHub CI hébergée :** `PASS` sur `b62adaa`
 
 Le lot web courant a passé localement `1 089` tests Python et `10` subtests,
-`156` tests frontend, `6` parcours Playwright, Ruff sur `src tests scripts`,
-Mypy sur les 53 fichiers source, Astro Check sur 53 fichiers, la reproduction
-exacte des 18 fichiers web packagés et `git diff --check`. Le [run GitHub Actions 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
+`162` tests frontend, `6` parcours Playwright, Ruff sur `src tests scripts`,
+Mypy sur les 53 fichiers source, Astro Check sur 57 fichiers, la reproduction
+exacte des 20 fichiers web packagés et `git diff --check`. Le [run GitHub Actions 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
 a passé sur le même SHA `b62adaa`, avec les jobs web, Python 3.11, Python 3.12
 et packaging/runtime au vert. Mypy n'a pas été exécuté avec `--strict`.
 
@@ -40,7 +40,7 @@ flowchart TD
     MCP --> FTS
     SKILL[4 skills portables] --> CLI[CLI commune]
     CLI --> A
-    WEB[Astro local, light + dark] --> API[API Python /api/v1]
+    WEB[Astro local, FR + EN, light + dark] --> API[API Python /api/v1]
     API --> CAT
     API --> FTS
     API --> R
@@ -66,7 +66,7 @@ textuelle révisable; le rendu raster n'est pas généré par le build du dépô
 | MCP | `list_corpora`, `search_videos`, `search_passages`, `get_passage` | Lecture seule |
 | Assistants | Quatre skills projet et assets wheel Claude Code/Codex | Quatrième skill non installé globalement |
 | Setup | `--dry-run`, `--apply`, `--verify`, plus `--assets-only` | Une écriture globale demande toujours une transaction approuvée |
-| Web local | Dashboard, recherche, sources, sessions, jobs et exports avec thème sombre par défaut, préférence claire persistante et parcours guidé en cinq étapes | Boucle locale `127.0.0.1` uniquement, aucun hébergement ou compte utilisateur |
+| Web local | Dashboard, recherche, sources, sessions, jobs et exports en français et en anglais, thème sombre par défaut, préférences persistantes et parcours guidé en cinq étapes | Boucle locale `127.0.0.1` uniquement, aucun hébergement ou compte utilisateur; le contenu du corpus conserve sa langue source |
 
 Le contrat actuel expose `acquisition_history`, limité aux 100 dernières
 tentatives, et `acquisition_history_truncated`. Chaque tentative contient
@@ -82,7 +82,9 @@ package Python, sans runtime Node.js.
 Le dashboard explique le parcours Collect, Search, Assess, Decide, Use. Les
 pages Sources, Search, Research, Workspace et Exports reprennent les trois
 actions propres à leur contexte. La navigation garde ses cinq destinations sur
-mobile et les contrôles de mutation inactifs restent masqués.
+mobile et les contrôles de mutation inactifs restent masqués. L'interface suit
+la langue du navigateur au premier chargement, puis mémorise le choix `EN` ou
+`FR`. Les contenus issus du corpus ne sont pas traduits.
 
 ## Cycle utilisateur
 
@@ -119,7 +121,7 @@ les candidats à acquérir.
 | Claude Code frais | `UNKNOWN` | Chargement statique seulement |
 | Codex frais | `PASS` | Processus éphémère read-only: skill projet chargé, deux décisions et limites 10/5 restituées |
 | Activation globale | `false` | Pas de promotion du quatrième skill ou du runtime |
-| Qualité locale du lot web courant | `PASS` | 1 089 tests Python + 10 subtests, 156 tests frontend, 6 parcours Playwright, Ruff complet, Mypy sur 53 fichiers, Astro Check sur 53 fichiers, build web reproductible sur 18 fichiers et diff-check |
+| Qualité locale du lot web courant | `PASS` | 1 089 tests Python + 10 subtests, 162 tests frontend, 6 parcours Playwright, Ruff complet, Mypy sur 53 fichiers, Astro Check sur 57 fichiers, build web reproductible sur 20 fichiers et diff-check |
 | GitHub CI hébergée | `PASS` sur `b62adaa` | [Run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306), web, Python 3.11, Python 3.12 et packaging/runtime `PASS` |
 
 Les gates externes encore `UNKNOWN` bloquent les affirmations correspondantes

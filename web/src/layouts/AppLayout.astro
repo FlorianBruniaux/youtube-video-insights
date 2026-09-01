@@ -17,18 +17,19 @@ const documentTitle = title === "YT Insights" ? title : `${title} | YT Insights`
 ---
 
 <!doctype html>
-<html lang="en" data-theme="dark">
+<html lang="en" data-language="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width" />
-    <meta name="description" content={description} />
+    <meta name="description" content={description} data-i18n-content={description} />
     <meta name="color-scheme" content="light dark" />
     <meta name="theme-color" content="#0a0a0a" />
     <title>{documentTitle}</title>
+    <script is:inline src="/_astro/language-bootstrap.js"></script>
     <script is:inline src="/_astro/theme-bootstrap.js"></script>
   </head>
-  <body>
-    <a class="skip-link" href="#main-content">Skip to content</a>
+  <body data-i18n-document-title={title}>
+    <a class="skip-link" href="#main-content" data-i18n="Skip to content">Skip to content</a>
 
     <header class="site-header">
       <div class="shell">
@@ -42,25 +43,34 @@ const documentTitle = title === "YT Insights" ? title : `${title} | YT Insights`
 
     <footer class="site-footer">
       <div class="shell footer-inner">
-        <p>Local-first research. Your corpus stays on this machine.</p>
-        <p class="footer-status"><span aria-hidden="true"></span> Loopback only</p>
+        <p data-i18n="Local-first research. Your corpus stays on this machine.">Local-first research. Your corpus stays on this machine.</p>
+        <p class="footer-status"><span aria-hidden="true"></span> <span data-i18n="Loopback only">Loopback only</span></p>
       </div>
     </footer>
 
     <script>
+      import {
+        applyLanguage,
+        currentLanguage,
+        installLanguageControls,
+        translate,
+      } from "../lib/i18n";
       import { THEME_STORAGE_KEY, type Theme } from "../lib/theme";
 
       const root = document.documentElement;
       const toggle = document.querySelector<HTMLButtonElement>("[data-theme-toggle]");
       const label = toggle?.querySelector<HTMLElement>("[data-theme-label]");
 
+      applyLanguage(currentLanguage(), document);
+      installLanguageControls();
+
       function updateToggle(theme: "light" | "dark"): void {
         if (!toggle || !label) return;
 
         const dark = theme === "dark";
         toggle.setAttribute("aria-pressed", String(dark));
-        toggle.setAttribute("aria-label", dark ? "Use light theme" : "Use dark theme");
-        label.textContent = dark ? "Light" : "Dark";
+        toggle.setAttribute("aria-label", translate(dark ? "Use light theme" : "Use dark theme"));
+        label.textContent = translate(dark ? "Light" : "Dark");
       }
 
       let theme: Theme = root.dataset.theme === "dark" ? "dark" : "light";

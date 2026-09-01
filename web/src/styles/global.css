@@ -136,6 +136,44 @@ a {
   text-decoration: none;
 }
 
+.nav-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.language-control {
+  display: inline-flex;
+  padding: 0.2rem;
+  border: 1px solid var(--color-line);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-muted);
+}
+
+.language-option {
+  min-width: 2.15rem;
+  min-height: 2.15rem;
+  padding: 0.25rem 0.45rem;
+  border: 0;
+  border-radius: calc(var(--radius-sm) - 0.15rem);
+  background: transparent;
+  color: var(--color-ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.76rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.language-option:hover {
+  color: var(--color-ink);
+}
+
+.language-option-active {
+  background: var(--color-surface);
+  color: var(--color-brand-strong);
+  box-shadow: var(--shadow-card);
+}
+
 .nav-link {
   position: relative;
   padding-inline: var(--space-4);
@@ -1145,16 +1183,47 @@ a {
 
 .footer-status {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: var(--space-2);
 }
 
-.footer-status span {
+.footer-status > span[aria-hidden="true"] {
+  flex: 0 0 auto;
   width: 0.55rem;
   height: 0.55rem;
   border-radius: 50%;
   background: var(--color-accent);
   box-shadow: 0 0 0 0.25rem color-mix(in srgb, var(--color-accent) 16%, transparent);
+}
+
+@media (max-width: 64rem) {
+  .app-nav {
+    gap: var(--space-2);
+  }
+
+  .nav-links {
+    gap: 0;
+  }
+
+  .nav-link {
+    padding-inline: var(--space-2);
+    font-size: 0.86rem;
+  }
+
+  .nav-link-active::after {
+    right: var(--space-2);
+    left: var(--space-2);
+  }
+
+  .theme-toggle {
+    min-width: 3.2rem;
+    padding-inline: var(--space-2);
+  }
+
+  .theme-toggle [data-theme-label] {
+    display: none;
+  }
 }
 
 @media (max-width: 52rem) {
@@ -1306,6 +1375,24 @@ a {
   .nav-link-active::after {
     right: var(--space-1);
     left: var(--space-1);
+  }
+
+  .nav-controls {
+    gap: var(--space-1);
+  }
+
+  .theme-toggle {
+    min-width: 3.2rem;
+    padding-inline: var(--space-2);
+  }
+
+  .theme-toggle [data-theme-label] {
+    display: none;
+  }
+
+  .language-option {
+    min-width: 1.9rem;
+    padding-inline: 0.35rem;
   }
 
   .hero-actions {

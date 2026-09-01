@@ -1,5 +1,6 @@
 import { apiGet, apiPost } from "../api";
 import { createYouTubeWatchLink, replaceChildren } from "../dom";
+import { translate } from "../i18n";
 import {
   clearResearchAdmission,
   clearResearchJobAttempt,
@@ -77,7 +78,7 @@ export function attachResearchWorkspace(
   let disposed = false;
 
   if (sessionId === null) {
-    status.textContent = "This research workspace URL is invalid.";
+    status.textContent = translate("This research workspace URL is invalid.");
     return () => undefined;
   }
   if (activeJob !== null && activeJob.session_id !== sessionId) activeJob = null;
@@ -101,9 +102,9 @@ export function attachResearchWorkspace(
       return research;
     } catch (error: unknown) {
       if (isAbort(error)) return null;
-      status.textContent = publicCode(error) === "not_found"
+      status.textContent = translate(publicCode(error) === "not_found"
         ? "This research session was not found."
-        : "The research snapshot is unavailable.";
+        : "The research snapshot is unavailable.");
       return null;
     }
   };
@@ -119,7 +120,7 @@ export function attachResearchWorkspace(
 
   const handleStale = async (): Promise<void> => {
     await loadSnapshot();
-    status.textContent = STALE_MESSAGE;
+    status.textContent = translate(STALE_MESSAGE);
   };
 
   const clearDefinitiveAdmission = (restoreFocus: boolean): void => {
@@ -145,19 +146,19 @@ export function attachResearchWorkspace(
     const controller = new AbortController();
     requestController?.abort();
     requestController = controller;
-    status.textContent = "Saving your explicit decision…";
+    status.textContent = translate("Saving your explicit decision…");
     try {
       const response = await write(path, body, controller.signal);
       if (!("session" in response)) throw new Error("Unexpected research response");
       snapshot = response as ResearchResponse;
       renderSnapshot(snapshot);
-      status.textContent = "Decision saved.";
+      status.textContent = translate("Decision saved.");
     } catch (error: unknown) {
       if (isAbort(error)) return;
       if (publicCode(error) === "stale_revision") {
         await handleStale();
       } else {
-        status.textContent = mutationMessage(error);
+        status.textContent = translate(mutationMessage(error));
         setDecisionButtonsDisabled(decision, false);
       }
     } finally {
@@ -183,7 +184,7 @@ export function attachResearchWorkspace(
     setDecisionButtonsDisabled(decision, true);
     retryAdmission.hidden = true;
     retryAdmission.disabled = true;
-    status.textContent = "Submitting one replay-safe background job…";
+    status.textContent = translate("Submitting one replay-safe background job…");
     const controller = new AbortController();
     requestController?.abort();
     requestController = controller;
@@ -229,7 +230,7 @@ export function attachResearchWorkspace(
       if (admission.status === "stale") {
         clearDefinitiveAdmission(restoreAdmissionFocus);
         await loadSnapshot();
-        status.textContent = "This research attempt already ended. Review the current session before starting again.";
+        status.textContent = translate("This research attempt already ended. Review the current session before starting again.");
         busy = false;
         setDecisionButtonsDisabled(decision, false);
         return;
@@ -245,7 +246,7 @@ export function attachResearchWorkspace(
         clearResearchAdmission();
         activeAdmission = null;
       } else {
-        status.textContent = "The job was accepted, but its identity could not be stored. Keep this page open and continue checking this exact job.";
+        status.textContent = translate("The job was accepted, but its identity could not be stored. Keep this page open and continue checking this exact job.");
       }
       activeJob = jobAttempt;
       busy = false;
@@ -262,13 +263,13 @@ export function attachResearchWorkspace(
       } else if (code === "workflow_conflict") {
         clearDefinitiveAdmission(restoreAdmissionFocus);
         await loadSnapshot();
-        status.textContent = "The research workflow changed. Review the current session before starting again.";
+        status.textContent = translate("The research workflow changed. Review the current session before starting again.");
       } else if (code === "not_found") {
         clearDefinitiveAdmission(restoreAdmissionFocus);
-        status.textContent = "This research session was not found.";
+        status.textContent = translate("This research session was not found.");
       } else if (code === "attempt_storage_unavailable") {
         clearDefinitiveAdmission(restoreAdmissionFocus);
-        status.textContent = "Browser session storage is unavailable. No background job was submitted.";
+        status.textContent = translate("Browser session storage is unavailable. No background job was submitted.");
       } else if (
         code === "idempotency_conflict" &&
         attempt !== null &&
@@ -283,18 +284,18 @@ export function attachResearchWorkspace(
           showAdmission(jobRegion, jobMessage, jobId, retryAdmission, attempt);
           retryAdmission.hidden = true;
           retryAdmission.disabled = true;
-          status.textContent = "This conflicted request identity could not be retired. Research controls remain locked.";
+          status.textContent = translate("This conflicted request identity could not be retired. Research controls remain locked.");
           busy = false;
           return;
         }
         clearDefinitiveAdmission(restoreAdmissionFocus);
-        status.textContent = mutationMessage(error);
+        status.textContent = translate(mutationMessage(error));
       } else if (attempt !== null && shouldRetainAdmission(error)) {
         showAdmission(jobRegion, jobMessage, jobId, retryAdmission, attempt);
-        status.textContent = "The admission response was not confirmed. Retry explicitly to reuse the same request identity.";
+        status.textContent = translate("The admission response was not confirmed. Retry explicitly to reuse the same request identity.");
       } else {
         clearDefinitiveAdmission(restoreAdmissionFocus);
-        status.textContent = mutationMessage(error);
+        status.textContent = translate(mutationMessage(error));
       }
       busy = false;
       setDecisionButtonsDisabled(decision, false);
@@ -334,7 +335,7 @@ export function attachResearchWorkspace(
           clearResearchJobAttempt();
           activeJob = null;
           await loadSnapshot();
-          status.textContent = "The stored background job identity was invalid. The durable session was reloaded.";
+          status.textContent = translate("The stored background job identity was invalid. The durable session was reloaded.");
           return;
         }
       }
@@ -355,7 +356,7 @@ export function attachResearchWorkspace(
         showJob(jobRegion, jobMessage, jobId, continueJob, attempt, "The background job is no longer retained. Reloading the durable session…", false);
         const loaded = await loadSnapshot();
         if (loaded !== null) clearAdmissionForJob(attempt);
-        status.textContent = "The job record expired. The durable session was reloaded.";
+        status.textContent = translate("The job record expired. The durable session was reloaded.");
         return;
       }
       const terminalMessage = terminalJobMessage(result.job);
@@ -383,7 +384,7 @@ export function attachResearchWorkspace(
       activeJob = null;
       const loaded = await loadSnapshot();
       if (loaded !== null) clearAdmissionForJob(attempt);
-      status.textContent = terminalMessage;
+      status.textContent = translate(terminalMessage);
     } catch (error: unknown) {
       if (isAbort(error)) return;
       showJob(jobRegion, jobMessage, jobId, continueJob, attempt, "Cannot check this job now. Continue checking the same job explicitly.", true);
@@ -413,7 +414,7 @@ export function attachResearchWorkspace(
       const checked = [...candidates.querySelectorAll<HTMLInputElement>("[data-candidate-id]:checked")]
         .map((input) => input.value);
       if (checked.length < 1 || checked.length > 5) {
-        status.textContent = "Select 1 to 5 exact candidate videos.";
+        status.textContent = translate("Select 1 to 5 exact candidate videos.");
         return;
       }
       void syncMutation(`${path}/approvals`, {
@@ -426,7 +427,7 @@ export function attachResearchWorkspace(
     if (button.dataset.startAcquisition !== undefined) {
       const language = decision.querySelector<HTMLInputElement>("[data-acquisition-language]")?.value.trim().toLowerCase() ?? "";
       if (!LANGUAGE.test(language) || codePoints(language) > 500) {
-        status.textContent = "Enter a valid transcript language, such as en or fr.";
+        status.textContent = translate("Enter a valid transcript language, such as en or fr.");
         return;
       }
       startJob("research_acquisition", language);
@@ -437,7 +438,7 @@ export function attachResearchWorkspace(
       return;
     }
     if (button.dataset.cancelResearch !== undefined) {
-      if (!window.confirm("Cancel this research session? This decision is durable.")) return;
+      if (!window.confirm(translate("Cancel this research session? This decision is durable."))) return;
       void syncMutation(`${path}/cancellations`, {
         expected_revision: revision,
         idempotency_key: createId(),
@@ -453,13 +454,13 @@ export function attachResearchWorkspace(
     if (busy) return;
     busy = true;
     setDecisionButtonsDisabled(decision, true);
-    status.textContent = "Creating the deterministic export…";
+    status.textContent = translate("Creating the deterministic export…");
     try {
       const response = await write(path, { force: false });
       if (!("export" in response)) throw new Error("Unexpected export response");
-      status.textContent = `Export created: ${response.export.name}`;
+      status.textContent = translate("Export created: {name}", undefined, { name: response.export.name });
     } catch (error: unknown) {
-      if (!isAbort(error)) status.textContent = mutationMessage(error);
+      if (!isAbort(error)) status.textContent = translate(mutationMessage(error));
     } finally {
       busy = false;
       setDecisionButtonsDisabled(decision, false);
@@ -502,15 +503,16 @@ export function attachResearchWorkspace(
   retryAdmission.addEventListener("click", onRetryAdmission);
   document.addEventListener("visibilitychange", onVisibility);
 
-  status.textContent = "Loading the durable research snapshot…";
+  const initialLoadingMessage = translate("Loading the durable research snapshot…");
+  status.textContent = initialLoadingMessage;
   if (activeJob !== null) {
     void checkJob(activeJob, true);
   } else {
     void loadSnapshot().then((loaded) => {
-      if (loaded !== null && status.textContent === "Loading the durable research snapshot…") status.textContent = "Research snapshot loaded.";
+      if (loaded !== null && status.textContent === initialLoadingMessage) status.textContent = translate("Research snapshot loaded.");
       if (loaded !== null && activeAdmission !== null) {
         showAdmission(jobRegion, jobMessage, jobId, retryAdmission, activeAdmission);
-        status.textContent = "A background job admission needs an explicit same-key retry.";
+        status.textContent = translate("A background job admission needs an explicit same-key retry.");
       }
     });
   }
@@ -530,21 +532,27 @@ export function attachResearchWorkspace(
 function renderHeading(target: HTMLElement, response: ResearchResponse): void {
   const eyebrow = document.createElement("p");
   eyebrow.className = "eyebrow";
-  eyebrow.textContent = `Research · ${humanize(response.session.state)}`;
+  eyebrow.textContent = translate("Research · {state}", undefined, {
+    state: humanize(response.session.state),
+  });
   const title = document.createElement("h1");
   title.textContent = response.session.topic;
   const meta = document.createElement("p");
-  meta.textContent = `Revision ${response.session.revision} · Updated ${formatTimestamp(response.session.updated_at)} · ${response.session.freshness_profile} freshness`;
+  meta.textContent = translate("Revision {revision} · Updated {date} · {profile} freshness", undefined, {
+    revision: response.session.revision,
+    date: formatTimestamp(response.session.updated_at),
+    profile: translate(response.session.freshness_profile),
+  });
   replaceChildren(target, [eyebrow, title, meta]);
 }
 
 function renderEvidence(target: HTMLElement, response: ResearchResponse): void {
   const title = document.createElement("h2");
-  title.textContent = "Evidence and coverage";
+  title.textContent = translate("Evidence and coverage");
   const assessment = response.assessment;
   if (assessment === null) {
     const empty = document.createElement("p");
-    empty.textContent = "No local assessment is available yet.";
+    empty.textContent = translate("No local assessment is available yet.");
     replaceChildren(target, [title, empty]);
     return;
   }
@@ -554,12 +562,12 @@ function renderEvidence(target: HTMLElement, response: ResearchResponse): void {
     ["Matched passages", String(assessment.coverage.matched_passages)],
     ["Matched videos", String(assessment.coverage.matched_videos)],
     ["Distinct channels", String(assessment.coverage.distinct_channels)],
-    ["Newest source", assessment.coverage.newest_source_published_at ?? "Unknown"],
+    ["Newest source", assessment.coverage.newest_source_published_at ?? translate("Unknown")],
   ];
   for (const [label, value] of metricValues) {
     const card = document.createElement("article");
     const heading = document.createElement("h3");
-    heading.textContent = label;
+    heading.textContent = translate(label);
     const metric = document.createElement("p");
     metric.textContent = value;
     card.append(heading, metric);
@@ -567,11 +575,16 @@ function renderEvidence(target: HTMLElement, response: ResearchResponse): void {
   }
   const freshness = document.createElement("p");
   freshness.className = assessment.freshness.stale ? "freshness-warning" : "freshness-current";
-  freshness.textContent = `${assessment.freshness.stale ? "Evidence may be stale" : "Evidence is current"}: ${assessment.freshness.reason}`;
+  freshness.textContent = translate("{status}: {reason}", undefined, {
+    status: translate(assessment.freshness.stale ? "Evidence may be stale" : "Evidence is current"),
+    reason: translate(assessment.freshness.reason.replaceAll("_", " ")),
+  });
   const zero = document.createElement("p");
   zero.textContent = assessment.coverage.queries_with_zero_hits.length === 0
-    ? "Every query has local evidence."
-    : `Queries without local evidence: ${assessment.coverage.queries_with_zero_hits.join(", ")}`;
+    ? translate("Every query has local evidence.")
+    : translate("Queries without local evidence: {queries}", undefined, {
+      queries: assessment.coverage.queries_with_zero_hits.join(", "),
+    });
   const passages = document.createElement("div");
   passages.className = "evidence-list";
   for (const passage of assessment.passages) {
@@ -583,7 +596,11 @@ function renderEvidence(target: HTMLElement, response: ResearchResponse): void {
     excerpt.textContent = passage.excerpt;
     const meta = document.createElement("p");
     meta.className = "evidence-meta";
-    meta.textContent = `Video ${passage.video_id} · Channel ${passage.channel_id} · Rank ${passage.rank}`;
+    meta.textContent = translate("Video {video} · Channel {channel} · Rank {rank}", undefined, {
+      video: passage.video_id,
+      channel: passage.channel_id,
+      rank: passage.rank,
+    });
     card.append(cardTitle, excerpt, meta);
     const matchingVideo = assessment.videos.find((video) => video.video_id === passage.video_id);
     if (matchingVideo !== undefined) {
@@ -600,9 +617,9 @@ function renderDecision(target: HTMLElement, response: ResearchResponse): void {
   const title = document.createElement("h2");
   children.push(title);
   if (response.required_user_action === "confirm_sufficiency_or_refresh") {
-    title.textContent = "Is the current evidence sufficient?";
+    title.textContent = translate("Is the current evidence sufficient?");
     const text = document.createElement("p");
-    text.textContent = "Choose one explicit next step. Refreshing only authorizes metadata discovery.";
+    text.textContent = translate("Choose one explicit next step. Refreshing only authorizes metadata discovery.");
     const actions = document.createElement("div");
     actions.className = "decision-actions";
     actions.append(
@@ -611,9 +628,9 @@ function renderDecision(target: HTMLElement, response: ResearchResponse): void {
     );
     children.push(text, actions);
   } else if (response.required_user_action === "approve_candidates_or_cancel") {
-    title.textContent = "Approve exact videos";
+    title.textContent = translate("Approve exact videos");
     const text = document.createElement("p");
-    text.textContent = "Select 1 to 5 candidate IDs. Acquisition remains a separate explicit step.";
+    text.textContent = translate("Select 1 to 5 candidate IDs. Acquisition remains a separate explicit step.");
     const button = actionButton("Approve selected candidates", "approveCandidates", "", false);
     button.dataset.approveCandidates = "";
     button.disabled = true;
@@ -622,18 +639,18 @@ function renderDecision(target: HTMLElement, response: ResearchResponse): void {
     cancel.classList.add("button-danger-secondary");
     children.push(text, button, cancel);
   } else if (response.session.state === "discovering") {
-    title.textContent = "Candidate discovery is ready";
+    title.textContent = translate("Candidate discovery is ready");
     const text = document.createElement("p");
-    text.textContent = "Start one metadata-only YouTube discovery job. It will not acquire transcripts.";
+    text.textContent = translate("Start one metadata-only YouTube discovery job. It will not acquire transcripts.");
     const button = actionButton("Start candidate discovery", "startDiscovery", "", false);
     button.dataset.startDiscovery = "";
     children.push(text, button);
   } else if (response.session.state === "acquiring") {
-    title.textContent = "Approved candidates are ready";
+    title.textContent = translate("Approved candidates are ready");
     const text = document.createElement("p");
-    text.textContent = "Start one acquisition job for the exact approved IDs.";
+    text.textContent = translate("Start one acquisition job for the exact approved IDs.");
     const label = document.createElement("label");
-    label.textContent = "Transcript language";
+    label.textContent = translate("Transcript language");
     const language = document.createElement("input");
     language.dataset.acquisitionLanguage = "";
     language.value = response.session.languages[0] ?? "en";
@@ -643,18 +660,20 @@ function renderDecision(target: HTMLElement, response: ResearchResponse): void {
     button.dataset.startAcquisition = "";
     children.push(text, label, button);
   } else if (response.session.state === "failed_retryable") {
-    title.textContent = "This step failed";
+    title.textContent = translate("This step failed");
     const text = document.createElement("p");
-    text.textContent = `${humanize(response.error_code ?? "research_unavailable")}. Nothing will retry automatically.`;
+    text.textContent = translate("{error}. Nothing will retry automatically.", undefined, {
+      error: humanize(response.error_code ?? "research_unavailable"),
+    });
     const button = actionButton("Retry this failed step", "retryResearch", "", false);
     button.dataset.retryResearch = "";
     children.push(text, button);
   } else {
-    title.textContent = response.session.state === "completed" ? "Research complete" : "No decision required";
+    title.textContent = translate(response.session.state === "completed" ? "Research complete" : "No decision required");
     const text = document.createElement("p");
     text.textContent = response.session.state === "completed"
-      ? "The durable evidence is ready for a deterministic export."
-      : `Current state: ${humanize(response.session.state)}.`;
+      ? translate("The durable evidence is ready for a deterministic export.")
+      : translate("Current state: {state}.", undefined, { state: humanize(response.session.state) });
     children.push(text);
   }
   if (isExportable(response.session.state)) {
@@ -668,10 +687,10 @@ function renderDecision(target: HTMLElement, response: ResearchResponse): void {
 
 function renderCandidates(target: HTMLElement, items: readonly ResearchCandidate[] | null): void {
   const title = document.createElement("h2");
-  title.textContent = "Discovery candidates";
+  title.textContent = translate("Discovery candidates");
   if (items === null || items.length === 0) {
     const empty = document.createElement("p");
-    empty.textContent = "No candidate snapshot is available.";
+    empty.textContent = translate("No candidate snapshot is available.");
     replaceChildren(target, [title, empty]);
     return;
   }
@@ -691,9 +710,16 @@ function renderCandidates(target: HTMLElement, items: readonly ResearchCandidate
     name.textContent = item.title || item.video_id;
     label.append(checkbox, name);
     const meta = document.createElement("p");
-    meta.textContent = `${item.video_id} · ${item.channel_title ?? "Unknown channel"} · ${item.published_at ?? "Unknown date"} · ${humanize(item.status)}`;
+    meta.textContent = translate("{video} · {channel} · {date} · {status}", undefined, {
+      video: item.video_id,
+      channel: item.channel_title ?? translate("Unknown channel"),
+      date: item.published_at ?? translate("Unknown date"),
+      status: humanize(item.status),
+    });
     const queries = document.createElement("p");
-    queries.textContent = `Matched: ${item.matched_queries.join(", ") || "No query label"}`;
+    queries.textContent = translate("Matched: {queries}", undefined, {
+      queries: item.matched_queries.join(", ") || translate("No query label"),
+    });
     const link = createYouTubeWatchLink("Review video", item.watch_url);
     card.append(label, meta, queries);
     if (link !== null) card.append(link);
@@ -704,10 +730,10 @@ function renderCandidates(target: HTMLElement, items: readonly ResearchCandidate
 
 function renderAcquisitionHistory(target: HTMLElement, response: ResearchResponse): void {
   const title = document.createElement("h2");
-  title.textContent = "Acquisition history";
+  title.textContent = translate("Acquisition history");
   if (response.acquisition_history.length === 0) {
     const empty = document.createElement("p");
-    empty.textContent = "No acquisition attempts yet.";
+    empty.textContent = translate("No acquisition attempts yet.");
     replaceChildren(target, [title, empty]);
     return;
   }
@@ -728,7 +754,7 @@ function renderAcquisitionHistory(target: HTMLElement, response: ResearchRespons
   const children: Node[] = [title, list];
   if (response.acquisition_history_truncated) {
     const warning = document.createElement("p");
-    warning.textContent = "Only the latest bounded acquisition attempts are shown.";
+    warning.textContent = translate("Only the latest bounded acquisition attempts are shown.");
     children.push(warning);
   }
   replaceChildren(target, children);
@@ -737,7 +763,7 @@ function renderAcquisitionHistory(target: HTMLElement, response: ResearchRespons
 function renderTimeline(target: HTMLElement, response: ResearchResponse): void {
   const history = response.history;
   if (history === undefined) {
-    target.textContent = "No event timeline is available.";
+    target.textContent = translate("No event timeline is available.");
     return;
   }
   const list = document.createElement("ol");
@@ -748,12 +774,15 @@ function renderTimeline(target: HTMLElement, response: ResearchResponse): void {
   }
   for (const savedDecision of history.decisions) {
     const item = document.createElement("li");
-    item.textContent = `${formatTimestamp(savedDecision.created_at)}: decision ${humanize(savedDecision.action)}`;
+    item.textContent = translate("{date}: decision {action}", undefined, {
+      date: formatTimestamp(savedDecision.created_at),
+      action: humanize(savedDecision.action),
+    });
     list.append(item);
   }
   if (history.events_truncated || history.decisions_truncated) {
     const item = document.createElement("li");
-    item.textContent = "Earlier timeline entries are outside this bounded view.";
+    item.textContent = translate("Earlier timeline entries are outside this bounded view.");
     list.append(item);
   }
   replaceChildren(target, [list]);
@@ -780,7 +809,7 @@ function showJob(
   canContinue: boolean,
 ): void {
   region.hidden = false;
-  message.textContent = text;
+  message.textContent = translate(text);
   id.textContent = attempt.job_id;
   continuation.hidden = !canContinue;
   continuation.disabled = !canContinue;
@@ -794,7 +823,7 @@ function showAdmission(
   attempt: ResearchAdmissionAttempt,
 ): void {
   region.hidden = false;
-  message.textContent = "This background job admission has no confirmed response.";
+  message.textContent = translate("This background job admission has no confirmed response.");
   id.textContent = attempt.idempotency_key;
   retry.hidden = false;
   retry.disabled = false;
@@ -890,15 +919,17 @@ function researchAdmissionPath(attempt: ResearchAdmissionAttempt): string {
 }
 
 function terminalJobMessage(job: Job): string {
-  if (job.status === "failed") return "The background job failed. No retry was started.";
-  if (job.status !== "succeeded" || job.result === null) return "The background job ended.";
+  if (job.status === "failed") return translate("The background job failed. No retry was started.");
+  if (job.status !== "succeeded" || job.result === null) return translate("The background job ended.");
   if ("error" in job.result) {
     const code = (job.result as JobResultError).error.code;
-    if (code === "stale_revision") return STALE_MESSAGE;
-    return `The background job ended with ${humanize(code)}. No retry was started.`;
+    if (code === "stale_revision") return translate(STALE_MESSAGE);
+    return translate("The background job ended with {error}. No retry was started.", undefined, {
+      error: humanize(code),
+    });
   }
-  if ("truncated" in job.result) return "The job result was truncated. The durable session was reloaded.";
-  return "The background job completed. The durable session was reloaded.";
+  if ("truncated" in job.result) return translate("The job result was truncated. The durable session was reloaded.");
+  return translate("The background job completed. The durable session was reloaded.");
 }
 
 function actionButton(
@@ -910,7 +941,7 @@ function actionButton(
   const button = document.createElement("button");
   button.type = "button";
   button.className = primary ? "button" : "button button-secondary";
-  button.textContent = label;
+  button.textContent = translate(label);
   if (dataName === "decision") button.dataset.decision = dataValue;
   else button.dataset[dataName] = dataValue;
   if (primary) button.dataset.primaryChoice = "";
@@ -958,7 +989,7 @@ function publicStatus(error: unknown): number | null {
 }
 
 function humanize(value: string): string {
-  return value.replaceAll("_", " ");
+  return translate(value.replaceAll("_", " "));
 }
 
 function codePoints(value: string): number {

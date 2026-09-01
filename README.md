@@ -52,7 +52,7 @@ test evidence and remaining external validation.
 | Resume research | `uv run yt-insights research status SESSION_ID --json` | Revision, evidence, candidates, required action, and the latest 100 acquisition attempts |
 | Export an evidence dossier | `uv run yt-insights research export SESSION_ID --output /absolute/path --json` | Deterministic `dossier.md` and `manifest.json`, kept outside source indexes |
 | Query from an LLM client | `uv run --extra mcp yt-insights-mcp` | Four read-only corpus, video, and passage tools |
-| Open the local web app | `uv run yt-insights serve` | Loopback-only dashboard, search, sources, research decisions, jobs, and exports |
+| Open the local web app | `uv run yt-insights serve` | Bilingual FR/EN loopback-only dashboard, search, sources, research decisions, jobs, and exports |
 
 Analysis uses a local or cloud LLM. Catalog import, transcript indexing, and
 both search commands do not. Repeated runs reuse analysis caches and avoid
@@ -81,7 +81,11 @@ Run `uv run yt-insights serve`, then follow the workflow shown on the dashboard:
 
 Each task page repeats the relevant three-step instructions. The interface uses
 the dark theme by default, remembers a light-theme preference, and stays usable
-on a narrow mobile viewport. The server remains local to `127.0.0.1`.
+on a narrow mobile viewport. It starts in French when the browser prefers
+French, otherwise in English. The `EN` and `FR` controls persist an explicit
+choice. Only interface copy is translated: video titles, transcripts, excerpts,
+queries, and dossiers keep their source language. The server remains local to
+`127.0.0.1`.
 
 ---
 
@@ -324,6 +328,12 @@ Failed jobs are never resubmitted automatically. A stale session reloads the
 durable snapshot and asks for the decision again. If the UI reports that the
 search index is unavailable, run `uv run yt-insights catalog import-corpus
 CORPUS`, then `uv run yt-insights index --all`, and restart the server.
+
+The interface is available in English and French. With no saved preference, it
+follows the browser language. Use the `EN` or `FR` control in the header to
+override it. That preference survives reloads and applies to static guidance,
+form labels, validation messages, job states, and research decisions. Corpus
+content is never machine-translated.
 
 Expected output, with paths shortened to keep the example readable:
 
@@ -913,9 +923,9 @@ claim.
 The final local delivery at `b62adaa` passed `1,089` Python tests plus `10`
 subtests, `155` frontend tests, `4` Playwright flows, Ruff, Astro Check on 51
 files, generated-asset verification, packaging, and Mypy on 53 source files.
-The current UI review passes `1,089` Python tests plus `10` subtests, `156`
-frontend tests, `6` Playwright flows, Ruff, Astro Check on 53 files, Mypy on 53
-source files, and exact reproduction of the 18 packaged web files.
+The current bilingual UI review passes `1,089` Python tests plus `10` subtests,
+`162` frontend tests, `6` Playwright flows, Ruff, Astro Check on 57 files, Mypy
+on 53 source files, and exact reproduction of the 20 packaged web files.
 Hosted GitHub Actions
 [run 33494963306](https://github.com/FlorianBruniaux/youtube-video-insights/actions/runs/33494963306)
 passed on the same SHA for the web interface, Python 3.11, Python 3.12, and

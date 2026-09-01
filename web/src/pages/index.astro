@@ -6,16 +6,16 @@ import WorkflowGuide from "../components/WorkflowGuide.astro";
 <AppLayout>
   <div data-dashboard>
   <section class="page-heading" aria-labelledby="page-title">
-    <p class="eyebrow">Your local YouTube research system</p>
-    <h1 id="page-title">Build evidence, not another pile of tabs.</h1>
-    <p>
+    <p class="eyebrow" data-i18n="Your local YouTube research system">Your local YouTube research system</p>
+    <h1 id="page-title" data-i18n="Build evidence, not another pile of tabs.">Build evidence, not another pile of tabs.</h1>
+    <p data-i18n="Search your transcript corpus, grow it with sources you approve, and turn the evidence into traceable research sessions.">
       Search your transcript corpus, grow it with sources you approve, and turn the evidence into
       traceable research sessions.
     </p>
-    <div class="hero-actions" aria-label="Primary actions">
-      <a class="button" href="/search/">Search the corpus</a>
-      <a class="button button-secondary" href="/research/new/">Start research</a>
-      <a class="button button-secondary" href="/sources/">Add a YouTube source</a>
+    <div class="hero-actions" aria-label="Primary actions" data-i18n-aria-label="Primary actions">
+      <a class="button" href="/search/" data-i18n="Search the corpus">Search the corpus</a>
+      <a class="button button-secondary" href="/research/new/" data-i18n="Start research">Start research</a>
+      <a class="button button-secondary" href="/sources/" data-i18n="Add a YouTube source">Add a YouTube source</a>
     </div>
   </section>
 
@@ -24,28 +24,28 @@ import WorkflowGuide from "../components/WorkflowGuide.astro";
   <section class="dashboard-status panel" aria-labelledby="corpus-status-title">
     <div class="section-heading section-heading-inline">
       <div>
-        <p class="eyebrow">Local system</p>
-        <h2 id="corpus-status-title">Corpus status</h2>
+        <p class="eyebrow" data-i18n="Local system">Local system</p>
+        <h2 id="corpus-status-title" data-i18n="Corpus status">Corpus status</h2>
       </div>
-      <p data-dashboard-status role="status" aria-live="polite">Checking the local corpus…</p>
+      <p data-dashboard-status role="status" aria-live="polite" data-i18n="Checking the local corpus…">Checking the local corpus…</p>
     </div>
     <div class="metric-grid" data-dashboard-metrics></div>
   </section>
 
-  <section class="dashboard-panels" aria-label="Recent activity">
+  <section class="dashboard-panels" aria-label="Recent activity" data-i18n-aria-label="Recent activity">
     <article class="panel">
       <div class="section-heading">
-        <p class="eyebrow">Research</p>
-        <h2>Recent sessions</h2>
+        <p class="eyebrow" data-i18n="Research">Research</p>
+        <h2 data-i18n="Recent sessions">Recent sessions</h2>
       </div>
-      <div data-dashboard-sessions>Loading recent research…</div>
+      <div data-dashboard-sessions data-i18n="Loading recent research…">Loading recent research…</div>
     </article>
     <article class="panel">
       <div class="section-heading">
-        <p class="eyebrow">Outputs</p>
-        <h2>Recent exports</h2>
+        <p class="eyebrow" data-i18n="Outputs">Outputs</p>
+        <h2 data-i18n="Recent exports">Recent exports</h2>
       </div>
-      <div data-dashboard-exports>Loading recent exports…</div>
+      <div data-dashboard-exports data-i18n="Loading recent exports…">Loading recent exports…</div>
     </article>
   </section>
   </div>

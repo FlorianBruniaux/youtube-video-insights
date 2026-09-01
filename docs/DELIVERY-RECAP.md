@@ -25,7 +25,7 @@ locale et un MCP en lecture seule.
 | Découverte | Recherche YouTube par métadonnées après une décision `refresh` | Dix candidats au maximum, sans acquisition implicite |
 | Approbation | Sélection séparée de un à cinq IDs exacts | Une révision obsolète ou une liste modifiée échoue sans mutation |
 | Dossiers | `dossier.md` et `manifest.json` déterministes, avec sources et empreintes | Les dossiers ne sont jamais réindexés comme sources YouTube |
-| Interface web | Dashboard, recherche, sources, sessions, décisions, jobs, timeline et exports | Serveur local sur `127.0.0.1`, sans compte ni partage distant |
+| Interface web | Dashboard, recherche, sources, sessions, décisions, jobs, timeline et exports en français et en anglais, avec détection et préférence persistante | Serveur local sur `127.0.0.1`, sans compte ni partage distant; le contenu du corpus garde sa langue source |
 | API locale | API JSON versionnée `/api/v1`, token de mutation éphémère et jobs bornés | Même origine, pas de CORS ni d'exposition réseau |
 | MCP | `list_corpora`, `search_videos`, `search_passages` et `get_passage` | Lecture seule, sans shell, SQL brut, acquisition ou export |
 | Assistants | Quatre skills et chercheurs Claude Code/Codex packagés, prompts anglais et setup transactionnel | Le quatrième skill n'est pas activé globalement; le canari Claude Code reste `UNKNOWN` |
@@ -97,12 +97,12 @@ source dans une recherche suivante.
 | Gate | Résultat |
 |---|---|
 | Python | 1 089 tests plus 10 subtests |
-| Frontend | 156 tests Vitest |
+| Frontend | 162 tests Vitest |
 | Navigateur | 6 parcours Playwright |
-| Astro | 53 fichiers, aucun diagnostic |
+| Astro | 57 fichiers, aucun diagnostic |
 | Typage Python | Mypy sur 53 fichiers source |
 | Lint | Ruff sur `src`, `tests` et `scripts` |
-| Assets | 18 fichiers reconstruits et comparés |
+| Assets | 20 fichiers reconstruits et comparés |
 | Packaging | Wheel minimal et MCP, smoke offline sans Node.js |
 | GitHub Actions | Web, Python 3.11, Python 3.12, packaging et runtime `PASS` sur `b62adaa` |
 

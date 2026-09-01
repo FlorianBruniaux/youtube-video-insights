@@ -1,6 +1,6 @@
 <form class="search-form panel" data-search-form method="get" action="/search/" role="search">
   <div class="field field-query">
-    <label for="search-query">Search transcripts</label>
+    <label for="search-query" data-i18n="Search transcripts">Search transcripts</label>
     <input
       id="search-query"
       name="q"
@@ -8,23 +8,24 @@
       autocomplete="off"
       maxlength="500"
       placeholder="e.g. local inference cost"
+      data-i18n-placeholder="e.g. local inference cost"
       required
     />
   </div>
   <div class="field">
-    <label for="search-channel">Channel</label>
+    <label for="search-channel" data-i18n="Channel">Channel</label>
     <input id="search-channel" name="channel" type="text" maxlength="200" />
   </div>
   <div class="field field-compact">
-    <label for="search-language">Language</label>
+    <label for="search-language" data-i18n="Language">Language</label>
     <input id="search-language" name="language" type="text" maxlength="64" placeholder="en" />
   </div>
   <div class="field field-compact">
-    <label for="search-limit">Results</label>
+    <label for="search-limit" data-i18n="Results">Results</label>
     <select id="search-limit" name="limit">
       <option value="10">10</option>
       <option value="20">20</option>
     </select>
   </div>
-  <button class="button search-submit" type="submit">Search</button>
+  <button class="button search-submit" type="submit" data-i18n="Search">Search</button>
 </form>

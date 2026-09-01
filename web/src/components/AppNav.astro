@@ -16,8 +16,8 @@ const links = [
 ] as const;
 ---
 
-<nav class="app-nav" aria-label="Primary navigation">
-  <a class="brand" href="/" aria-label="YT Insights overview">
+<nav class="app-nav" aria-label="Primary navigation" data-i18n-aria-label="Primary navigation">
+  <a class="brand" href="/" aria-label="YT Insights overview" data-i18n-aria-label="YT Insights overview">
     <span class="brand-mark" aria-hidden="true">YT</span>
     <span>Insights</span>
   </a>
@@ -32,6 +32,7 @@ const links = [
           ]}
           href={link.href}
           aria-current={isNavigationLinkCurrent(currentPath, link) ? "page" : undefined}
+          data-i18n={link.label}
         >
           {link.label}
         </a>
@@ -39,14 +40,20 @@ const links = [
     }
   </div>
 
-  <button
-    class="theme-toggle"
-    type="button"
-    data-theme-toggle
-    aria-pressed="true"
-    aria-label="Use light theme"
-  >
-    <span class="theme-toggle-icon" aria-hidden="true">◐</span>
-    <span data-theme-label>Light</span>
-  </button>
+  <div class="nav-controls">
+    <div class="language-control" data-language-control role="group" aria-label="Display locale" data-i18n-aria-label="Display locale">
+      <button class="language-option" type="button" data-language-option="en" aria-pressed="true">EN</button>
+      <button class="language-option" type="button" data-language-option="fr" aria-pressed="false">FR</button>
+    </div>
+    <button
+      class="theme-toggle"
+      type="button"
+      data-theme-toggle
+      aria-pressed="true"
+      aria-label="Use light theme"
+    >
+      <span class="theme-toggle-icon" aria-hidden="true">◐</span>
+      <span data-theme-label>Light</span>
+    </button>
+  </div>
 </nav>
