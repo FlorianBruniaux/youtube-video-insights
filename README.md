@@ -1046,10 +1046,30 @@ Run the pipeline on any video, skip any step you have already done. The agent ne
 
 ## Sponsor
 
-[Neon](https://neon.com/) sponsors YT Insights and provides the PostgreSQL
-infrastructure for the project's future hosted data layer. The released CLI
-and web app remain local-first and use SQLite. Running the project does not
-require a Neon account or a remote database.
+<table>
+  <thead>
+    <tr>
+      <th>Logo</th>
+      <th>URL</th>
+      <th>Description</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td width="180" align="center">
+        <a href="https://neon.com/">
+          <picture>
+            <source media="(prefers-color-scheme: dark)" srcset="docs/assets/sponsors/neon-logo-dark-color.svg" />
+            <source media="(prefers-color-scheme: light)" srcset="docs/assets/sponsors/neon-logo-light-color.svg" />
+            <img src="docs/assets/sponsors/neon-logo-light-color.svg" width="157" height="45" alt="Neon" />
+          </picture>
+        </a>
+      </td>
+      <td><a href="https://neon.com/">neon.com</a></td>
+      <td>Neon sponsors YT Insights and provides the PostgreSQL infrastructure for the project's future hosted data layer. The released CLI and web app remain local-first and use SQLite. Running the project does not require a Neon account or a remote database.</td>
+    </tr>
+  </tbody>
+</table>
 
 ---
 
