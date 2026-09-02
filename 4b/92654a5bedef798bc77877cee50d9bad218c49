@@ -1,0 +1,23 @@
+docs/assets/sponsors/neon-logo-dark-color.svg
+  s_d1f4f0f7b38590::t_73747feb712605 1-4
+docs/assets/sponsors/neon-logo-light-color.svg
+  s_d1f4f0f7b38590::t_73747feb712605 1-4
+README.md
+  s_d1f4f0f7b38590::t_73747feb712605 1049-1072
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "4b92654a5bedef798bc77877cee50d9bad218c49",
+  "prompts": {},
+  "sessions": {
+    "s_d1f4f0f7b38590": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0530d-5ec5-76c3-aab8-dc6aa5c35a1d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
