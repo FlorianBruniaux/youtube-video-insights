@@ -61,6 +61,13 @@ describe("language selection", () => {
     })).toBe("Créé le 2026-09-01 14:00 UTC · Session abc123");
   });
 
+  it("translates the sponsor copy and accessible link label", () => {
+    expect(translate("Infrastructure sponsor", "fr")).toBe("Sponsor infrastructure");
+    expect(translate("Neon sponsors YT Insights. Opens in a new tab.", "fr")).toBe(
+      "Neon sponsorise YT Insights. S’ouvre dans un nouvel onglet.",
+    );
+  });
+
   it("persists a language chosen from the navigation and reloads the current page", () => {
     document.body.innerHTML = `
       <div data-language-control>

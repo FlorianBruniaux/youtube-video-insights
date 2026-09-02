@@ -43,7 +43,22 @@ const documentTitle = title === "YT Insights" ? title : `${title} | YT Insights`
 
     <footer class="site-footer">
       <div class="shell footer-inner">
-        <p data-i18n="Local-first research. Your corpus stays on this machine.">Local-first research. Your corpus stays on this machine.</p>
+        <p class="footer-message" data-i18n="Local-first research. Your corpus stays on this machine.">Local-first research. Your corpus stays on this machine.</p>
+        <a
+          class="footer-sponsor"
+          data-sponsor="neon"
+          href="https://neon.com/"
+          target="_blank"
+          rel="noopener noreferrer"
+          aria-label="Neon sponsors YT Insights. Opens in a new tab."
+          data-i18n-aria-label="Neon sponsors YT Insights. Opens in a new tab."
+        >
+          <span class="footer-sponsor-copy">
+            <span class="footer-sponsor-label" data-i18n="Infrastructure sponsor">Infrastructure sponsor</span>
+            <strong>Neon</strong>
+          </span>
+          <span class="footer-sponsor-arrow" aria-hidden="true">↗</span>
+        </a>
         <p class="footer-status"><span aria-hidden="true"></span> <span data-i18n="Loopback only">Loopback only</span></p>
       </div>
     </footer>

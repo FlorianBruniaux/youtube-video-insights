@@ -1044,6 +1044,15 @@ Run the pipeline on any video, skip any step you have already done. The agent ne
 
 ---
 
+## Sponsor
+
+[Neon](https://neon.com/) sponsors YT Insights and provides the PostgreSQL
+infrastructure for the project's future hosted data layer. The released CLI
+and web app remain local-first and use SQLite. Running the project does not
+require a Neon account or a remote database.
+
+---
+
 <!-- BEGIN GENERATED RELATED PROJECTS -->
 <!-- Source: https://github.com/FlorianBruniaux/FlorianBruniaux/blob/main/ecosystem/projects.json; project: yt-insights -->
 ## Explore the ecosystem

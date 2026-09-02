@@ -41,6 +41,26 @@ describe("the generated application shell", () => {
     expect(html.indexOf(bootstrapTag?.[0] ?? "missing")).toBeLessThan(html.indexOf("</head>"));
   });
 
+  it("exposes Neon as a hardened infrastructure sponsor link", () => {
+    const sponsor = html.match(
+      /<a\b(?=[^>]*\bdata-sponsor="neon")[^>]*>[\s\S]*?<\/a>/i,
+    )?.[0] ?? "";
+    const openingTag = sponsor.match(/^<a\b[^>]*>/i)?.[0] ?? "";
+    const rel = (openingTag.match(/\brel="([^"]*)"/i)?.[1] ?? "")
+      .split(/\s+/)
+      .filter(Boolean);
+
+    expect(sponsor).not.toBe("");
+    expect(openingTag).toMatch(/\bhref="https:\/\/neon\.com\/?"/i);
+    expect(openingTag).toMatch(/\btarget="_blank"/i);
+    expect(rel).toEqual(
+      expect.arrayContaining(["noopener", "noreferrer"]),
+    );
+    expect(sponsor).toContain("Neon");
+    expect(sponsor).toMatch(/\bdata-i18n=/i);
+    expect(openingTag).toMatch(/\bdata-i18n-aria-label=/i);
+  });
+
   it("keeps the mobile research reading order in the generated workspace", () => {
     const markers = [
       "data-evidence-panel",

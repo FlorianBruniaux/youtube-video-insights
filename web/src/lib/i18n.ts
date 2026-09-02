@@ -19,6 +19,8 @@ export const FRENCH_TRANSLATIONS: Readonly<Record<string, string>> = {
   "Dark": "Sombre",
   "Skip to content": "Aller au contenu",
   "Local-first research. Your corpus stays on this machine.": "Recherche locale par défaut. Votre corpus reste sur cette machine.",
+  "Infrastructure sponsor": "Sponsor infrastructure",
+  "Neon sponsors YT Insights. Opens in a new tab.": "Neon sponsorise YT Insights. S’ouvre dans un nouvel onglet.",
   "Loopback only": "Accès local uniquement",
 
   "Your local YouTube research system": "Votre système local de recherche YouTube",
