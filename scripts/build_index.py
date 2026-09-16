@@ -329,6 +329,15 @@ def main():
     m.append("Chaque sujet liste les chaînes qui en parlent (occurrences décroissantes). "
              "Sert à répondre vite : « a-t-on de la data là-dessus ? »")
     m.append("")
+    m.append("**Un sujet absent de cette liste ne veut pas dire que le corpus est muet dessus.** "
+             "L'index est construit sur le champ `tools` des insights, que le modèle d'extraction "
+             "ne remplit qu'avec des outils et des produits. Les fournisseurs d'inférence "
+             "n'y apparaissent jamais : OpenRouter, Groq, Fireworks et vLLM totalisent zéro "
+             "occurrence dans `tools` alors que la recherche plein texte en trouve 80 pour le seul "
+             "OpenRouter. Pour ce type de question, interroger `catalog.sqlite3` en FTS plutôt que "
+             "de conclure de cette liste : "
+             "`sqlite3 catalog.sqlite3 \"select count(*) from video_search where video_search match 'openrouter'\"`.")
+    m.append("")
     for t, chans in list(topics_sorted.items())[:60]:
         chan_str = ", ".join(f"{s} ({c})" for s, c in chans.items())
         m.append(f"- **{t}** — {chan_str}")
