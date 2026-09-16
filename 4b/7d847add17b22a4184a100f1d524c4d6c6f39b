@@ -1,0 +1,21 @@
+src/yt_insights/downloader.py
+  s_d747cf0078d170::t_26509398fc9ff3 59-62,76-77,533-536,540-541,597-604,606,609
+tests/test_downloader.py
+  s_d747cf0078d170::t_1cf1f74c007f4e 68-96,327-356,409-442
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4b7d847add17b22a4184a100f1d524c4d6c6f39b",
+  "prompts": {},
+  "sessions": {
+    "s_d747cf0078d170": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07c9d-26b3-7ef1-a920-c2ab13a8c783",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
