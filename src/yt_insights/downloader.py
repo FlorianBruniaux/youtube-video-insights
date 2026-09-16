@@ -56,7 +56,10 @@ class VideoListResult:
 
 
 def fetch_video_list(
-    source: str, *, cookies_from_browser: str | None = None
+    source: str,
+    *,
+    cookies_from_browser: str | None = None,
+    sleep_requests: int = 0,
 ) -> VideoListResult:
     """Fetch videos and retain yt-dlp failures for durable collection logs.
 
@@ -70,6 +73,8 @@ def fetch_video_list(
         "--no-flat-playlist",
         "--ignore-errors",
     ]
+    if sleep_requests > 0:
+        cmd += ["--sleep-requests", str(sleep_requests)]
     if cookies_from_browser:
         cmd += ["--cookies-from-browser", cookies_from_browser]
     cmd += _source_args(source)
@@ -525,8 +530,14 @@ def download_subtitles(
         with tempfile.TemporaryDirectory(prefix="yt-insights-download-") as staging_name:
             staging = Path(staging_name)
             cached_vtt_names: set[str] = set()
+            # Acquisition emits canonical watch URLs, one video at a time.
+            single_video = re.fullmatch(
+                r"https://www\.youtube\.com/watch\?v=([A-Za-z0-9_-]{11})", channel_url
+            )
             for name in destination_names:
                 if not (name.endswith(".vtt") or name.endswith(".info.json")):
+                    continue
+                if single_video and f"[{single_video.group(1)}]." not in name:
                     continue
                 _copy_regular_at(destination_fd, name, staging / name)
                 if name.endswith(".vtt"):
@@ -556,9 +567,6 @@ def download_subtitles(
                 for line in (result.stdout + "\n" + result.stderr).splitlines()
                 if "ERROR" in line.upper()
             ]
-            if result.returncode != 0 and not errors:
-                detail = result.stderr.strip() or "no diagnostic output"
-                errors.append(f"yt-dlp exited with status {result.returncode}: {detail}")
 
             selected_vtt_names: set[str] = set()
             skipped_vtt_names: set[str] = set()
@@ -586,9 +594,17 @@ def download_subtitles(
                         selected_vtt_names.add(name)
 
             available = set(_list_regular_names(destination_fd, suffix=".vtt"))
+            selected_available = selected_vtt_names & available
+            new_available = selected_available - cached_vtt_names
+            effective_returncode = result.returncode
+            if new_available and not errors:
+                effective_returncode = 0
+            elif result.returncode != 0 and not errors:
+                detail = result.stderr.strip() or "no diagnostic output"
+                errors.append(f"yt-dlp exited with status {result.returncode}: {detail}")
             return DownloadResult(
-                vtt_files=[output_dir / name for name in sorted(selected_vtt_names & available)],
+                vtt_files=[output_dir / name for name in sorted(selected_available)],
                 errors=errors,
                 skipped_count=len(skipped_vtt_names | cached_vtt_names),
-                returncode=result.returncode,
+                returncode=effective_returncode,
             )

@@ -65,6 +65,35 @@ def test_list_videos_parses_metadata_and_uses_argument_vector(monkeypatch) -> No
     ]
 
 
+def test_fetch_video_list_spaces_discovery_requests(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    result = fetch_video_list(
+        "https://www.youtube.com/@example",
+        sleep_requests=2,
+    )
+
+    assert result.returncode == 0
+    assert calls == [
+        [
+            "yt-dlp",
+            "--dump-json",
+            "--skip-download",
+            "--no-flat-playlist",
+            "--ignore-errors",
+            "--sleep-requests",
+            "2",
+            "https://www.youtube.com/@example",
+        ]
+    ]
+
+
 @pytest.mark.parametrize(
     "log_template",
     [
@@ -295,6 +324,36 @@ def test_download_subtitles_exposes_nonzero_exit_without_error_line(
     assert result.errors == ["yt-dlp exited with status 2: connection refused"]
 
 
+def test_download_subtitles_accepts_new_vtt_when_nonzero_exit_has_only_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "transcripts"
+    vtt_name = "20260820 - Ready [nfupYzLjFGc].en-orig.vtt"
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        staging = Path(args[args.index("--output") + 1]).parent
+        staged_vtt = staging / vtt_name
+        staged_vtt.write_text("WEBVTT\n", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=1,
+            stdout=f"[info] Writing video subtitles to: {staged_vtt}\n",
+            stderr="WARNING: requested impersonation is unavailable\n",
+        )
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    result = download_subtitles(
+        "https://youtu.be/nfupYzLjFGc",
+        output_dir,
+        sub_langs="en-orig",
+    )
+
+    assert result.vtt_files == [output_dir / vtt_name]
+    assert result.errors == []
+    assert result.returncode == 0
+
+
 def test_download_subtitles_preseeds_cached_vtt_and_sidecar_without_counting_sidecar(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -345,6 +404,40 @@ def test_download_subtitles_returns_cached_vtt_with_network_failure(
     assert result.skipped_count == 1
     assert result.errors == ["yt-dlp exited with status 2: connection refused"]
     assert result.returncode == 2
+
+
+def test_single_video_download_does_not_copy_unrelated_cached_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A single-video update must not stage the entire channel's cache."""
+    output_dir = tmp_path / "transcripts"
+    output_dir.mkdir()
+    selected = "20260820 - Selected [nfupYzLjFGc]"
+    unrelated = "20260819 - Unrelated [AAAAAAAAAAA]"
+    contents = {
+        f"{selected}.fr.vtt": b"WEBVTT\n",
+        f"{selected}.info.json": b'{"id":"nfupYzLjFGc"}',
+        f"{unrelated}.fr.vtt": b"WEBVTT\n\nunrelated\n",
+        f"{unrelated}.info.json": b'{"id":"AAAAAAAAAAA"}',
+    }
+    for name, content in contents.items():
+        (output_dir / name).write_bytes(content)
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        staging = Path(args[args.index("--output") + 1]).parent
+        assert {p.name for p in staging.iterdir()} == {
+            f"{selected}.fr.vtt", f"{selected}.info.json"
+        }
+        return subprocess.CompletedProcess(args=args, returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+    result = download_subtitles(
+        "https://www.youtube.com/watch?v=nfupYzLjFGc", output_dir
+    )
+
+    assert result.vtt_files == [output_dir / f"{selected}.fr.vtt"]
+    assert result.skipped_count == 1
+    assert {p.name: p.read_bytes() for p in output_dir.iterdir()} == contents
 
 
 def test_download_subtitles_rejects_symlink_output_before_subprocess(
