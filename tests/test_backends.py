@@ -404,7 +404,13 @@ class _CcBridgeClient:
         raise AssertionError(f"Unexpected GET URL: {url}")
 
     def post(self, url: str, **kwargs: object) -> _Response:
-        assert url.endswith("/chat/completions")
+        assert url.endswith("/messages")
+        payload = kwargs["json"]
+        assert isinstance(payload, dict)
+        assert isinstance(payload["model"], str)
+        assert payload["messages"] == [{"role": "user", "content": "hi"}]
+        assert payload["max_tokens"] == 1
+        assert payload["stream"] is False
         return _Response(self.status_code)
 
 

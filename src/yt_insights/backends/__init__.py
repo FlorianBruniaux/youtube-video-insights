@@ -190,9 +190,18 @@ def _probe_llm(cfg: Config) -> bool:
     try:
         with httpx.Client(timeout=5.0) as c:
             r = c.post(
-                f"{cfg.base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {cfg.api_key}", "x-api-key": cfg.api_key or ""},
-                json={"model": cfg.model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 1},
+                f"{cfg.base_url}/messages",
+                headers={
+                    "Authorization": f"Bearer {cfg.api_key}",
+                    "x-api-key": cfg.api_key or "",
+                    "anthropic-version": cfg.anthropic_version,
+                },
+                json={
+                    "model": cfg.model,
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "max_tokens": 1,
+                    "stream": False,
+                },
             )
         return 200 <= r.status_code < 400
     except httpx.HTTPError:
