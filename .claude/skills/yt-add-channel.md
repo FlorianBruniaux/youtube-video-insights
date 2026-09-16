@@ -65,6 +65,10 @@ Rafraîchir le catalogue SQLite après la génération des index :
   `topics_index`) et dans `output/INDEX.md`.
 - SQLite : exécuter `.venv/bin/yt-insights catalog stats`, puis consulter
   `.venv/bin/yt-insights catalog errors` si l'import termine avec `status=partial`.
+- Speakers : `output/speakers.md` doit avoir une section pour la chaîne si ses titres de vidéo
+  nomment les intervenants (voir le docstring de `scripts/build_speakers.py` pour les patterns
+  reconnus). Une chaîne mono-hôte sans invité nommé dans le titre n'aura légitimement aucune
+  section, ce n'est pas un échec.
 
 Donner à l'utilisateur : le compte final, le chemin de `output/<slug>/INDEX.md`, et signaler
 tout échec d'extraction (vidéos sans insight, souvent des transcripts trop courts ou une

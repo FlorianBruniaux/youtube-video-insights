@@ -21,6 +21,7 @@
 #   - La dédup langue garde la langue d'origine (fr pour une chaîne FR, en pour une chaîne EN).
 
 set -eu
+set -o pipefail
 cd "$(dirname "$0")/.."   # racine du repo
 
 SLUG="${1:?slug requis (ex: alafrench)}"
@@ -45,7 +46,7 @@ echo "=============================================="
 # --- 1. Source : chaîne entière, ou batch d'URLs filtré par année -------------
 if [ -n "$YEAR_RE" ]; then
   BATCH="batches/${SLUG}-filtered.txt"
-  echo "[1/4] Résolution des dates (filtre: $YEAR_RE), passe métadonnées yt-dlp…"
+  echo "[1/7] Résolution des dates (filtre: $YEAR_RE), passe métadonnées yt-dlp…"
   .venv/bin/yt-dlp --no-warnings --skip-download --ignore-errors --sleep-requests 1 \
     --print "%(upload_date)s|%(id)s" "$URL" 2>/dev/null \
     | awk -F'|' -v re="^($YEAR_RE)" '$1 ~ re {print "https://www.youtube.com/watch?v=" $2}' \
@@ -55,12 +56,12 @@ if [ -n "$YEAR_RE" ]; then
   [ "$n" -eq 0 ] && { echo "Aucune vidéo dans la fenêtre. Stop."; exit 1; }
   SOURCE="$BATCH"
 else
-  echo "[1/4] Pas de filtre année : chaîne entière."
+  echo "[1/7] Pas de filtre année : chaîne entière."
   SOURCE="$URL"
 fi
 
 # --- 2. Download transcripts + extraction insights ----------------------------
-echo "[2/4] yt-insights run (transcripts + insights)…"
+echo "[2/7] yt-insights run (transcripts + insights)…"
 : > "$LOG"
 .venv/bin/yt-insights run "$SOURCE" \
   --output-dir "$OUT" \
@@ -72,19 +73,42 @@ echo "[2/4] yt-insights run (transcripts + insights)…"
 
 # --- 3. Dédup langue (opt-in) : garder KEEP_LANG, virer les traductions --------
 if [ -n "${KEEP_LANG:-}" ]; then
-  echo "[3/4] Dédup langue : on garde .$KEEP_LANG, on retire les autres pistes…"
+  echo "[3/7] Dédup langue : on garde .$KEEP_LANG, on retire les autres pistes…"
   for L in fr en fr-orig en-orig es de; do
     [ "$L" = "$KEEP_LANG" ] && continue
     rm -f "$OUT"/insights/*."$L".json "$OUT"/insights/*."$L".md "$OUT"/transcripts/*."$L".vtt 2>/dev/null || true
   done
 else
-  echo "[3/4] Dédup langue ignorée (KEEP_LANG non défini)."
+  echo "[3/7] Dédup langue ignorée (KEEP_LANG non défini)."
 fi
 
 # --- 4. Rafraîchir le catalogue global ----------------------------------------
-echo "[4/4] Régénération de l'index global (scripts/build_index.py)…"
-python3 scripts/build_index.py
+echo "[4/7] Régénération des index Markdown/YAML (scripts/build_index.py)…"
+.venv/bin/python scripts/build_index.py
+
+# --- 5. Rafraîchir la liste des speakers ---------------------------------------
+echo "[5/7] Régénération des speakers (scripts/build_speakers.py)…"
+.venv/bin/python scripts/build_speakers.py
+
+# --- 6. Rafraîchir le catalogue SQLite et l'index FTS ---------------------------
+echo "[6/7] Import du corpus dans catalog.sqlite3 et reconstruction FTS…"
+.venv/bin/yt-insights catalog import-corpus output
+.venv/bin/yt-insights index --all
+
+# --- 7. Vérifier les cinq artefacts obligatoires -------------------------------
+echo "[7/7] Vérification des cinq artefacts globaux…"
+for REQUIRED in output/CATALOG.yaml output/catalog.sqlite3 output/INDEX.md output/llms.txt output/speakers.md; do
+  [ -s "$REQUIRED" ] || { echo "Artefact manquant ou vide : $REQUIRED" >&2; exit 1; }
+done
+if ! grep -Fqi -- "$SLUG" output/llms.txt; then
+  echo "output/llms.txt ne mentionne pas $SLUG." >&2
+  echo "Ajouter ou réviser sa synthèse éditoriale, puis relancer run-channel.sh (l'acquisition est mise en cache)." >&2
+  exit 1
+fi
 
 echo ""
 echo "Terminé. -> $OUT/INDEX.md"
 echo "Catalogue global -> output/INDEX.md et output/CATALOG.yaml"
+echo "Catalogue SQLite + FTS -> output/catalog.sqlite3"
+echo "Synthèse éditoriale vérifiée -> output/llms.txt"
+echo "Speakers -> output/speakers.md"

@@ -17,10 +17,10 @@ KEEP_LANG=fr ./runbook/run-channel.sh alafrench https://www.youtube.com/@alafren
 KEEP_LANG=en ./runbook/run-channel.sh bloomberg https://www.youtube.com/@markets/videos
 ```
 
-Le script fait quatre choses : résoudre la liste de vidéos (avec filtre année optionnel),
-télécharger transcripts + insights dans `output/<slug>/`, dédupliquer les pistes de langue
-si demandé, puis relancer `scripts/build_index.py` pour mettre à jour `output/INDEX.md` et
-`output/CATALOG.yaml`.
+Le script exécute l'acquisition puis la finalisation complète : déduplication des langues,
+reconstruction des index Markdown/YAML et des speakers, import du catalogue SQLite,
+reconstruction de l'index FTS, puis contrôle des cinq artefacts globaux. `output/llms.txt`
+reste éditorial : le script s'arrête en erreur si le slug acquis n'y apparaît pas.
 
 ## Ce qui a coûté du temps, et pourquoi le template le règle
 
@@ -79,12 +79,27 @@ output/<slug>/
 `output/CATALOG.yaml` (feed machine avec index inversé topic vers chaînes) et le
 `output/INDEX.md` global. Idempotent, aucun LLM.
 
+## Finalisation obligatoire après chaque acquisition
+
+Une acquisition n'est terminée que lorsque ces cinq artefacts ont été rafraîchis et vérifiés :
+
+1. `output/CATALOG.yaml` via `scripts/build_index.py` ;
+2. `output/catalog.sqlite3` via `yt-insights catalog import-corpus output`, puis
+   `yt-insights index --all` pour l'index FTS ;
+3. `output/INDEX.md` via `scripts/build_index.py` ;
+4. `output/llms.txt`, révision éditoriale manuelle avec le slug, la couverture et les limites ;
+5. `output/speakers.md` via `scripts/build_speakers.py`.
+
+`run-channel.sh` exécute les étapes déterministes et vérifie les cinq fichiers. Si
+`output/llms.txt` ne mentionne pas le slug, la finalisation échoue explicitement au lieu de
+laisser un catalogue partiellement synchronisé.
+
 ## Reprise et incréments
 
 Le pipeline vérifie son cache : relancer sur une chaîne déjà traitée ne réanalyse que les
 vidéos manquantes. Pour forcer une réanalyse, ajouter `--force` au `yt-insights run` dans le
-template. Après tout ajout, un simple `python3 scripts/build_index.py` suffit à remettre le
-catalogue à jour.
+template. Après tout ajout, relancer `run-channel.sh` jusqu'à validation des cinq artefacts ;
+`scripts/build_index.py` seul ne met à jour ni SQLite, ni `llms.txt`, ni `speakers.md`.
 
 ## Fichiers de ce dossier
 

@@ -42,6 +42,7 @@ DESCRIPTIONS = {
     "alafrench": "À La French — tech, IA, souveraineté numérique française (FR)",
     "methode-aristote": "Méthode Aristote — éducation / plateforme interne",
     "bloomberg": "Bloomberg — tech/marchés : IA, semi-conducteurs, big tech (EN)",
+    "indydevdan": "IndyDevDan — agentic engineering, orchestration et software factories (EN)",
 }
 
 # Tool-name normalization for the topic index (merge obvious variants).
