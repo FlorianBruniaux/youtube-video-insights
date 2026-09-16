@@ -44,3 +44,9 @@ build/
 runbook/*
 !runbook/run-channel.sh
 !runbook/README.md
+
+# Personal batch URL lists (same class as channels.txt, never shared)
+/batches/
+
+# Stray package-manager cache
+/.pnpm-store/
