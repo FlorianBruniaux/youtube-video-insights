@@ -299,6 +299,103 @@ def test_execute_reports_each_video_status_and_source_hash(tmp_path: Path) -> No
     ]
 
 
+def test_execute_spaces_network_downloads_and_forwards_request_delay(
+    tmp_path: Path,
+) -> None:
+    videos = (
+        VideoInfo("aaa123DEF45", "First", "20260820"),
+        VideoInfo("bbb123DEF45", "Second", "20260819"),
+    )
+    plan = build_acquisition_plan(
+        source="https://www.youtube.com/playlist?list=PL123",
+        data_paths=DataPaths.from_root(tmp_path / "corpus"),
+        slug="playlist",
+        discovered=videos,
+    )
+    observed_delays: list[int] = []
+    downloader_delays: list[int] = []
+
+    def fake_download(source: str, output_dir: Path, **kwargs: object) -> DownloadResult:
+        video = videos[len(downloader_delays)]
+        downloader_delays.append(int(kwargs["sleep_requests"]))
+        output_dir.mkdir(parents=True, exist_ok=True)
+        vtt = output_dir / f"{video.upload_date} - {video.title} [{video.video_id}].fr.vtt"
+        vtt.write_text("WEBVTT\n", encoding="utf-8")
+        return DownloadResult(vtt_files=[vtt])
+
+    report = execute_acquisition(
+        plan,
+        download=fake_download,
+        refresh_indexes=False,
+        sleep_requests=2,
+        sleeper=observed_delays.append,
+    )
+
+    assert report.transcripts_ready == 2
+    assert report.failures == ()
+    assert downloader_delays == [2, 2]
+    assert observed_delays == [2]
+
+
+def test_execute_opens_circuit_after_youtube_rate_limit(tmp_path: Path) -> None:
+    videos = (
+        VideoInfo("aaa123DEF45", "Blocked", "20260820"),
+        VideoInfo("bbb123DEF45", "Deferred one", "20260819"),
+        VideoInfo("ccc123DEF45", "Deferred two", "20260818"),
+    )
+    plan = build_acquisition_plan(
+        source="https://www.youtube.com/@example/videos",
+        data_paths=DataPaths.from_root(tmp_path / "corpus"),
+        slug="example",
+        discovered=videos,
+    )
+    calls = 0
+
+    def rate_limited_download(*args: object, **kwargs: object) -> DownloadResult:
+        nonlocal calls
+        calls += 1
+        if calls > 1:
+            raise AssertionError("the YouTube circuit must stop later downloads")
+        return DownloadResult(
+            errors=["WARNING: HTTP Error 429: Too Many Requests"],
+            returncode=1,
+        )
+
+    report = execute_acquisition(
+        plan,
+        download=rate_limited_download,
+        refresh_indexes=False,
+    )
+
+    assert calls == 1
+    assert [item.error_code for item in report.items] == [
+        "youtube_rate_limited",
+        "youtube_circuit_open",
+        "youtube_circuit_open",
+    ]
+    assert report.transcripts_ready == 0
+
+
+def test_execute_identifies_youtube_reload_challenge(tmp_path: Path) -> None:
+    video = VideoInfo("aaa123DEF45", "Reload", "20260820")
+    plan = build_acquisition_plan(
+        source=video.watch_url,
+        data_paths=DataPaths.from_root(tmp_path / "corpus"),
+        discovered=[video],
+    )
+
+    report = execute_acquisition(
+        plan,
+        download=lambda *args, **kwargs: DownloadResult(
+            errors=["ERROR: [youtube] aaa123DEF45: The page needs to be reloaded."],
+            returncode=1,
+        ),
+        refresh_indexes=False,
+    )
+
+    assert report.items[0].error_code == "youtube_reload_required"
+
+
 def test_execute_rejects_cache_directory_swapped_to_symlink(tmp_path: Path) -> None:
     paths = DataPaths.from_root(tmp_path / "corpus")
     video = VideoInfo("aaa123DEF45", "Unsafe cache", "20260820")

@@ -31,7 +31,7 @@ def test_acquire_propagates_explicit_backend_to_analysis_execution(
         ),
     )
 
-    def fake_execute(plan, *, config, cookies_from_browser=None):
+    def fake_execute(plan, *, config, cookies_from_browser=None, sleep_requests=0):
         observed["backend"] = config.backend
         observed["analyze"] = plan.analyze
         return AcquisitionReport(
@@ -58,6 +58,51 @@ def test_acquire_propagates_explicit_backend_to_analysis_execution(
 
     assert result.exit_code == 0, result.output
     assert observed == {"backend": "mlx", "analyze": True}
+
+
+def test_acquire_propagates_request_spacing_to_execution(
+    tmp_path: Path, monkeypatch
+) -> None:
+    observed: dict[str, object] = {}
+
+    def fake_fetch(source: str, **kwargs: object) -> VideoListResult:
+        observed["discovery_sleep_requests"] = kwargs["sleep_requests"]
+        return VideoListResult(
+            videos=[VideoInfo("aaa123DEF45", "One", "20260820")]
+        )
+
+    monkeypatch.setattr(cli_acquire, "fetch_video_list", fake_fetch)
+
+    def fake_execute(
+        plan, *, config, cookies_from_browser=None, sleep_requests=0
+    ) -> AcquisitionReport:
+        observed["sleep_requests"] = sleep_requests
+        return AcquisitionReport(
+            selected=1,
+            transcripts_ready=1,
+            insights_ready=0,
+            failures=(),
+        )
+
+    monkeypatch.setattr(cli_acquire, "execute_acquisition", fake_execute)
+
+    result = CliRunner().invoke(
+        cli_acquire.acquire,
+        [
+            "https://youtu.be/aaa123DEF45",
+            "--sleep-requests",
+            "2",
+            "--data-root",
+            str(tmp_path / "corpus"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert observed == {
+        "discovery_sleep_requests": 2,
+        "sleep_requests": 2,
+    }
 
 
 def test_dry_run_discovers_but_never_executes_or_writes(tmp_path: Path, monkeypatch) -> None:

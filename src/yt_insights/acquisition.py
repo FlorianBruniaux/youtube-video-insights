@@ -12,6 +12,7 @@ from collections.abc import Callable, Iterable
 from dataclasses import asdict, dataclass
 from enum import Enum, StrEnum
 from pathlib import Path
+from time import sleep as _sleep
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
@@ -36,6 +37,19 @@ _SAFE_SLUG = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?")
 _YOUTUBE_HOSTS = {"youtube.com", "www.youtube.com", "m.youtube.com"}
 _MAX_BATCH_BYTES = 1024 * 1024
 _MAX_BATCH_LINES = 1000
+_YOUTUBE_CIRCUIT_ERROR_CODES = {
+    "youtube_rate_limited",
+    "youtube_reload_required",
+}
+
+
+def _youtube_block_error_code(messages: Iterable[str]) -> str | None:
+    diagnostic = "\n".join(messages).lower()
+    if "http error 429" in diagnostic or "too many requests" in diagnostic:
+        return "youtube_rate_limited"
+    if "the page needs to be reloaded" in diagnostic:
+        return "youtube_reload_required"
+    return None
 
 
 class SourceKind(str, Enum):  # noqa: UP042 - preserve legacy str(Enum) semantics
@@ -861,6 +875,8 @@ def execute_acquisition(
     analyze_many: Callable[..., list[Any]] | None = None,
     backend_resolver: Callable[[Config], Any] | None = None,
     refresh_indexes: bool = True,
+    sleep_requests: int = 0,
+    sleeper: Callable[[int], None] = _sleep,
 ) -> AcquisitionReport:
     """Execute a confirmed plan using package services, preserving item identity."""
     if download is None:
@@ -868,6 +884,8 @@ def execute_acquisition(
     failures = [f"source ({plan.source}): {message}" for message in plan.discovery_errors]
     ready_by_id: dict[str, list[_VttSnapshot]] = {}
     items: list[AcquisitionItemReport] = []
+    circuit_open = _youtube_block_error_code(plan.discovery_errors) is not None
+    attempted_download = False
 
     for video, url in zip(plan.selected_videos, plan.selected_urls, strict=False):
         try:
@@ -887,10 +905,27 @@ def execute_acquisition(
         already_present = bool(cached)
         result = DownloadResult(vtt_files=[snapshot.path for snapshot in cached])
         if not cached:
+            if circuit_open:
+                failures.append(
+                    f"{video.video_id} ({video.title}): "
+                    "deferred because the YouTube protection circuit is open"
+                )
+                items.append(
+                    AcquisitionItemReport(
+                        video.video_id,
+                        AcquisitionItemStatus.FAILED_RETRYABLE,
+                        error_code="youtube_circuit_open",
+                    )
+                )
+                continue
+            if attempted_download and sleep_requests:
+                sleeper(sleep_requests)
+            attempted_download = True
             try:
                 result = download(
                     url,
                     plan.transcripts_dir,
+                    sleep_requests=sleep_requests,
                     cookies_from_browser=cookies_from_browser,
                     sub_langs=plan.language,
                     data_root=plan.data_paths.root,
@@ -925,7 +960,9 @@ def execute_acquisition(
             error_code = None
         elif result.returncode or result.errors:
             status = AcquisitionItemStatus.FAILED_RETRYABLE
-            error_code = "download_failed"
+            error_code = _youtube_block_error_code(diagnostics) or "download_failed"
+            if error_code in _YOUTUBE_CIRCUIT_ERROR_CODES:
+                circuit_open = True
         elif ready:
             status = AcquisitionItemStatus.ACQUIRED
             error_code = None

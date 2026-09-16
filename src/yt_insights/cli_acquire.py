@@ -50,6 +50,13 @@ def _echo_json(payload: dict[str, object]) -> None:
 @click.option("--yes", "confirmed", is_flag=True, help="Confirm a multi-video acquisition.")
 @click.option("--json", "as_json", is_flag=True, help="Emit stable JSON output.")
 @click.option("--data-root", type=click.Path(path_type=Path), default=None)
+@click.option(
+    "--sleep-requests",
+    type=click.IntRange(min=0),
+    default=0,
+    show_default=True,
+    help="Seconds between video acquisitions and yt-dlp requests.",
+)
 @click.option("--cookies-from-browser", default=None, metavar="BROWSER")
 def acquire(
     source: str,
@@ -62,6 +69,7 @@ def acquire(
     confirmed: bool,
     as_json: bool,
     data_root: Path | None,
+    sleep_requests: int,
     cookies_from_browser: str | None,
 ) -> None:
     """Discover SOURCE, print its plan, then acquire only after confirmation."""
@@ -84,7 +92,9 @@ def acquire(
     discovery_errors: list[str] = []
     for discovery_source in discovery_sources:
         result = fetch_video_list(
-            discovery_source, cookies_from_browser=cookies_from_browser
+            discovery_source,
+            cookies_from_browser=cookies_from_browser,
+            sleep_requests=sleep_requests,
         )
         discovered.extend(result.videos)
         discovery_errors.extend(result.errors)
@@ -120,6 +130,7 @@ def acquire(
         plan,
         config=config,
         cookies_from_browser=cookies_from_browser,
+        sleep_requests=sleep_requests,
     )
     if as_json:
         _echo_json(report.to_dict())
