@@ -1,0 +1,21 @@
+src/yt_insights/backends/__init__.py
+  s_080a2cab52ca9c::t_50a102a9893652 193-204
+tests/test_backends.py
+  s_080a2cab52ca9c::t_395797f1059486 407-413
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d953406744e635589ae68458f99a034e6e1872c8",
+  "prompts": {},
+  "sessions": {
+    "s_080a2cab52ca9c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a07605-5d3b-7e71-87da-ea59d8716ee4",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
