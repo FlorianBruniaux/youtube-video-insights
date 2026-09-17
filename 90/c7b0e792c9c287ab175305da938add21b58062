@@ -1,0 +1,24 @@
+CHANGELOG.md
+  s_755ee685588f9c::t_1af48bf9713d1f 151-155
+src/yt_insights/catalog.py
+  s_755ee685588f9c::t_6d028f620a7b55 1110-1111,1120,1125,1171-1185,1199,1225-1236
+  s_755ee685588f9c::t_c02b5dbc59053e 1237
+tests/test_catalog.py
+  s_755ee685588f9c::t_8ff2eaefe4cafc 215-259
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "90c7b0e792c9c287ab175305da938add21b58062",
+  "prompts": {},
+  "sessions": {
+    "s_755ee685588f9c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "fae34233-f38a-4902-a704-4d1d0c611340",
+        "model": "claude-opus-5"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
