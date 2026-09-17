@@ -127,11 +127,7 @@ def fetch_video_list(
             )
         )
 
-    errors = metadata_errors + [
-        line.strip()
-        for line in result.stderr.splitlines()
-        if "ERROR" in line.upper()
-    ]
+    errors = metadata_errors + _error_lines(result.stderr)
     if result.returncode != 0 and not errors:
         detail = result.stderr.strip() or "no diagnostic output"
         errors.append(f"yt-dlp exited with status {result.returncode}: {detail}")
@@ -141,6 +137,14 @@ def fetch_video_list(
         errors=errors,
         returncode=result.returncode,
     )
+
+
+_ERROR_LINE = re.compile(r"^\s*ERROR:")
+
+
+def _error_lines(output: str) -> list[str]:
+    """Return yt-dlp error records, not warnings or titles that mention errors."""
+    return [line.strip() for line in output.splitlines() if _ERROR_LINE.match(line)]
 
 
 def _bounded_metadata_string(value: object) -> str:
@@ -562,11 +566,7 @@ def download_subtitles(
             cmd += _source_args(channel_url)
             result = subprocess.run(cmd, capture_output=True, text=True)
 
-            errors = [
-                line.strip()
-                for line in (result.stdout + "\n" + result.stderr).splitlines()
-                if "ERROR" in line.upper()
-            ]
+            errors = _error_lines(result.stdout + "\n" + result.stderr)
 
             selected_vtt_names: set[str] = set()
             skipped_vtt_names: set[str] = set()

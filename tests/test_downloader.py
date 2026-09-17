@@ -324,6 +324,59 @@ def test_download_subtitles_exposes_nonzero_exit_without_error_line(
     assert result.errors == ["yt-dlp exited with status 2: connection refused"]
 
 
+def test_download_subtitles_ignores_error_word_outside_error_lines(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    output_dir = tmp_path / "transcripts"
+    vtt_name = "20260820 - Error handling in agents [nfupYzLjFGc].en-orig.vtt"
+
+    def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        staging = Path(args[args.index("--output") + 1]).parent
+        staged_vtt = staging / vtt_name
+        staged_vtt.write_text("WEBVTT\n", encoding="utf-8")
+        return subprocess.CompletedProcess(
+            args=args,
+            returncode=1,
+            stdout=f"[info] Writing video subtitles to: {staged_vtt}\n",
+            stderr=(
+                "WARNING: The extractor specified to use impersonation for this "
+                "download, but no impersonate target is available. If you "
+                "encounter errors, then see  https://github.com/yt-dlp/yt-dlp"
+                "#impersonation  for information on installing the required "
+                "dependencies\n"
+            ),
+        )
+
+    monkeypatch.setattr(downloader.subprocess, "run", fake_run)
+
+    result = download_subtitles(
+        "https://youtu.be/nfupYzLjFGc",
+        output_dir,
+        sub_langs="en-orig",
+    )
+
+    assert result.vtt_files == [output_dir / vtt_name]
+    assert result.errors == []
+    assert result.returncode == 0
+
+
+def test_fetch_video_list_ignores_error_word_in_warnings() -> None:
+    completed = SimpleNamespace(
+        stdout="",
+        stderr=(
+            "WARNING: If you encounter errors, then see the docs\n"
+            "[youtube] Extracting URL: https://youtu.be/errorsXYZ12\n"
+            "ERROR: [youtube] abc123DEF45: Video unavailable\n"
+        ),
+        returncode=1,
+    )
+
+    with patch("yt_insights.downloader.subprocess.run", return_value=completed):
+        result = fetch_video_list("https://www.youtube.com/@example/videos")
+
+    assert result.errors == ["ERROR: [youtube] abc123DEF45: Video unavailable"]
+
+
 def test_download_subtitles_accepts_new_vtt_when_nonzero_exit_has_only_warning(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

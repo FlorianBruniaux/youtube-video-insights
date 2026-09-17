@@ -144,6 +144,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- Downloads no longer report a failure when a yt-dlp warning or a video title
+  contains the word "error". Only lines that start with `ERROR:` count as
+  errors, so an impersonation warning no longer marks a successful download as
+  failed.
 - Reproducible Astro verification now stages declared frontend inputs in a
   temporary checkout. A build plugin cannot add or modify source files in the
   repository, and CI rejects both tracked and untracked checkout mutations.
