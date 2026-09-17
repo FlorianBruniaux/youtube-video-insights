@@ -212,6 +212,51 @@ class CatalogImportTests(unittest.TestCase):
             self.assertEqual(stats.videos, 1)
             self.assertEqual(stats.artifacts, 1)
 
+    def test_import_moves_artifact_from_flat_inbox_to_channel_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            corpus = base / "corpus"
+            flat = corpus / "transcripts"
+            nested = corpus / "product-channel" / "transcripts"
+            flat.mkdir(parents=True)
+            stem = f"20260820 - Agentic product discovery [{VIDEO_ID}]"
+            (flat / f"{stem}.fr.vtt").write_text(
+                "WEBVTT\n\n00:00:01.000 --> 00:00:04.000\nEvidence\n",
+                encoding="utf-8",
+            )
+            (flat / f"{stem}.info.json").write_text(
+                json.dumps({"id": VIDEO_ID, "channel_id": "UCProductChannel"}),
+                encoding="utf-8",
+            )
+
+            with Catalog(base / "catalog.sqlite3") as catalog:
+                catalog.import_corpus(corpus)
+                nested.parent.mkdir(parents=True)
+                flat.rename(nested)
+                summary = catalog.import_corpus(corpus)
+                stats = catalog.stats()
+                sources = catalog._connection.execute(
+                    "SELECT source_slug FROM video_sources WHERE video_id = ?",
+                    (VIDEO_ID,),
+                ).fetchall()
+                artifact = catalog._connection.execute(
+                    "SELECT source_slug, path FROM artifacts WHERE video_id = ?",
+                    (VIDEO_ID,),
+                ).fetchone()
+                indexed = catalog._connection.execute(
+                    "SELECT sources FROM video_search WHERE video_id = ?",
+                    (VIDEO_ID,),
+                ).fetchone()
+
+            self.assertEqual(summary.error_count, 0)
+            self.assertEqual(stats.artifacts, 1)
+            self.assertEqual([row["source_slug"] for row in sources], ["product-channel"])
+            self.assertEqual(artifact["source_slug"], "product-channel")
+            self.assertEqual(
+                artifact["path"], f"product-channel/transcripts/{stem}.fr.vtt"
+            )
+            self.assertEqual(indexed["sources"], "product-channel")
+
     def test_import_is_idempotent_across_language_variants(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

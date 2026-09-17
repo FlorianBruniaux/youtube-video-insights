@@ -148,6 +148,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   contains the word "error". Only lines that start with `ERROR:` count as
   errors, so an impersonation warning no longer marks a successful download as
   failed.
+- `catalog import-corpus` now moves an artifact to its channel when the same
+  file leaves the flat `output/transcripts/` inbox for `output/<slug>/`. The
+  artifact used to keep a source slug derived from the YouTube channel ID, and
+  the stale source stayed attached to the video in search results.
+
 - Reproducible Astro verification now stages declared frontend inputs in a
   temporary checkout. A build plugin cannot add or modify source files in the
   repository, and CI rejects both tracked and untracked checkout mutations.

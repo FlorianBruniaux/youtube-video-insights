@@ -1107,6 +1107,8 @@ class Catalog:
         items_written = 0
         error_count = 0
         touched_video_ids: set[str] = set()
+        seen_sources: set[tuple[str, str]] = set()
+        moved_sources: set[tuple[str, str]] = set()
 
         artifacts = _inventory_corpus(corpus_root, expected_root_identity)
         for source_slug, kind, snapshot in artifacts:
@@ -1115,11 +1117,12 @@ class Catalog:
             artifact_source_slug = source_slug
             try:
                 name = _parse_artifact_name(path)
+                seen_sources.add((name.video_id, artifact_source_slug))
                 raw_bytes = snapshot.raw_bytes
                 digest = hashlib.sha256(raw_bytes).hexdigest()
                 existing_artifact = self._connection.execute(
                     """
-                    SELECT 1 FROM artifacts
+                    SELECT id, source_slug, path FROM artifacts
                     WHERE video_id = ? AND kind = ? AND language = ? AND sha256 = ?
                     """,
                     (name.video_id, kind, name.language, digest),
@@ -1165,6 +1168,21 @@ class Catalog:
                 self._upsert_video(name, now)
                 self._upsert_source(name.video_id, artifact_source_slug, now)
                 inserted_count = 0
+                relative_path = _validate_artifact_relative_path(path.as_posix())
+                if existing_artifact is not None and (
+                    existing_artifact["source_slug"] != artifact_source_slug
+                    or existing_artifact["path"] != relative_path
+                ):
+                    # Same bytes at a new location, e.g. moved out of the flat inbox.
+                    self._connection.execute(
+                        "UPDATE artifacts SET source_slug = ?, path = ? WHERE id = ?",
+                        (artifact_source_slug, relative_path, existing_artifact["id"]),
+                    )
+                    if existing_artifact["source_slug"] != artifact_source_slug:
+                        moved_sources.add(
+                            (name.video_id, existing_artifact["source_slug"])
+                        )
+                        touched_video_ids.add(name.video_id)
                 if existing_artifact is None:
                     inserted = self._connection.execute(
                         """
@@ -1178,7 +1196,7 @@ class Catalog:
                             artifact_source_slug,
                             kind,
                             name.language,
-                            _validate_artifact_relative_path(path.as_posix()),
+                            relative_path,
                             digest,
                             searchable_text,
                             now,
@@ -1203,6 +1221,19 @@ class Catalog:
                     item_ref=path.as_posix(),
                     message=f"{type(exc).__name__}: {exc}",
                 )
+
+        for video_id, stale_slug in moved_sources - seen_sources:
+            self._connection.execute(
+                """
+                DELETE FROM video_sources
+                WHERE video_id = ? AND source_slug = ? AND source_url = ''
+                  AND NOT EXISTS (
+                      SELECT 1 FROM artifacts
+                      WHERE video_id = ? AND source_slug = ?
+                  )
+                """,
+                (video_id, stale_slug, video_id, stale_slug),
+            )
 
         return items_seen, items_written, error_count, touched_video_ids
 
