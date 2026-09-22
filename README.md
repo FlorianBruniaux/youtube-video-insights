@@ -1084,6 +1084,7 @@ Run the pipeline on any video, skip any step you have already done. The agent ne
 
 These projects extend the workflow without duplicating this tool:
 
+- **Research papers with [Paper Insights](https://github.com/FlorianBruniaux/paper-insights)**: search arXiv metadata and export traceable citations in a separate experimental corpus; cross-corpus federation is planned.
 - **Run with [CC-Copilot Bridge](https://github.com/FlorianBruniaux/cc-copilot-bridge)**: use the LLM backend that yt-insights already detects automatically.
 - **Measure with [Google Search Console MCP](https://github.com/FlorianBruniaux/google-search-console-mcp)**: connect content research to search visibility after publication.
 - **Learn with [Claude Code Ultimate Guide](https://github.com/FlorianBruniaux/claude-code-ultimate-guide)**: reuse the guide's research and synthesis workflows.

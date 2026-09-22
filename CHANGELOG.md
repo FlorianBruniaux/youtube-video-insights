@@ -10,6 +10,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Paper Insights in the generated ecosystem links, synchronized with the
+  canonical GitHub profile manifest.
 - README link to Paper Insights as the companion project for scientific
   literature, with its experimental status and the boundary between separate
   corpora and planned cross-corpus federation.
