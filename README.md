@@ -20,6 +20,11 @@ sources, search timestamped evidence with SQLite/FTS5, measure coverage and
 freshness, grow the corpus through explicit decisions, then use the result from
 the web app, CLI, or a read-only MCP in Claude Code and Codex.
 
+For scientific literature, [Paper Insights](https://github.com/FlorianBruniaux/paper-insights)
+is the companion project for arXiv metadata, local FTS5 search, and citations.
+It is experimental, with human relevance review still pending. The two
+projects keep separate corpora; cross-corpus federation is planned.
+
 Every research cycle starts with local evidence. If it is insufficient,
 YT Insights presents at most ten YouTube candidates and waits for a separate
 approval of one to five exact IDs before acquisition. It then rebuilds the

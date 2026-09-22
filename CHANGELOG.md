@@ -10,6 +10,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- README link to Paper Insights as the companion project for scientific
+  literature, with its experimental status and the boundary between separate
+  corpora and planned cross-corpus federation.
 - Local Astro research interface served by `yt-insights serve` on
   `127.0.0.1`. It includes dashboard health, transcript search, bounded source
   inventory, preview-confirmed acquisition, durable research decisions and
