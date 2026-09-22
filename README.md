@@ -25,6 +25,13 @@ is the companion project for arXiv metadata, local FTS5 search, and citations.
 It is experimental, with human relevance review still pending. The two
 projects keep separate corpora; cross-corpus federation is planned.
 
+[Critical source review](docs/superpowers/specs/2026-09-22-critical-source-review-design.md)
+is a planned extension for both projects. For videos, it will assess added
+value and evidential support from inspected timestamped passages, record
+coverage limits, and keep editorial selection reversible. Current coverage,
+freshness, summaries, and Shorts scores are not quality verdicts; this filter
+is not implemented yet.
+
 Every research cycle starts with local evidence. If it is insufficient,
 YT Insights presents at most ten YouTube candidates and waits for a separate
 approval of one to five exact IDs before acquisition. It then rebuilds the

@@ -10,6 +10,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Accepted critical source review design and implementation order for
+  metadata screening, transcript-backed appraisal, explicit coverage limits,
+  reversible selection, and false-exclusion calibration. Linked into the
+  roadmap, cumulative-research design, README, and implementation status;
+  no review runtime or automatic quality filter is delivered.
 - Paper Insights in the generated ecosystem links, synchronized with the
   canonical GitHub profile manifest.
 - README link to Paper Insights as the companion project for scientific

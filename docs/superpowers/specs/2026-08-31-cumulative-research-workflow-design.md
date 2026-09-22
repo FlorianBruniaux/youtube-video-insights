@@ -57,6 +57,16 @@ The workflow composes existing application functions. It does not put
 research orchestration inside the existing MCP server, catalogue module, or
 acquisition module.
 
+### Planned critical-review extension (2026-09-22)
+
+The accepted [critical source review design](2026-09-22-critical-source-review-design.md)
+adds an explicit advisory appraisal before editorial selection. It does not
+change the delivered state machine or declare the evidence sufficient.
+Metadata screening and transcript-backed review have distinct evidence
+limits. Recommendations and human selection events remain separate, and
+sources stay available after exclusion from a particular selection.
+Runtime integration and review-quality calibration are still pending.
+
 ## 3. Design Decision
 
 Implement a first-class `yt-insights research` application service and CLI.

@@ -61,6 +61,21 @@ Un `UNKNOWN` ne bloque pas une acquisition locale de 1 à 5 IDs explicitement
 approuvés. Il bloque toute affirmation de qualité validée ou d'activation
 globale.
 
+## Planned critical source review
+
+**Added 2026-09-22. Status: specified, not implemented.**
+
+The [critical review specification and implementation order](docs/superpowers/specs/2026-09-22-critical-source-review-design.md)
+adds metadata-only candidate screening, followed by transcript-backed
+appraisal before editorial selection. Keep topic relevance separate from
+added value and evidential support. Recommendations remain advisory, with
+visible coverage limits, reversible human decisions, and retained sources.
+
+Deliver closed contracts, research-store history, a bounded review service,
+explicit CLI and reviewed exports, then API/web integration. Calibrate false
+exclusions before enabling automated selection. Existing relevance gates,
+refresh approval, and exact-ID acquisition approval remain independent.
+
 ## Ordre de travail restant
 
 | Priorité | Action | Critère de sortie |
@@ -96,6 +111,8 @@ Ces déclencheurs ouvrent une discussion. Ils n'autorisent aucune activation
 silencieuse.
 
 ## Documents de référence
+
+- [Planned critical source review](docs/superpowers/specs/2026-09-22-critical-source-review-design.md)
 
 - [Récapitulatif de livraison](docs/DELIVERY-RECAP.md)
 - [État d'implémentation](docs/IMPLEMENTATION-STATUS.md)

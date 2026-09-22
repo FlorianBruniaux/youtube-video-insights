@@ -51,6 +51,16 @@ Source reproductible :
 Le JPG du README illustre le même cycle livré. Le Mermaid reste la source
 textuelle révisable; le rendu raster n'est pas généré par le build du dépôt.
 
+## Planned extension: critical source review
+
+**2026-09-22: specified, not implemented or quality-validated.** The
+[review contract](superpowers/specs/2026-09-22-critical-source-review-design.md)
+defines source appraisal, evidence coverage, and reversible editorial
+selection. Existing coverage/freshness assessment, generated insights, and
+Shorts scores do not implement this requirement. No current CLI/API command,
+web control, MCP tool, or automatic exclusion is added by these documents.
+Review quality remains `UNKNOWN`; retrieval relevance is a separate gate.
+
 ## Ce qui fonctionne
 
 | Surface | Comportement implémenté | Limite |
