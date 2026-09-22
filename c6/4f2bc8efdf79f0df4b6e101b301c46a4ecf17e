@@ -1,0 +1,29 @@
+CHANGELOG.md
+  s_a374aa64c5b234::t_9492a2c5b6c746 13-17
+README.md
+  s_a374aa64c5b234::t_3ba77d639bf3a4 28-34
+ROADMAP.md
+  s_a374aa64c5b234::t_3677d3fe1efa91 64-78,115-116
+docs/IMPLEMENTATION-STATUS.md
+  s_a374aa64c5b234::t_6f6da474a591f7 54-63
+docs/superpowers/specs/2026-08-31-cumulative-research-workflow-design.md
+  s_a374aa64c5b234::t_13fa12da200978 60-69
+docs/superpowers/specs/2026-09-22-critical-source-review-design.md
+  s_a374aa64c5b234::t_7a1feb29439f54 1-163
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c64f2bc8efdf79f0df4b6e101b301c46a4ecf17e",
+  "prompts": {},
+  "sessions": {
+    "s_a374aa64c5b234": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0c7e8-92f3-77d1-907f-06a834051207",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "Florian BRUNIAUX <florian@bruniaux.com>"
+    }
+  }
+}
